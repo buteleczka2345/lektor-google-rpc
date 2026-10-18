@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lektor — Ustawienia</title>
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --line:#262b36; --txt:#e6e9ef; --muted:#8b93a5; --acc:#4da3ff; --ok:#3ecf8e; --err:#ff6b6b; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px; background:var(--bg); color:var(--txt); font:15px/1.55 'Segoe UI', system-ui, Arial, sans-serif; }
+  .wrap { max-width:1080px; margin:0 auto; }
+  header { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:20px; }
+  h1 { margin:0; font-size:22px; }
+  #status { margin-left:auto; padding:6px 14px; border-radius:6px; font-size:13px; background:#1e222b; border:1px solid var(--line); color:var(--muted); }
+  #status.ok { color:var(--ok); border-color:#2b5a45; }
+  #status.err { color:var(--err); border-color:#5a2b2b; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:16px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+  section.wide { grid-column:1 / -1; }
+  section h2 { margin:0 0 4px; font-size:16px; }
+  section .sub { color:var(--muted); font-size:12px; margin:0 0 14px; }
+  .row { display:flex; align-items:center; gap:12px; padding:9px 0; border-top:1px solid #1e222b; }
+  .row.first, h2 + .sub + .row { border-top:none; }
+  /* [AGENT-EXP] 2026-10-17: opis ma min. ~220 px; gdy pole (lista, tekst) się nie mieści obok, schodzi pod opis —
+     wcześniej długa lista ściskała opis do jednego wyrazu na linię */
+  .row { flex-wrap:wrap; }
+  .row .lbl { flex:1 1 220px; min-width:0; }
+  .row > select { flex:0 1 auto; max-width:100%; min-width:0; margin-left:auto; }
+  .row > input[type=text], .row > input[type=password] { flex:1 1 100%; }
+  .row .lbl b { display:block; font-weight:600; font-size:14px; }
+  .row .lbl span { color:var(--muted); font-size:12px; }
+  .val { min-width:64px; text-align:right; font-variant-numeric:tabular-nums; color:var(--acc); font-weight:600; font-size:14px; }
+  input[type=range] { flex:1; min-width:90px; accent-color:var(--acc); }
+  select, input[type=text] { background:#1e222b; color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:7px 10px; font-size:13px; font-family:inherit; max-width:230px; }
+  input[type=text] { max-width:none; flex:1; min-width:0; }
+  textarea { width:100%; background:#0c0e13; color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:10px; font:12px/1.5 ui-monospace, Consolas, monospace; resize:vertical; min-height:110px; }
+  .btn { padding:8px 14px; border:1px solid var(--line); border-radius:6px; cursor:pointer; background:#1e222b; color:var(--txt); font-size:13px; font-family:inherit; }
+  .btn:hover { background:#252a35; }
+  .btn.primary { background:var(--acc); border-color:var(--acc); color:#08131f; font-weight:600; }
+  .btns { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .sw { position:relative; width:44px; height:24px; flex:none; cursor:pointer; }
+  .sw input { opacity:0; width:0; height:0; }
+  .sw span { position:absolute; inset:0; background:#2a2f3b; border-radius:24px; transition:.15s; }
+  .sw span::before { content:''; position:absolute; width:18px; height:18px; left:3px; top:3px; background:#8b93a5; border-radius:50%; transition:.15s; }
+  .sw input:checked + span { background:#1f4a7a; }
+  .sw input:checked + span::before { transform:translateX(20px); background:var(--acc); }
+  .note { color:var(--muted); font-size:12px; margin-top:8px; }
+  .chip { display:flex; align-items:center; gap:8px; padding:6px 8px; margin-top:6px; background:#0c0e13; border:1px solid var(--line); border-radius:6px; font:12px ui-monospace, Consolas, monospace; word-break:break-all; }
+  .chip b { color:var(--acc); }
+  .chip .x { margin-left:auto; cursor:pointer; color:var(--err); }
+  #kResult { font-size:12px; color:var(--muted); margin-top:8px; word-break:break-word; white-space:pre-wrap; }
+  @media (max-width:560px) { body { padding:14px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🎙️ Lektor — Ustawienia</h1>
+    <div id="status">Ustawienia zapisują się automatycznie.</div>
+  </header>
+  <div class="grid" id="grid"></div>
+</div>
+<!-- [AGENT-EXP] 2026-10-15: słownik fraz (idiomy z Pipera) dla AI Subtitle Translatora — przed options.js -->
+<script src="../../assets/phrase_dict.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

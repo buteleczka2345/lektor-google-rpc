@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polski Lektor</title>
+    <style>
+        body { color:#f1f1f1; background-color:#0a0a0a; width:300px; margin:0; padding:0;
+            font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+        .header { background:linear-gradient(#141414 0%,#0a0a0a 100%); border-bottom:1px solid rgba(0,247,255,.25);
+            display:flex; align-items:center; gap:8px; padding:9px 12px; }
+        .header .bolt { color:#00f7ff; font-size:18px; line-height:1; text-shadow:0 0 10px rgba(0,247,255,.6); }
+        .header h1 { color:#00f7ff; margin:0; font-size:13px; font-weight:600; letter-spacing:.3px; }
+        .header .sub { color:#888; font-size:9px; margin-top:1px; }
+        .control-panel { padding:10px 12px 12px; }
+        .control-group { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.09);
+            border-radius:9px; margin-bottom:8px; padding:9px 10px; }
+        .switch-group { display:flex; justify-content:space-between; align-items:center; }
+        .switch-label { display:flex; flex-direction:column; }
+        .label-title { font-size:12px; font-weight:600; }
+        .label-desc { color:#aaa; margin-top:2px; font-size:10px; line-height:1.4; }
+        .switch { width:40px; height:22px; display:inline-block; position:relative; flex-shrink:0; margin-left:12px; }
+        .switch input { opacity:0; width:0; height:0; }
+        .slider { cursor:pointer; background-color:#444; transition:all .3s; position:absolute; inset:0; }
+        .slider:before { content:""; background-color:#fff; width:16px; height:16px; transition:all .3s;
+            position:absolute; bottom:3px; left:3px; }
+        input:checked + .slider { background-color:#00c9d4; }
+        input:checked + .slider:before { transform:translate(18px); }
+        .slider.round { border-radius:22px; }
+        .slider.round:before { border-radius:50%; }
+        .slider-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+        .slider-header .label-title { font-size:11px; }
+        .slider-val { color:#00f7ff; background:rgba(0,247,255,.12); border-radius:12px;
+            padding:1px 6px; font-size:10px; font-weight:700; }
+        input[type="range"] { -webkit-appearance:none; background:transparent; width:100%; height:6px; margin:0; }
+        input[type="range"]::-webkit-slider-runnable-track { cursor:pointer; background:#444;
+            border-radius:2px; width:100%; height:6px; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance:none; cursor:pointer; background:#00f7ff;
+            border-radius:50%; width:16px; height:16px; margin-top:-6px; box-shadow:0 0 10px rgba(0,247,255,.6); }
+        .field-label { display:block; font-size:10px; color:#ccc; margin-bottom:4px; }
+        select { color:#fff; appearance:none; -webkit-appearance:none; cursor:pointer;
+            background-color:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.18);
+            border-radius:7px; outline:none; width:100%; padding:8px 10px; font-size:12px; }
+        select option { color:#fff; background-color:#161616; }
+        .footnote { font-size:9px; color:#888; text-align:center; margin-top:3px; }
+        .hidden { display:none; }
+        .gn-big { width:100%; height:28px; color:#fff; border:1px solid #555; border-radius:6px; font:bold 11px Arial; cursor:pointer; }
+        .gn-big.on { background:#8b1e1e !important; }
+        .gn-row { display:flex; align-items:center; gap:5px; margin-top:5px; flex-wrap:wrap; font-size:10px; color:#ccc; }
+        .gn-row select { width:auto; padding:3px 6px; font-size:10px; border-radius:5px; }
+        .gn-small { flex:1; padding:4px; background:#2d3340; color:#fff; border:1px solid #555; border-radius:5px; font:10px Arial; cursor:pointer; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <span class="bolt">🔊</span>
+        <div>
+            <h1>Polski Lektor</h1>
+            <div class="sub">Czyta napisy jako lektor</div>
+        </div>
+        <!-- OPTIONS-PAGE: ikona otwierająca stronę ustawień -->
+        <button id="openOptionsBtn" title="Więcej ustawień (strona HTML)" style="margin-left:auto;width:30px;height:30px;background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:8px;cursor:pointer;font-size:15px;">⚙️</button>
+    </div>
+
+    <div class="control-panel">
+        <div class="control-group switch-group">
+            <div class="switch-label">
+                <span class="label-title">Lektor</span>
+                <span class="label-desc">Włącz / wyłącz czytanie napisów</span>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="enableToggle" checked>
+                <span class="slider round"></span>
+            </label>
+        </div>
+
+        <div class="control-group">
+            <div class="switch-label" style="margin-bottom:4px;">
+                <span class="label-title">🔍 Łowca napisów</span>
+                <span class="label-desc">Na żądanie: przeszuka stronę i zapisze kontenery do Kreatora napisów</span>
+            </div>
+            <div style="display:flex;gap:6px;">
+                <button id="lowcaStartBtn" style="flex:1;height:26px;background:#112a33;color:#7ee0ff;border:1px solid #2a5a8a;border-radius:6px;font:11px Arial;cursor:pointer;">🔍 Szukaj napisów</button>
+                <button id="lowcaStopBtn" style="display:none;flex:1;height:26px;background:#331111;color:#ff9090;border:1px solid #933;border-radius:6px;font:11px Arial;cursor:pointer;">⏹ Stop</button>
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:5px;cursor:pointer;"><input type="checkbox" id="lowcaGuiCheck"> Pokazuj GUI Łowcy (przycisk CC na każdej stronie z filmem)</label>
+            <div class="footnote" id="lowcaStatus" style="text-align:left;">Wstrzykuje skrypt do karty dopiero po kliknięciu — bez ciągłego nasłuchu.</div>
+            <div id="lowcaItems" style="display:none;text-align:left;font-size:9px;color:#8cf;max-height:70px;overflow:auto;margin-top:3px;white-space:pre-wrap;word-break:break-all;"></div>
+        </div>
+
+        <!-- 🎙 Głos i napisy (glos/*): mój głos → tekst, film w karcie → napisy + czytanie -->
+        <div class="control-group" id="gnBox">
+            <div class="switch-label" style="margin-bottom:4px;">
+                <span class="label-title">🎙 Głos i napisy</span>
+                <span class="label-desc">Mów do mikrofonu → tekst w polu z kursorem; albo dźwięk filmu z karty → polskie napisy + czytanie.</span>
+            </div>
+            <button id="gnGlosBtn" class="gn-big" style="background:#3a2147;">🎤 Mój głos → tekst (Alt+Shift+1)</button>
+            <button id="gnKartaBtn" class="gn-big" style="background:#1f3a24;margin-top:5px;">🎧 Film w tej karcie → napisy (Alt+Shift+2)</button>
+            <button id="gnHistBtn" class="gn-big" style="background:#24324a;margin-top:5px;">📜 Napisy na bieżąco (okienko)</button>
+            <div class="gn-row" style="flex-direction:column;align-items:flex-start;gap:2px;">
+                <span style="color:#ffcf70;">Na próbę:</span>
+                <span>napis odświeżaj:
+                    <select data-gk="kartaRefresh"><option value="0">od razu (jak Google, ~100 ms)</option><option value="300">co 300 ms</option><option value="600">co 600 ms</option><option value="1000">co 1 s</option><option value="fin">tylko zatwierdzony tekst</option></select>
+                </span>
+                <label><input type="checkbox" data-gk="kartaCutSent"> napisy: nowa linijka po kropce (krótsze, ~2 linijki)</label>
+                <label><input type="checkbox" data-gk="kartaFinUp"> gotowy napis od razu piętro wyżej (już się nie zmienia)</label>
+                <span><label><input type="checkbox" data-gk="kartaBoost"> wzmacniaj mowę dla rozpoznawania (ciche głosy)</label>
+                    <select data-gk="kartaBoostLvl"><option value="1">lekko</option><option value="2">średnio</option><option value="3">mocno</option></select>
+                </span>
+                <label><input type="checkbox" data-gk="kartaShowLive"> pokazuj niegotowe napisy (to, co Google jeszcze słyszy i poprawia)</label>
+                <label><input type="checkbox" data-gk="kartaTopLektor"> gotowy napis = to samo tłumaczenie, które czyta lektor</label>
+                <label><input type="checkbox" data-gk="kartaLekPunct"> lektor: czytaj po przecinku i kropce (tylko tekst już zatwierdzony)</label>
+                <label><input type="checkbox" data-gk="kartaShowEn"> pokazuj oryginał pod napisem</label>
+                <label><input type="checkbox" data-gk="kartaHistAuto"> otwieraj „📜 Napisy na bieżąco” razem z napisami</label>
+            </div>
+            <div class="gn-row" style="flex-direction:column;align-items:flex-start;gap:3px;">
+                <label><input type="checkbox" data-gk="gnLocal"> 🔒 rozpoznawanie lokalne (na tym komputerze, bez Google)</label>
+                <button id="gnLocGet" class="gn-small" style="width:100%;">⬇ Pobierz / sprawdź modele mowy (~40 MB + język: PL ~60 MB, EN ~195 MB)</button>
+                <div id="gnLocInfo" style="white-space:pre-wrap;color:#b3e5fc;"></div>
+            </div>
+            <div id="gnMsg" style="color:#ff9090;font-size:10px;min-height:12px;margin-top:3px;"></div>
+            <details>
+                <summary style="cursor:pointer;font-size:10px;color:#aaa;">⚙ Ustawienia i dziennik</summary>
+                <div class="gn-row">🎤 język:
+                    <select data-gk="glosLang"><option value="pl-PL">polski</option><option value="en-US">angielski</option><option value="de-DE">niemiecki</option><option value="uk-UA">ukraiński</option></select>
+                    <label><input type="checkbox" data-gk="glosDfn"> odszumianie</label>
+                    <input type="range" min="0" max="100" step="5" data-gk="glosDfnLevel" title="siła odszumiania (dB)" style="width:60px;"><span data-gv="glosDfnLevel"></span>
+                </div>
+                <div class="gn-row">🎧 język filmu:
+                    <select data-gk="kartaLang"><option value="en-US">angielski (USA)</option><option value="en-GB">angielski (UK)</option><option value="de-DE">niemiecki</option><option value="fr-FR">francuski</option><option value="es-ES">hiszpański</option><option value="ru-RU">rosyjski</option><option value="ja-JP">japoński</option><option value="ko-KR">koreański</option></select>
+                </div>
+                <div class="gn-row">
+                    <label><input type="checkbox" data-gk="kartaDfn"> odszumianie</label>
+                    <input type="range" min="0" max="100" step="4" data-gk="kartaDfnLevel" title="siła odszumiania (dB)" style="width:60px;"><span data-gv="kartaDfnLevel"></span>
+                </div>
+                <div class="gn-row">🎧 tryb:
+                    <select data-gk="kartaMode"><option value="lektor">🗣 lektor (Sherpa) + napisy</option><option value="napisy">💬 same napisy</option></select>
+                </div>
+                <div class="gn-row">
+                    paczki <select data-gk="kartaChunk"><option value="0">całe kwestie</option><option value="3">3 słowa</option><option value="5">5 słów</option><option value="8">8 słów</option></select>
+                </div>
+                <textarea id="gnLog" readonly style="width:100%;box-sizing:border-box;height:120px;margin-top:5px;background:#111;color:#cfd8dc;font:9.5px Consolas,monospace;border:1px solid #444;border-radius:4px;white-space:pre;"></textarea>
+                <div class="gn-row">
+                    <button id="gnCopy" class="gn-small">📋 Kopiuj dziennik</button>
+                    <button id="gnClear" class="gn-small">🗑 Wyczyść</button>
+                </div>
+            </details>
+        </div>
+
+        <div class="control-group">
+            <div class="switch-label" style="margin-bottom:4px;">
+                <span class="label-title">🤖 AI Subtitle Translator</span>
+                <span class="label-desc">Wgraj plik z napisami, ustaw prompt i przetłumacz wbudowanym AI Chrome — potem pobierz .srt lub wczytaj do lektora.</span>
+            </div>
+            <button id="aitOpenBtn" style="width:100%;height:26px;background:#1a2a3a;color:#7ee0ff;border:1px solid #2a5a8a;border-radius:6px;font:11px Arial;cursor:pointer;">🤖 Otwórz AI Subtitle Translator (ustawienia)</button>
+        </div>
+
+        <!-- [AGENT-EXP] 2026-10-17: wybór silnika mowy (ten sam klucz ttsEngine co w Ustawieniach) + kropka serwera -->
+        <div class="control-group">
+            <div class="slider-header">
+                <span class="label-title">🗣 Silnik mowy</span>
+                <span class="slider-val" id="ttsEngineState" style="display:inline-flex;align-items:center;gap:5px;"><span id="ttsEngineDot" style="width:9px;height:9px;border-radius:50%;background:#888;display:inline-block;"></span><span id="ttsEngineText">…</span></span>
+            </div>
+            <select id="ttsEngineSelect" style="width:100%;font-size:11px;padding:4px 6px;">
+                <option value="sherpa">Sherpa VITS — wbudowany</option>
+                <option value="matcha">Matcha-TTS-PL — serwer :9000</option>
+                <option value="xtts">XTTS v2 (TTS2) — serwer :8000</option>
+                <option value="audio8">Audio8 ONNX INT8 — serwer :9300 (wolny)</option>
+                <option value="f5">Lektor Marek (F5-TTS) — serwer :9400</option>
+                <option value="pocket">Pocket-TTS-PL — serwer :9200</option>
+                <option value="omnivoice">OmniVoice — serwer :9100 (GPU)</option>
+            </select>
+            <div class="footnote" id="ttsEngineHint">Zielona kropka = serwer odpowiada. Najpierw uruchom serwer (np. start_xtts_auto.bat w folderze tts2).</div>
+            <!-- [AGENT-EXP] 2026-10-17: głos dla wybranego silnika (przeniesione ze strony Ustawienia) -->
+            <div id="ttsVoiceRow" style="display:none;margin-top:5px;">
+                <div style="font-size:11px;margin-bottom:2px;" id="ttsVoiceLabel">Głos</div>
+                <select id="ttsVoiceSelect" style="width:100%;font-size:11px;padding:4px 6px;"></select>
+                <input id="ttsVoiceText" type="text" placeholder="default lub ID z voices\" style="display:none;width:100%;box-sizing:border-box;font-size:11px;padding:4px 6px;">
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:5px;cursor:pointer;"><input type="checkbox" id="bufPauzaCheck" checked> Buforuj przy zatrzymanym filmie (po starcie czyta od razu z bufora)</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:3px;cursor:pointer;" title="Gdy przejdziesz na inną kartę, lektor dalej nagrywa kwestie do bufora (nie czyta na głos). Karta z filmem nie zostanie uśpiona przez Chrome."><input type="checkbox" id="bufTloCheck" checked> Buforuj w tle (inna karta) — karta nie jest usypiana</label>
+        </div>
+
+        <div class="control-group">
+            <div class="slider-header">
+                <span class="label-title">Prędkość lektora</span>
+                <span class="slider-val" id="speedVal">1.0x</span>
+            </div>
+            <input type="range" id="speedRange" min="0.5" max="3.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <div class="slider-header">
+                <span class="label-title">Ducking (wyciszanie filmu)</span>
+                <span class="slider-val" id="duckVal">20%</span>
+            </div>
+            <input type="range" id="duckRange" min="0" max="100" step="5" value="20">
+            <div class="footnote">0 = całkowite wyciszenie · 100 = bez zmian</div>
+        </div>
+
+        <div class="control-group">
+            <div class="slider-header">
+                <span class="label-title">Głośność lektora</span>
+                <span class="slider-val" id="volumeVal">100%</span>
+            </div>
+            <input type="range" id="volumeRange" min="0" max="400" step="5" value="100">
+            <div class="footnote">Głośność samego lektora (niezależna od filmu). Powyżej 100% — wzmocnienie do 400% bez zniekształceń (limiter).</div>
+        </div>
+
+        
+        <div class="control-group">
+            <label class="field-label" for="offlineVoiceSelect">Głos lektora (Sherpa VITS)</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+                <select id="offlineVoiceSelect" style="flex:1;min-width:0;">
+                    <option value="pl_PL-meski_wg_glos-medium">Męski — Sherpa VITS (PL)</option>
+                </select>
+                <button id="builtinVoiceDeleteBtn" title="Wyłącz wbudowany głos męski (bez kopiowania)" style="width:28px;height:24px;background:#331111;color:#ff9090;border:1px solid #933;cursor:pointer;border-radius:6px;font-size:11px;flex-shrink:0;">🗑</button>
+            </div>
+            <button id="builtinVoiceRestoreBtn" style="display:none;width:100%;height:22px;background:#0f2d1a;color:#7effa0;border:1px solid #3a7a3a;font:11px Arial;cursor:pointer;border-radius:6px;margin-top:6px;">↺ Przywróć wbudowany głos męski</button>
+            <button id="builtinVoiceMigrateBtn" style="width:100%;height:22px;background:#0d2436;color:#7ec8ff;border:1px solid #2a5a8a;font:11px Arial;cursor:pointer;border-radius:6px;margin-top:6px;">⤵ Przenieś wbudowany głos męski na listę głosów (bez pobierania)</button>
+            <div class="footnote" id="builtinVoiceHint" style="display:none;color:#9fd0ff;">🛈 Głos męski przeniesiony na listę „Własne głosy” (poniżej): tam masz ▶ aktywuj i 🗑 skasuj. Skasowanie usuwa kopię z pamięci rozszerzenia, a wróci jednym kliknięciem. Plik 60 MB w paczce (awaryjny) zwolnisz tylko ręcznie — skasuj na dysku:<br><code id="builtinVoicePath" style="word-break:break-all;color:#ffd479;">—</code><br><button id="builtinVoicePathBtn" style="margin-top:4px;background:#112a33;color:#7ee0ff;border:1px solid #2a6a7a;border-radius:6px;font:11px Arial;cursor:pointer;padding:3px 8px;">📋 Kopiuj ścieżkę</button></div>
+        </div>
+
+        <div class="control-group">
+            <label class="field-label">Własny głos (Sherpa/Piper z plików)</label>
+            <input type="file" id="customVoiceInput" accept=".onnx,.txt,.json" multiple webkitdirectory style="display:none;">
+            <div id="customVoiceList" style="margin-top:6px;"></div>
+            <button id="customVoiceBtn" style="width:100%;height:26px;background:#112a33;color:#7ee0ff;border:1px solid #2a6a7a;font:11px Arial;cursor:pointer;border-radius:6px;">📂 Wskaż pliki własnego głosu (onnx + txt + json)</button>
+            <button id="customVoiceDisable" style="width:100%;height:22px;background:#331111;color:#ff9090;border:1px solid #933;font:11px Arial;cursor:pointer;border-radius:6px;margin-top:6px;display:none;">✕ Wróć do wbudowanego głosu</button>
+            <div class="footnote" id="customVoiceStatus" style="color:#ffcf70;">—</div>
+        </div>
+
+
+
+        <div class="control-group">
+            <label class="field-label">Całe napisy — na żądanie</label>
+            <button id="fullSubsBtn" style="width:100%;height:30px;background:#112a33;color:#7ee0ff;border:1px solid #2a6a7a;font:bold 12px Arial;cursor:pointer;border-radius:6px;margin-bottom:4px;">⬇ Pobierz całe napisy (ten film)</button>
+            <div class="footnote" id="fullSubsStatus" style="color:#ffcf70;">Działa na każdej stronie z filmem. Bez kliknięcia lektor czyta w locie i nic nie pobiera.</div>
+            <button id="findSubsBtn" style="width:100%;height:26px;background:#1a1a2e;color:#c9b8ff;border:1px solid #5a4a8a;font:bold 11px Arial;cursor:pointer;border-radius:6px;margin-top:8px;">🔍 Znajdź napisy na stronie (raz — zapisze w pamięci)</button>
+            <div class="footnote" id="findSubsStatus" style="color:#c9b8ff;">Gdy lektor nie widzi napisów w locie: włącz film z napisami na ekranie i kliknij. Potem lektor patrzy tylko w to miejsce.</div>
+        </div>
+
+        <div class="control-group">
+            <label class="field-label" for="ytSourceSelect">Napisy na YouTube</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:6px;cursor:pointer;"><input type="checkbox" id="ytAutoCheck"> Zawsze pobieraj całe napisy automatycznie</label>
+            <select id="ytSourceSelect">
+                <option value="imt">Immersive Translate</option>
+                <option value="auto">Własne: pobierz napisy (SRT) + tłumacz Chrome</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label class="field-label" for="primeSourceSelect">Napisy na Prime Video</label>
+            <select id="primeSourceSelect">
+                <option value="both">Wbudowane + Immersive Translate</option>
+                <option value="immersive">Tylko Immersive Translate</option>
+                <option value="native">Tylko wbudowane</option>
+            </select>
+            <div class="footnote">iQIYI: zawsze czyta napisy przez Immersive Translate (PL).</div>
+        </div>
+
+        <div class="control-group">
+            <div class="slider-header">
+                <span class="label-title">Nagrywanie / zapas do przodu</span>
+                <span class="slider-val" id="lookaheadVal">na bieżąco</span>
+            </div>
+            <input type="range" id="lookaheadRange" min="0" max="120" step="1" value="3">
+            <div class="footnote" id="recDetail">0 = na bieżąco (bez nagrywania) · przesuń w prawo, aby nagrywać czysty lektor z zapasem N minut do przodu. Powrót na 0 kończy nagrywanie — nagranie zostaje w buforze, zapiszesz je przyciskiem ⬇ na stronie.</div>
+            <div class="footnote" id="recTelemetry" style="color:#7effa0;">—</div>
+            <div class="footnote" id="recLog" style="text-align:left;max-height:78px;overflow-y:auto;line-height:1.5;">—</div>
+            <div style="display:flex;align-items:center;gap:6px;margin-top:5px;">
+                <button id="saveBufferBtn" title="Zapisuje nagrane kwestie tego filmu z pamięci RAM do jednego pliku .zip w Pobranych (każda kwestia osobno + spis czasów + napisy .srt)" style="height:24px;padding:0 10px;background:#12301c;color:#7effa0;border:1px solid #2a7a46;border-radius:6px;font:11px Arial;cursor:pointer;">💾 Zapisz bufor filmu</button>
+                <span class="footnote" id="saveBufferInfo" style="margin:0;"></span>
+            </div>
+        </div>
+
+
+
+        <div class="control-group">
+            <div class="slider-header">
+                <span class="label-title">Napisy z pliku</span>
+                <span class="slider-val" id="fileSubsStatus">brak</span>
+            </div>
+            <input type="file" id="fileSubsInput" accept=".srt,.vtt,.sbv,.ass,.ssa,.txt,.sub,.smi,.lrc,.dfxp,.ttml" style="display:none;">
+            <button id="fileSubsBtn" style="width:100%;height:26px;background:#112a33;color:#7ee0ff;border:1px solid #2a6a7a;font:11px Arial;cursor:pointer;border-radius:6px;">📂 Wczytaj plik z napisami (SRT/VTT/SBV/ASS/TXT…)</button>
+            <input type="file" id="fileSubsFolderInput" webkitdirectory directory multiple style="display:none;">
+            <button id="fileSubsFolderBtn" style="width:100%;height:26px;background:#11202e;color:#9ed8ff;border:1px solid #2a5a8a;font:11px Arial;cursor:pointer;border-radius:6px;margin-top:6px;">📁 Wczytaj cały folder z napisami</button>
+            <select id="fileSubsFileSelect" style="width:100%;margin-top:6px;display:none;font-size:11px;padding:6px 8px;"></select>
+            <button id="fileSubsClear" style="width:100%;height:22px;background:#331111;color:#ff9090;border:1px solid #933;font:11px Arial;cursor:pointer;border-radius:6px;margin-top:6px;">✕ Usuń wczytane napisy</button>
+            <div class="footnote" id="fileSubsDetail">Napisy z pliku należą do filmu w tej karcie (inne strony ich nie czytają; po powrocie do filmu wracają). Odtwórz film — lektor czyta wg czasu z pliku, suwak nagrywa jak zawsze.</div>
+        </div>
+
+        <div class="control-group">
+            <div class="slider-header">
+                <span class="label-title">🌐 Szukaj w bazach napisów</span>
+                <span class="slider-val" id="dbStatus"></span>
+            </div>
+            <div style="display:flex;gap:4px;">
+                <input type="text" id="dbQuery" placeholder="tytuł filmu / serialu" style="flex:1;min-width:0;height:24px;box-sizing:border-box;padding:3px 6px;border-radius:6px;border:1px solid #2a5a8a;background:#0d1b2e;color:#e6f0ff;font:11px Arial;">
+                <input type="number" id="dbSeason" min="0" placeholder="S" title="Sezon (puste = film)" style="width:40px;height:24px;box-sizing:border-box;padding:3px 4px;border-radius:6px;border:1px solid #2a5a8a;background:#0d1b2e;color:#e6f0ff;font:11px Arial;">
+                <input type="number" id="dbEpisode" min="0" placeholder="E" title="Odcinek" style="width:40px;height:24px;box-sizing:border-box;padding:3px 4px;border-radius:6px;border:1px solid #2a5a8a;background:#0d1b2e;color:#e6f0ff;font:11px Arial;">
+            </div>
+            <div style="display:flex;gap:4px;margin-top:6px;">
+                <select id="dbLang" style="flex:1;font-size:11px;padding:3px 6px;">
+                    <option value="pl,en">Polskie, potem angielskie</option>
+                    <option value="pl">Tylko polskie</option>
+                    <option value="en">Tylko angielskie (tłumaczę)</option>
+                </select>
+                <button id="dbSearchBtn" style="flex:1;height:24px;background:#112a33;color:#7ee0ff;border:1px solid #2a5a8a;border-radius:6px;font:11px Arial;cursor:pointer;">🔍 Szukaj w bazach</button>
+            </div>
+            <div id="dbResults" style="display:none;max-height:170px;overflow:auto;margin-top:6px;border:1px solid #1f3550;border-radius:6px;"></div>
+            <div class="footnote" id="dbDetail" style="text-align:left;">OpenSubtitles.org działa od razu. OpenSubtitles.com i SubDL — po wpisaniu darmowego klucza w Ustawieniach (⚙️). Klik w wynik = wczytaj do lektora.</div>
+        </div>
+
+        <div class="control-group">
+            <div class="slider-header">
+                <span class="label-title">Przesunięcie lektora wzgl. wideo</span>
+                <span class="slider-val" id="offsetVal">0 s</span>
+            </div>
+            <input type="range" id="offsetRange" min="-10000" max="10000" step="100" value="0">
+            <div class="footnote">Ujemne = lektor mówi WCZEŚNIEJ (np. gdy Netflix buforuje) · dodatnie = później · 0 = bez przesunięcia. Krok: 100 ms.</div>
+        </div>
+
+        <div class="control-group">
+            <div class="slider-header">
+                <span class="label-title">Test lektora</span>
+                <span class="slider-val" id="testStatus" style="color:#ffcf70;">—</span>
+            </div>
+            <button id="testBtn" style="width:100%;height:28px;background:#1a3a1a;color:#7effa0;border:1px solid #3a7a3a;font:12px Arial;cursor:pointer;border-radius:6px;">▶ Odtwórz test „To jest test lektora”</button>
+            <div class="footnote" id="testDetail" style="color:#ffb070;word-break:break-all;white-space:pre-wrap;display:none;"></div>
+        </div>
+
+        <div class="control-group">
+            <label class="field-label">🤬 Cenzura przekleństw — wszystkie języki</label>
+            <button id="censorToggleBtn" style="width:100%;height:24px;background:#0f2d1a;color:#7effa0;border:1px solid #3a7a3a;font:11px Arial;cursor:pointer;border-radius:6px;">🤬 Cenzura: WŁĄCZONA</button>
+            <select id="censorModeSelect" style="width:100%;margin-top:6px;font-size:11px;padding:6px 8px;">
+                <option value="remove">Usuń słowo (cicho) — zalecane</option>
+                <option value="beep">[BEEP] (obcy głos wypowie na głos)</option>
+                <option value="replace">Gwiazdki (k****)</option>
+            </select>
+            <input type="text" id="censorCustomWords" placeholder="Własne słowa po przecinku (każdy język)…" style="width:100%;box-sizing:border-box;margin-top:6px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.18);border-radius:7px;color:#fff;padding:6px 8px;font-size:11px;outline:none;">
+            <div class="footnote" id="censorStatus" style="color:#ffcf70;">—</div>
+            <div class="footnote" id="censorScopeNote">Działa dla WSZYSTKICH języków naraz (własne słowa + wbudowane listy). Ustawienia zapisują się na stałe.</div>
+        </div>
+
+        <div class="control-group">
+            <label class="field-label">🌐 Języki świata — pobieranie głosów</label>
+            <input type="text" id="langSearch" placeholder="Szukaj języka (np. niemiecki, arabski, EN)…" style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.18);border-radius:7px;color:#fff;padding:7px 9px;font-size:11px;outline:none;">
+            <div style="display:flex;gap:6px;margin-top:6px;">
+                <select id="langRegionFilter" style="flex:1;font-size:11px;padding:6px 8px;">
+                    <option value="all">Wszystkie regiony</option>
+                </select>
+                <select id="langTypeFilter" style="flex:1;font-size:11px;padding:6px 8px;">
+                    <option value="all">Wszystkie dostępne</option>
+                    <option value="mms">Tylko MMS (~1100 jęz.)</option>
+                    <option value="piper">Tylko Piper</option>
+                    <option value="coqui">Tylko Coqui (jakość!)</option>
+                </select>
+            </div>
+            <div class="footnote" id="langStoreStatus" style="color:#ffcf70;">Ładuję katalog modeli…</div>
+            <div id="langStoreList" style="margin-top:4px;max-height:230px;overflow-y:auto;border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:4px 6px;"></div>
+            <div class="footnote">Model MMS ≈ 114 MB na język. Pobrany głos trafia na listę „Własny głos” i staje się aktywny. Źródło: HuggingFace (MMS: Meta, lic. CC-BY-NC; Piper: lic. MIT).</div>
+        </div>
+
+        <div class="footnote">Ustawienia zapisują się automatycznie.</div>
+    </div>
+
+    <script type="module" src="./popup.js"></script>
+    <script type="module" src="../../glos/popup_glos.js"></script>
+</body>
+</html>

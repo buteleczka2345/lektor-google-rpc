@@ -1,0 +1,230 @@
+{
+    "update_url": "https://clients2.google.com/service/update2/crx",
+    "manifest_version": 3,
+    "name": "Lektor Multilanguage",
+    "version": "3.0.6",
+    "description": "Lektor na YouTube, Netflix i wiele innych stron",
+    "permissions": [
+        "activeTab",
+        "storage",
+        "offscreen",
+        "downloads",
+        "scripting",
+        "tabCapture",
+        "unlimitedStorage"
+    ],
+    "host_permissions": [
+        "*://*.netflix.com/*",
+        "*://*.youtube.com/*",
+        "*://*.primevideo.com/*",
+        "*://*.amazon.com/*",
+        "*://*.iq.com/*",
+        "*://*.iqiyi.com/*",
+        "*://*.dailymotion.com/*",
+        "*://dai.ly/*",
+        "*://*.rumble.com/*",
+        "*://*.huggingface.co/*",
+        "*://*.hf.co/*",
+        "*://*/*",
+        "<all_urls>"
+    ],
+    "background": {
+        "service_worker": "service-worker-loader.js",
+        "type": "module"
+    },
+    "content_scripts": [
+        {
+            "js": [
+                "assets/auto_subs_hook.js"
+            ],
+            "matches": [
+                "*://*.iq.com/*",
+                "*://*.iqiyi.com/*",
+                "*://*.viki.com/*",
+                "*://*.wetv.vip/*",
+                "*://*.bilibili.com/*",
+                "*://*.bilibili.tv/*"
+            ],
+            "run_at": "document_start",
+            "world": "MAIN"
+        },
+        {
+            "js": [
+                "src/content/netflix_seek_bridge.js"
+            ],
+            "matches": [
+                "*://*.netflix.com/*"
+            ],
+            "run_at": "document_start",
+            "world": "MAIN"
+        },
+        {
+            "js": [
+                "assets/phrase_dict.js",
+                "assets/yt_subs_bridge.js"
+            ],
+            "matches": [
+                "*://*.youtube.com/*"
+            ],
+            "run_at": "document_start",
+            "world": "MAIN"
+        },
+        {
+            "js": [
+                "assets/options_hooks.js",
+                "assets/lektor-controls.js",
+                "assets/lektor-settings.js"
+            ],
+            "matches": [
+                "*://*.netflix.com/*",
+                "*://*.youtube.com/*",
+                "*://*.primevideo.com/*",
+                "*://*.amazon.com/video/*",
+                "*://*.iq.com/*",
+                "*://*.iqiyi.com/*",
+                "*://*.dailymotion.com/*",
+                "*://dai.ly/*",
+                "*://*.rumble.com/*",
+                "*://*.viki.com/*",
+                "*://*.wetv.vip/*",
+                "*://*.bilibili.com/*",
+                "*://*.bilibili.tv/*"
+            ],
+            "run_at": "document_idle"
+        },
+        {
+            "js": [
+                "assets/lektor_bar.js",
+                "assets/content.js-BgeP3Ise.js"
+            ],
+            "matches": [
+                "*://*.netflix.com/*"
+            ],
+            "run_at": "document_idle"
+        },
+        {
+            "js": [
+                "assets/lektor_bar.js",
+                "assets/sub_panel.js",
+                "assets/youtube_content.js-CI940SBo.js"
+            ],
+            "matches": [
+                "*://*.youtube.com/*"
+            ],
+            "run_at": "document_idle",
+            "all_frames": true
+        },
+        {
+            "js": [
+                "assets/lektor_bar.js",
+                "assets/dom_content.js",
+                "assets/auto_subs.js"
+            ],
+            "matches": [
+                "*://*.primevideo.com/*",
+                "*://*.amazon.com/video/*",
+                "*://*.iq.com/*",
+                "*://*.iqiyi.com/*"
+            ],
+            "all_frames": true,
+            "run_at": "document_idle"
+        },
+        {
+            "js": [
+                "assets/lektor_bar.js",
+                "assets/dom_content.js"
+            ],
+            "matches": [
+                "*://*.dailymotion.com/*",
+                "*://dai.ly/*",
+                "*://*.rumble.com/*"
+            ],
+            "all_frames": true,
+            "run_at": "document_idle"
+        },
+        {
+            "js": [
+                "assets/lektor_bar.js",
+                "assets/dom_content.js",
+                "assets/auto_subs.js"
+            ],
+            "matches": [
+                "*://*.viki.com/*",
+                "*://*.wetv.vip/*",
+                "*://*.bilibili.com/*",
+                "*://*.bilibili.tv/*"
+            ],
+            "all_frames": true,
+            "run_at": "document_idle"
+        },
+        {
+            "js": [
+                "assets/dyktowanie_bridge.js"
+            ],
+            "matches": [
+                "http://127.0.0.1/app*"
+            ],
+            "run_at": "document_idle"
+        }
+    ],
+    "commands": {
+        "glos-toggle": {
+            "suggested_key": { "default": "Alt+Shift+1" },
+            "description": "Mój głos → tekst: start / stop"
+        },
+        "karta-toggle": {
+            "suggested_key": { "default": "Alt+Shift+2" },
+            "description": "Film w karcie → napisy: start / stop"
+        }
+    },
+    "options_page": "src/options/options.html",
+    "action": {
+        "default_popup": "src/popup/popup.html",
+        "default_title": "Lektor Multilanguage - ustawienia",
+        "default_icon": {
+            "16": "icon-16.png",
+            "48": "icon-48.png",
+            "128": "icon-128.png"
+        }
+    },
+    "icons": {
+        "16": "icon-16.png",
+        "48": "icon-48.png",
+        "128": "icon-128.png"
+    },
+    "web_accessible_resources": [
+        {
+            "matches": [
+                "*://*.netflix.com/*"
+            ],
+            "resources": [
+                "src/content/inject.js",
+                "src/content/netflix_seek_bridge.js",
+                "sherpa/*",
+                "assets/content.js-BgeP3Ise.js"
+            ],
+            "use_dynamic_url": false
+        },
+        {
+            "matches": [
+                "*://*.youtube.com/*"
+            ],
+            "resources": [
+                "assets/youtube_content.js-CI940SBo.js"
+            ],
+            "use_dynamic_url": false
+        },
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "resources": [
+                "ocr/*"
+            ],
+            "use_dynamic_url": false
+        }
+    ],
+    "content_security_policy": {
+        "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+    }
+}
