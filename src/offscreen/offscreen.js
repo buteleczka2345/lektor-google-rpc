@@ -771,11 +771,13 @@ function runQueue() {
         try { playingUrls.delete(next.url); } catch (e) {}
         next = playQueue.shift();
     }
+    if (!next) playingGroup = null;   // [AGENT-EXP]
     if (!next) { // OPTIONS-PAGE: kolejka pusta → karty mogą wznowić film zapauzowany na czas lektora
         try { chrome.runtime.sendMessage({ action: 'TTS_QUEUE_IDLE' }).catch(() => {}); } catch (e) {}
         return;
     }
     queueActive = true;
+    playingGroup = next.group || null;   // [AGENT-EXP] reszta tej kwestii nie wypada z kolejki
     playNext(next);
 }
 
@@ -819,13 +821,23 @@ function playNext(item) {
 
 // noSkip (Dyktowanie / „Głos i napisy”): lektor czyta WSZYSTKO do końca — bez pomijania spóźnionych
 // kwestii (slotMs + 2,5 s) i bez wyrzucania najstarszych z pełnej kolejki. Przyspieszanie (autoCatchup) zostaje.
-function enqueuePlay(url, durationMs, piperSpeed, rate, slotMs, noSkip) {
-    const item = { url, durationMs, rate: Number(rate) || 1, slotMs: Number(slotMs) || 0, noSkip: !!noSkip };
+// [AGENT-EXP] 2026-10-18: group = id kwestii. Długa kwestia to kilka paczek (stream) — limit MAX_QUEUE liczy
+// teraz KWESTIE, nie paczki, a pomijana jest zawsze CAŁA najstarsza kwestia (nigdy ta, która właśnie gra).
+// Wcześniej przy 5+ paczkach wypadały środkowe paczki → lektor urywał dłuższe zdanie w połowie.
+let playingGroup = null;
+function enqueuePlay(url, durationMs, piperSpeed, rate, slotMs, noSkip, group) {
+    const item = { url, durationMs, rate: Number(rate) || 1, slotMs: Number(slotMs) || 0, noSkip: !!noSkip, group: group || url };
     if (item.slotMs > 0 && !item.noSkip) item.expireAt = Date.now() + item.slotMs + 2500;
     playQueue.push(item);
-    if (playQueue.length > MAX_QUEUE) {
-        const i = playQueue.findIndex((q) => !q.noSkip); // najstarsza kwestia, którą wolno pominąć
-        if (i >= 0) {
+    for (;;) {
+        const groups = [];
+        for (const q of playQueue) if (q.group !== playingGroup && groups.indexOf(q.group) < 0) groups.push(q.group);
+        if (groups.length <= MAX_QUEUE) break;
+        // najstarsza kwestia, którą wolno pominąć (nie noSkip, nie bieżąca, nie ta właśnie dodana)
+        const g = groups.find((gr) => gr !== item.group && !playQueue.some((q) => q.group === gr && q.noSkip));
+        if (g === undefined) break;
+        for (let i = playQueue.length - 1; i >= 0; i--) {
+            if (playQueue[i].group !== g) continue;
             const dropped = playQueue.splice(i, 1)[0];
             try { playingUrls.delete(dropped.url); } catch (e) {}
         }
@@ -1091,9 +1103,11 @@ function createSherpaSession() {
 // naturalną pauzę (TAIL_MS) na końcu i minimalny margines na początku.
 function trimSilence(samples, sampleRate) {
     if (!samples || !samples.length || !sampleRate) return samples;
-    const TH = 0.004;      // próg ciszy (skala -1..1)
-    const TAIL_MS = 80;    // naturalna pauza na końcu (przecinek/kropka)
-    const HEAD_MS = 20;    // margines na początku
+    // [AGENT-EXP] 2026-10-18: było TH 0.004 / TAIL 80 / HEAD 20 — ciche końcówki (ś, ć, f, s, wygasające
+    // samogłoski) spadały poniżej progu i były obcinane → „ucięte” ostatnie słowo paczki.
+    const TH = 0.0015;     // próg ciszy (skala -1..1)
+    const TAIL_MS = 150;   // naturalna pauza na końcu (przecinek/kropka) + zapas na wygasanie głoski
+    const HEAD_MS = 40;    // margines na początku (nagłos „p/t/k” zaczyna się cicho)
     const n = samples.length;
     const tail = Math.max(1, Math.round(sampleRate * TAIL_MS / 1000));
     const head = Math.max(1, Math.round(sampleRate * HEAD_MS / 1000));
@@ -1863,7 +1877,7 @@ async function playMatchaStream(msg, put) {
         const blob = await matchaSynthesize(chunks[i], matchaSockets, true);
         const single = chunks.length === 1;
         const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip);
+        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
         recCapture(msg, blob).catch(() => {});
         offLogPush('matcha-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
     }
@@ -1885,7 +1899,7 @@ async function playPocketStream(msg, put) {
         const blob = await pocketSynthesize(chunks[i], pocketVoice, pocketSockets, true);
         const single = chunks.length === 1;
         const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip);
+        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
         recCapture(msg, blob).catch(() => {});
         offLogPush('pocket-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
     }
@@ -1905,7 +1919,7 @@ async function playOmnivoiceStream(msg, put) {
         const blob = await omnivoiceSynthesize(chunks[i], omnivoiceVoice, omnivoiceSockets, true, omnivoiceCzasMs(msg));
         const single = chunks.length === 1;
         const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip);
+        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
         recCapture(msg, blob).catch(() => {});
         offLogPush('omnivoice-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
     }
@@ -1918,7 +1932,7 @@ async function playAudio8Stream(msg, put) {
         const blob = await audio8Synthesize(chunks[i], audio8Voice, audio8Sockets, true);
         const single = chunks.length === 1;
         const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip);
+        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
         recCapture(msg, blob).catch(() => {});
         offLogPush('audio8-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
     }
@@ -1946,6 +1960,7 @@ async function predictStream(session, msg, put = enqueuePlay) {
     offLogPush('stream', 'kwestia ' + String(msg.id || '').slice(0, 30) + ' → ' + chunks.length + ' paczek (równolegle, do ' + poolSize() + ' wątków)');
     // Równoległa synteza wszystkich paczek (pula workerów), odtwarzanie w ORYGINALNEJ kolejności.
     const jobs = chunks.map((chunk) => predictPlay(session, chunk));
+    const grp = msg.id || ('kw' + Date.now());   // [AGENT-EXP] wspólna grupa paczek w kolejce
     jobs.forEach((j) => j.catch(() => {}));
     for (let i = 0; i < jobs.length; i++) {
         // nieudana paczka nie przerywa reszty kwestii
@@ -1954,7 +1969,7 @@ async function predictStream(session, msg, put = enqueuePlay) {
         if (!blob) continue;
         const url = URL.createObjectURL(blob);
         audioCache.set(msg.id + '#' + i, url);
-        put(url, 0, msg.piperSpeed, msg.rate, 0, msg.noSkip); // części długiej kwestii też nie wypadają z kolejki
+        put(url, 0, msg.piperSpeed, msg.rate, 0, msg.noSkip, grp); // [AGENT-EXP] paczki = jedna kwestia (group)
         offLogPush('play', 'paczka ' + (i + 1) + '/' + chunks.length + ' (stream)');
     }
 }function recParseWav(buf) {

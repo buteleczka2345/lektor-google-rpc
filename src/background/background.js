@@ -653,7 +653,7 @@ const LOWCA_ISOLATED = ['assets/lowca_bridge.js', 'assets/lowca_auto.js'];
 
 // [OCR-TOOL] OCR niezależny od Łowcy: menu przycisku CC → OCR_TOOL_CMD (wstrzyknij assets/ocr_tool.js do ramek
 // karty i przekaż komendę); strona → OCR_TOOL_RECOGNIZE / OCR_TOOL_STOP → silnik w dokumencie lektora (ocr_engine.js).
-const OCR_TOOL_ACTIONS = ['OCR_TOOL_CMD', 'OCR_TOOL_RECOGNIZE', 'OCR_TOOL_STOP', 'OCR_TOOL_STATE', 'OCR_TOOL_SCREEN'];
+const OCR_TOOL_ACTIONS = ['OCR_TOOL_CMD', 'OCR_TOOL_RECOGNIZE', 'OCR_TOOL_STOP', 'OCR_TOOL_STATE', 'OCR_TOOL_SCREEN', 'OCR_TOOL_FIND'];   // [AGENT-EXP] OCR_TOOL_FIND = 🎯 auto-ramka (samo wykrywanie tekstu)
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || msg.target === 'offscreen' || !OCR_TOOL_ACTIONS.includes(msg.action)) return;
     (async () => {

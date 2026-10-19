@@ -20,7 +20,7 @@
         ['ita', 'Włoski (z internetu)'], ['rus', 'Rosyjski (z internetu)'], ['ukr', 'Ukraiński (z internetu)'],
         ['jpn', 'Japoński (z internetu)'], ['kor', 'Koreański (z internetu)']
     ];
-    let on = false, host = null, btn = null, menu = null, ocrBtn = null, langSel = null, info = null, ocrOn = false, busy = false, ocrChk = null, obEl = null, engSelEl = null, trSelEl = null, detSelEl = null;   // [AGENT-EXP] trSelEl
+    let on = false, host = null, btn = null, menu = null, ocrBtn = null, langSel = null, info = null, ocrOn = false, busy = false, ocrChk = null, obEl = null, engSelEl = null, trSelEl = null, detSelEl = null, afChkEl = null;   // [AGENT-EXP] trSelEl; afChkEl = 🎯 auto-ramka
 
     function lowcaVisible() {
         const h = document.querySelector('[data-ush-host]');
@@ -92,6 +92,14 @@
         raceBtn.addEventListener('click', (e) => { e.stopPropagation(); menu.classList.remove('open'); ocrCmd('race'); });
         const frameBtn = document.createElement('button'); frameBtn.className = 'i'; frameBtn.type = 'button'; frameBtn.textContent = '▭ Ramka OCR (gdzie są napisy)';
         frameBtn.addEventListener('click', (e) => { e.stopPropagation(); menu.classList.remove('open'); ocrCmd('frame'); });
+        // [AGENT-EXP] 🎯 auto-ramka: OCR sam znajduje napisy na filmie (model wykrywania tekstu PP-OCR tiny, kilka klatek)
+        const afLab = document.createElement('label'); afLab.className = 'i'; afLab.style.cssText = 'display:flex;align-items:center;gap:6px';
+        afLab.title = 'Po włączeniu OCR sprawdza kilka klatek, sam ustawia ramkę na napisach i ją zapamiętuje. Szuka ponownie dopiero, gdy przez ~20 s nic nie przeczyta.';
+        const afChk = document.createElement('input'); afChk.type = 'checkbox'; afChk.style.cssText = 'margin:0;accent-color:#e879f9;cursor:pointer';
+        afChk.addEventListener('change', (e) => { e.stopPropagation(); try { chrome.storage.local.set({ ocrToolAutoFrame: afChk.checked }); } catch (e2) {} });
+        afLab.addEventListener('click', (e) => e.stopPropagation());
+        afLab.append(afChk, document.createTextNode('🎯 Auto-ramka (sama szuka napisów)'));
+        afChkEl = afChk;
         info = document.createElement('div'); info.className = 'inf';
         const sep = document.createElement('div'); sep.className = 'sep';
         const lowcaBtn = document.createElement('button'); lowcaBtn.className = 'i'; lowcaBtn.type = 'button'; lowcaBtn.textContent = '🔍 Łowca napisów (przeszukaj stronę)';
@@ -102,7 +110,7 @@
                 busy = false; lowcaBtn.textContent = '🔍 Łowca napisów (przeszukaj stronę)'; menu.classList.remove('open'); update();
             });
         });
-        menu.append(h1, ocrBtn, engSel, langSel, trSel, detSel, frameBtn, raceBtn, info, sep, lowcaBtn);   // [AGENT-EXP] trSel, raceBtn
+        menu.append(h1, ocrBtn, engSel, langSel, trSel, detSel, afLab, frameBtn, raceBtn, info, sep, lowcaBtn);   // [AGENT-EXP] trSel, raceBtn
         // Mały checkbox „OCR” obok CC — szybkie włącz/wyłącz bez otwierania menu
         const ob = document.createElement('label'); ob.className = 'ob'; ob.title = 'OCR napisów z obrazu: zaznaczone = włączony (bez Łowcy)';
         ocrChk = document.createElement('input'); ocrChk.type = 'checkbox';
@@ -120,7 +128,7 @@
             const open = !menu.classList.contains('open');
             menu.classList.toggle('open', open);
             if (open) {
-                try { chrome.storage.local.get(['ocrToolLang', 'ocrToolEngine', 'ocrToolTr', 'ocrToolDetect'], (r) => { if (detSelEl) detSelEl.value = (r && r.ocrToolDetect) === 'krawedzie' ? 'krawedzie' : 'jasnosc'; langSel.value = (r && r.ocrToolLang) || ''; if (engSelEl) { const v = r && r.ocrToolEngine; engSelEl.value = v === 'ppocr6t' ? 'ppocr6t' : (v === 'ppocr6s' || v === 'ppocr') ? 'ppocr6s' : 'tesseract'; } if (trSelEl) { const t = r && r.ocrToolTr; trSelEl.value = ['bing', 'google', 'deepl', 'strona', 'lokalny'].indexOf(t) !== -1 ? t : 'skrypt'; } }); } catch (e2) {}   // [AGENT-EXP] ocrToolTr
+                try { chrome.storage.local.get(['ocrToolLang', 'ocrToolEngine', 'ocrToolTr', 'ocrToolDetect', 'ocrToolAutoFrame'], (r) => { if (afChkEl) afChkEl.checked = !!(r && r.ocrToolAutoFrame === true); /* [AGENT-EXP] 🎯 */ if (detSelEl) detSelEl.value = (r && r.ocrToolDetect) === 'krawedzie' ? 'krawedzie' : 'jasnosc'; langSel.value = (r && r.ocrToolLang) || ''; if (engSelEl) { const v = r && r.ocrToolEngine; engSelEl.value = v === 'ppocr6t' ? 'ppocr6t' : (v === 'ppocr6s' || v === 'ppocr') ? 'ppocr6s' : 'tesseract'; } if (trSelEl) { const t = r && r.ocrToolTr; trSelEl.value = ['bing', 'google', 'deepl', 'strona', 'lokalny'].indexOf(t) !== -1 ? t : 'skrypt'; } }); } catch (e2) {}   // [AGENT-EXP] ocrToolTr
                 paintOcr();
                 if (ocrOn) ocrCmd('state').then(() => { btn.classList.toggle('ocr', ocrOn); }); // OCR mógł się sam zatrzymać (np. DRM)
             }

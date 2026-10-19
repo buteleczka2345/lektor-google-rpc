@@ -53,6 +53,22 @@
             })();
             return true;
         }
+        if (msg.action === 'OCR_TOOL_FIND') {   // [AGENT-EXP] 🎯 auto-ramka: prostokąty z tekstem na całej klatce
+            busy++;
+            (async () => {
+                try {
+                    lastUse = Date.now();
+                    const e = await engine();
+                    const c = await toCanvas(msg.image);
+                    const boxes = await e.find(c);
+                    lastUse = Date.now();
+                    sendResponse({ ok: true, boxes, w: c.width, h: c.height });
+                } catch (err) {
+                    sendResponse({ ok: false, error: 'PP-OCR: ' + String((err && err.message) || err) });
+                } finally { busy--; }
+            })();
+            return true;
+        }
         if (msg.action === 'OCR_TOOL_STOP') {   // Tesseract też dostaje STOP (ocr_engine.js) — tu tylko zwalniamy, bez odpowiedzi
             if (pp && !busy) { const p = pp; pp = null; p.dispose(); }
         }

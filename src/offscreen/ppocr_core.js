@@ -138,6 +138,10 @@
                 }
                 return lines;
             },
+            // [AGENT-EXP] 🎯 auto-ramka: tylko wykrywanie (gdzie jest tekst), bez rozpoznawania liter — model tiny, szybko
+            async find(src) {
+                return detect(src, src.width, src.height, MODELS.v6tiny.det);
+            },
             async dispose() {
                 for (const k of Object.keys(sess)) { try { (await sess[k]).release(); } catch (e) { /* ignoruj */ } delete sess[k]; }
             }

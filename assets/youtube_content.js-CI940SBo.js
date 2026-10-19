@@ -410,7 +410,8 @@ if (!('__lektorBufPauza' in window)) {
     }
     // UWAGA GLOBALNA: TTS_CLEAR_BUFFER nie niesie tabId — czyści bufor dla WSZYSTKICH kart.
     function stopSpeechSilently() {
-        if (engine === 'offline') chrome.runtime.sendMessage({ action: 'TTS_CLEAR_BUFFER' });
+        // [AGENT-EXP] 2026-10-18: try/catch + .catch — po przeładowaniu rozszerzenia (stara karta) błąd szedł do chrome://extensions
+        if (engine === 'offline') { try { chrome.runtime.sendMessage({ action: 'TTS_CLEAR_BUFFER' }).catch(() => {}); } catch (e) {} }
         // [AGENT-EXP] 2026-10-17: po pauzie / przewinięciu zleć preload jeszcze raz (gotowe nagrania lektor odda
         // od razu z pamięci / dysku) — wcześniej kwestie zostawały „zleconymi”, a ich dźwięk przepadał
         try { ttPreloaded.clear(); filePreloaded.clear(); } catch (e) {}

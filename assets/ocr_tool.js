@@ -157,7 +157,8 @@
     const DEF_REGION = [0, 0.62, 1, 0.38];
     const OCR_LANGS = { pl: 'pol', en: 'eng', de: 'deu', fr: 'fra', es: 'spa', it: 'ita', ru: 'rus', uk: 'ukr', ja: 'jpn', ko: 'kor', zh: 'chi_sim' };
     const st = { on: false, busy: false, timer: 0, sig: null, last: '', lang: '', region: DEF_REGION.slice(), fails: 0, cv: null, cv2: null, cv3: null, status: '', engine: 'tesseract',
-        tr: 'skrypt', esig: null, askAt: 0, asked: 0, skipped: 0, nextCap: 0 };   // [AGENT-EXP] tr = kto tłumaczy; esig/askAt/asked/skipped = krawędzie liter (PP-OCR)
+        tr: 'skrypt', esig: null, askAt: 0, asked: 0, skipped: 0, nextCap: 0,
+        auto: false, afScreen: false, finding: false, autoAt: 0, quiet: 0, quietAt: 0, afNote: '', cvA: null };   // [AGENT-EXP] 🎯 auto-ramka   // [AGENT-EXP] tr = kto tłumaczy; esig/askAt/asked/skipped = krawędzie liter (PP-OCR)
     // [AGENT-EXP] kto tłumaczy (menu CC → „Kto tłumaczy”, storage ocrToolTr):
     //   skrypt = silnik z ustawień rozszerzenia (przy „lokalnym” — Bing), google / bing = ten silnik,
     //   strona = Immersive Translate / TWP przez element-most (brak odpowiedzi w 2,5 s → silnik rozszerzenia)
@@ -169,11 +170,12 @@
     let lektorOn = true, duckLevel = 20;
 
     try {
-        chrome.storage.local.get(['ocrToolLang', 'ocrToolRegions', 'enabled', 'duckLevel', 'ocrToolEngine', 'ocrToolTr', 'ocrToolDetect', 'ocrToolBoxPos'], (r) => {
+        chrome.storage.local.get(['ocrToolLang', 'ocrToolRegions', 'enabled', 'duckLevel', 'ocrToolEngine', 'ocrToolTr', 'ocrToolDetect', 'ocrToolBoxPos', 'ocrToolAutoFrame'], (r) => {
             r = r || {};
             st.engine = engineKey(r.ocrToolEngine);
             st.tr = trKey(r.ocrToolTr); if (boxTr) boxTr.value = st.tr;   // [AGENT-EXP]
             st.detect = detKey(r.ocrToolDetect);   // [AGENT-EXP]
+            st.auto = r.ocrToolAutoFrame === true;   // [AGENT-EXP] 🎯 auto-ramka
             const bp = r.ocrToolBoxPos && r.ocrToolBoxPos[HOST];   // [AGENT-EXP] (cz. 5) zapamiętane miejsce okienka OCR
             if (bp && Number.isFinite(bp.x) && Number.isFinite(bp.y)) { boxPos = bp; placeBox(); }
             if (typeof r.ocrToolLang === 'string') st.lang = r.ocrToolLang;
@@ -186,6 +188,7 @@
             if (area !== 'local') return;
             if (ch.ocrToolLang) { st.lang = ch.ocrToolLang.newValue || ''; st.sig = null; st.last = ''; ui(); }
             if (ch.ocrToolEngine) { st.engine = engineKey(ch.ocrToolEngine.newValue); st.sig = null; st.last = ''; if (st.on) setStatus('silnik: ' + engineLabel()); }
+            if (ch.ocrToolAutoFrame) { st.auto = ch.ocrToolAutoFrame.newValue === true; st.quiet = 0; st.quietAt = 0; st.afNote = ''; if (st.auto && st.on) { const v = bigVideo(); if (v) autoFind(v); } }   // [AGENT-EXP] 🎯
             if (ch.ocrToolDetect) { st.detect = detKey(ch.ocrToolDetect.newValue); st.sig = null; st.esig = null; }   // [AGENT-EXP]
             if (ch.ocrToolTr) { st.tr = trKey(ch.ocrToolTr.newValue); if (boxTr) boxTr.value = st.tr; br.misses = 0; br.offUntil = 0; if (st.tr !== 'strona') bridgeHide(); showEng(''); }   // [AGENT-EXP]
             if (ch.enabled) lektorOn = ch.enabled.newValue !== false;
@@ -225,24 +228,15 @@
     const IS_TOP = window.top === window;
     let lastScreenAt = 0;
     function inPicture(r) { return r[0] >= -0.002 && r[1] >= -0.002 && r[0] + r[2] <= 1.002 && r[1] + r[3] <= 1.002; }
-    function screenMode() { return IS_TOP && !inPicture(st.region); }
+    function screenMode() { return IS_TOP && (st.afScreen || !inPicture(st.region)); }   // [AGENT-EXP] afScreen = 🎯 napis rysuje strona (nie ma go w pikselach filmu)
     function clamp01(r) { const x = Math.min(Math.max(0, r[0]), 0.96), y = Math.min(Math.max(0, r[1]), 0.96); return [x, y, Math.min(r[2], 1 - x), Math.min(r[3], 1 - y)]; }
     const nextFrame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
     function loadImg(url) { return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('screen:obraz')); i.src = url; }); }
     // [AGENT-EXP] okienka lektora chowane na czas zrzutu ekranu — inaczej OCR czytał własne teksty lektora
     // (panel z przeczytanymi kwestiami, nakładka z czytanym tekstem, ustawienia, Łowca), które leżą w ramce.
     const OWN_UI = '[data-lektor-ocr],[data-lektor-cc],[data-lektor-ui],[data-ush-host],#lektor-controls-bar,#lektor-settings-sheet,#lektor-settings-gear,[id^="livedub-"]';
-    async function grab(v) {
-        const reg = st.region;
-        if (!screenMode()) {
-            const r = clamp01(reg);
-            return { src: v, sx: v.videoWidth * r[0], sy: v.videoHeight * r[1], sw: Math.max(16, v.videoWidth * r[2]), sh: Math.max(16, v.videoHeight * r[3]) };
-        }
-        if (Date.now() - lastScreenAt < 600) return null;          // limit Chrome: najwyżej ~2 zrzuty na sekundę
-        const pb = videoBox(v);
-        const x0 = Math.max(0, pb.left + reg[0] * pb.width), y0 = Math.max(0, pb.top + reg[1] * pb.height);
-        const x1 = Math.min(innerWidth, pb.left + (reg[0] + reg[2]) * pb.width), y1 = Math.min(innerHeight, pb.top + (reg[1] + reg[3]) * pb.height);
-        if (x1 - x0 < 8 || y1 - y0 < 8) return null;
+    // [AGENT-EXP] zrzut widocznej części karty; na ten czas chowamy okienka lektora nachodzące na prostokąt x0..x1, y0..y1
+    async function screenShot(x0, y0, x1, y1) {
         const hidden = [];
         document.querySelectorAll(OWN_UI).forEach((el) => {   // [AGENT-EXP] wszystkie okienka lektora, nie tylko OCR i CC
             if (el.style.visibility === 'hidden') return;
@@ -255,6 +249,20 @@
         lastScreenAt = Date.now();
         const res = await send({ action: 'OCR_TOOL_SCREEN' });
         hidden.forEach((el) => { el.style.visibility = ''; });
+        return res;
+    }
+    async function grab(v) {
+        const reg = st.region;
+        if (!screenMode()) {
+            const r = clamp01(reg);
+            return { src: v, sx: v.videoWidth * r[0], sy: v.videoHeight * r[1], sw: Math.max(16, v.videoWidth * r[2]), sh: Math.max(16, v.videoHeight * r[3]) };
+        }
+        if (Date.now() - lastScreenAt < 600) return null;          // limit Chrome: najwyżej ~2 zrzuty na sekundę
+        const pb = videoBox(v);
+        const x0 = Math.max(0, pb.left + reg[0] * pb.width), y0 = Math.max(0, pb.top + reg[1] * pb.height);
+        const x1 = Math.min(innerWidth, pb.left + (reg[0] + reg[2]) * pb.width), y1 = Math.min(innerHeight, pb.top + (reg[1] + reg[3]) * pb.height);
+        if (x1 - x0 < 8 || y1 - y0 < 8) return null;
+        const res = await screenShot(x0, y0, x1, y1);   // [AGENT-EXP] wspólne z 🎯 auto-ramką
         if (!res || !res.ok) throw new Error('screen:' + ((res && res.error) || 'brak odpowiedzi'));
         const img = await loadImg(res.image);
         const sc = img.naturalWidth / innerWidth;
@@ -407,10 +415,126 @@
         zdLiveFeed(txt, say, 150);
     }
 
+    // ---------- [AGENT-EXP] 🎯 auto-ramka: sama znajduje napisy (storage ocrToolAutoFrame) ----------
+    // Kilka klatek (co ~1 s, najwyżej AF_SAMPLES) całego obrazu filmu → PP-OCR tiny, TYLKO wykrywanie tekstu
+    // (offscreen OCR_TOOL_FIND). Z prostokątów wybieramy pas napisów (pickBand) i ustawiamy ramkę. Potem zwykła
+    // pętla — szukanie wraca dopiero po AF_QUIET_MS odtwarzania bez przeczytanego tekstu (najwyżej co AF_GAP_MS).
+    const AF_SAMPLES = 6, AF_EVERY = 1000, AF_QUIET_MS = 20000, AF_GAP_MS = 30000, AF_W = 640;
+    // samples: [[{x,y,w,h} w ułamkach obrazu 0..1], …] (jedna tablica na klatkę) → [x,y,w,h] ramki albo null
+    function pickBand(samples, maxY) {   // [AGENT-EXP] maxY: dół zrzutu (1 = dół filmu, 1.25 = z pasem pod filmem)
+        const cl = [];
+        samples.forEach((boxes, si) => boxes.forEach((b) => {
+            const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+            if (cx < 0.15 || cx > 0.85 || b.h < 0.02 || b.h > 0.14 || b.w < 0.03) return;   // logo w rogu, duże plansze
+            let c = cl.find((k) => Math.abs(k.cy - cy) < 0.045);
+            if (!c) { c = { cy, items: [] }; cl.push(c); }
+            c.items.push({ si, b });
+            c.cy = c.items.reduce((s, it) => s + it.b.y + it.b.h / 2, 0) / c.items.length;
+        }));
+        let best = null, bestScore = 0;
+        for (const c of cl) {
+            const hits = new Set(c.items.map((it) => it.si)).size;
+            const shapes = new Set(c.items.map((it) => Math.round(it.b.x * 50) + ':' + Math.round(it.b.w * 50))).size;
+            if (hits >= 3 && shapes < 2) continue;                       // stały znak wodny / pasek kanału — zawsze ten sam
+            const score = hits + (shapes >= 2 ? 1 : 0) + (c.cy > 0.5 ? 0.5 : 0);
+            if (score > bestScore) { bestScore = score; best = c; }
+        }
+        if (!best) return null;
+        const bs = best.items.map((it) => it.b);
+        const y0 = Math.min(...bs.map((b) => b.y)), y1 = Math.max(...bs.map((b) => b.y + b.h));
+        const hs = bs.map((b) => b.h).sort((a, b) => a - b), lh = hs[hs.length >> 1];
+        let top = y0 - 0.6 * lh, bot = y1 + 0.6 * lh;
+        if (y1 - y0 < 1.6 * lh) { if (best.cy > 0.5) top -= 1.1 * lh; else bot += 1.1 * lh; }   // miejsce na drugą linijkę
+        top = Math.max(0, top); bot = Math.min(maxY || 1, bot);
+        return [0.08, +top.toFixed(4), 0.84, +(bot - top).toFixed(4)];
+    }
+    // pickBand-end
+    // [AGENT-EXP] jedna klatka do szukania. Główna ramka: ZRZUT EKRANU prostokąta filmu + AF_BELOW pod nim — widać
+    // wszystko: napisy wtopione w obraz, napisy rysowane przez stronę (HTML, Łowca), czarny pas pod filmem.
+    // Iframe (bez zrzutu ekranu): piksele filmu. Wynik: obrazek + mapa (ox, oy, kx, ky) z pikseli obrazka
+    // na ułamki obrazu filmu: x = ox + px / szer * kx (y > 1 = pod filmem).
+    const AF_BELOW = 0.25;
+    function afCanvas(w, h) {
+        const k = Math.min(1, AF_W / w), dw = Math.max(32, Math.round(w * k)), dh = Math.max(32, Math.round(h * k));
+        if (!st.cvA) st.cvA = document.createElement('canvas');
+        const c = st.cvA; c.width = dw; c.height = dh;
+        return c;
+    }
+    function afVideo(v) {   // piksele filmu (rzuca, gdy obraz chroniony / z innej domeny)
+        const c = afCanvas(v.videoWidth, v.videoHeight);
+        c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+        return { image: c.toDataURL('image/jpeg', 0.85), ox: 0, oy: 0, kx: 1, ky: 1, screen: false };
+    }
+    async function afFrame(v) {
+        const pb = videoBox(v);
+        const x0 = Math.max(0, pb.left), y0 = Math.max(0, pb.top);
+        const x1 = Math.min(innerWidth, pb.left + pb.width), y1 = Math.min(innerHeight, pb.top + pb.height * (1 + AF_BELOW));
+        if (!IS_TOP || x1 - x0 < 32 || y1 - y0 < 32) return afVideo(v);
+        const wait = 600 - (Date.now() - lastScreenAt);
+        if (wait > 0) await sleep(wait);                            // limit Chrome: ~2 zrzuty na sekundę
+        const res = await screenShot(x0, y0, x1, y1);
+        if (!res || !res.ok) throw new Error((res && res.error) || 'zrzut ekranu nieudany');
+        const img = await loadImg(res.image), sc = img.naturalWidth / innerWidth;
+        const c = afCanvas((x1 - x0) * sc, (y1 - y0) * sc);
+        c.getContext('2d').drawImage(img, x0 * sc, y0 * sc, (x1 - x0) * sc, (y1 - y0) * sc, 0, 0, c.width, c.height);
+        return { image: c.toDataURL('image/jpeg', 0.85), ox: (x0 - pb.left) / pb.width, oy: (y0 - pb.top) / pb.height,
+            kx: (x1 - x0) / pb.width, ky: (y1 - y0) / pb.height, screen: true };
+    }
+    // [AGENT-EXP] czy napis w pasie reg jest w PIKSELACH filmu? (jedna klatka) — nie → rysuje go strona, czytamy ze zrzutu ekranu
+    async function afInVideo(v, reg) {
+        let f;
+        try { f = afVideo(v); } catch (e) { return false; }
+        const r = await send({ action: 'OCR_TOOL_FIND', image: f.image });
+        if (!r || !r.ok) return true;                               // nie wiadomo — zostajemy przy szybkich pikselach
+        return (r.boxes || []).some((b) => { const cy = (b.y + b.h / 2) / r.h; return cy >= reg[1] && cy <= reg[1] + reg[3]; });
+    }
+    async function autoFind(v) {
+        if (st.finding) return;
+        st.finding = true; st.busy = true; st.autoAt = Date.now();
+        const old = st.status;
+        try {
+            setStatus('🎯 szukam napisów na filmie…');
+            const samples = [];
+            let maxY = 1, shot = false;   // [AGENT-EXP] maxY > 1 = zrzut sięga pod film; shot = szukano na zrzucie ekranu
+            for (let i = 0; i < AF_SAMPLES && st.on; i++) {
+                if (i) await sleep(AF_EVERY);
+                if (!st.on || v.paused || v.ended || document.visibilityState !== 'visible') { i--; if (!st.on) break; await sleep(500); continue; }
+                let r;
+                let f;
+                try { f = await afFrame(v); r = await send({ action: 'OCR_TOOL_FIND', image: f.image }); }
+                catch (e) { setStatus('🎯 nie mogę zrobić zrzutu: ' + String(e.message || e)); return; }
+                if (!r || !r.ok) { setStatus('🎯 błąd wykrywania: ' + ((r && r.error) || 'brak odpowiedzi')); return; }
+                samples.push((r.boxes || []).map((b) => ({ x: f.ox + b.x / r.w * f.kx, y: f.oy + b.y / r.h * f.ky, w: b.w / r.w * f.kx, h: b.h / r.h * f.ky })));   // [AGENT-EXP] ułamki obrazu filmu
+                maxY = Math.max(maxY, f.oy + f.ky); shot = shot || f.screen;
+                const quick = samples.length >= 3 && pickBand(samples, maxY);
+                if (quick && samples.filter((s) => s.length).length >= 3) break;   // wyraźnie widać — nie trzeba dalej
+            }
+            if (!st.on) return;
+            const reg = pickBand(samples, maxY);
+            if (!reg) { st.afNote = ' · 🎯 nie znalazłem napisów (stara ramka)'; setStatus('🎯 nie znalazłem napisów — zostaje dotychczasowa ramka'); return; }
+            // [AGENT-EXP] pas w obrazie filmu, ale znaleziony na zrzucie ekranu → czy to piksele filmu, czy napis strony?
+            const scr = shot && inPicture(reg) && !(await afInVideo(v, reg));
+            if (!st.on) return;
+            st.region = reg; st.afScreen = scr; st.sig = null; st.esig = null; st.last = '';
+            try { chrome.storage.local.get('ocrToolRegions', (r) => { const m = (r && r.ocrToolRegions) || {}; m[HOST] = reg; chrome.storage.local.set({ ocrToolRegions: m }); }); } catch (e) {}
+            st.afNote = ' · 🎯 ramka ' + Math.round(reg[1] * 100) + '–' + Math.round((reg[1] + reg[3]) * 100) + '%' + (scr ? ' (napisy strony)' : '');
+            setStatus('🎯 znalazłem napisy — ramka ustawiona (' + Math.round(reg[1] * 100) + '–' + Math.round((reg[1] + reg[3]) * 100) + '% wysokości)');
+        } finally {
+            st.finding = false; st.busy = false; st.quiet = 0; st.quietAt = 0;
+            if (st.on && /^🎯 szukam/.test(st.status)) setStatus(old || 'działa');
+        }
+    }
+
     // ---------- pętla ----------
     async function tick() {
-        if (!st.on || st.busy || document.visibilityState !== 'visible') return;
+        if (!st.on || st.busy || st.finding || document.visibilityState !== 'visible') return;   // [AGENT-EXP] st.finding = 🎯 szuka napisów
         const v = bigVideo(); if (!v || v.readyState < 2 || v.paused || v.ended) return;
+        if (st.auto) {   // [AGENT-EXP] 🎯 auto-ramka: długo (czas odtwarzania) nic nie przeczytane → szukaj napisów jeszcze raz
+            const now = Date.now();
+            if (st.quietAt) st.quiet += Math.min(1000, now - st.quietAt);
+            st.quietAt = now;
+            if (st.quiet > AF_QUIET_MS && now - st.autoAt > AF_GAP_MS) { autoFind(v); return; }
+        }
         // [AGENT-EXP] zegar co 250 ms; Tesseract (cięższy zrzut) nadal najwyżej co ~0,5 s
         if (useEngine() !== 'ppocr' || st.detect !== 'krawedzie') { if (Date.now() < st.nextCap) return; st.nextCap = Date.now() + 450; }   // jak dawniej: najwyżej co ~0,5 s
         st.busy = true;
@@ -443,9 +567,10 @@
                 : { action: 'OCR_TOOL_RECOGNIZE', image: cap.canvas.toDataURL('image/png'), langs: langs() });
             if (!st.on) return;
             if (!r || !r.ok) { st.fails++; setStatus('błąd silnika: ' + ((r && (r.error || r.status)) || 'brak odpowiedzi')); if (st.fails > 8) stop('OCR zatrzymany po błędach.'); return; }
-            st.fails = 0; setStatus('działa — ' + engineLabel() + (g.screen ? ' · zrzut ekranu' : '') + (eng === 'ppocr' && st.detect === 'krawedzie' ? ' · zapytań ' + st.asked + ', pominiętych klatek ' + st.skipped : ''));   // [AGENT-EXP] licznik
+            st.fails = 0; setStatus('działa — ' + engineLabel() + (g.screen ? ' · zrzut ekranu' : '') + (eng === 'ppocr' && st.detect === 'krawedzie' ? ' · zapytań ' + st.asked + ', pominiętych klatek ' + st.skipped : '') + (st.auto ? st.afNote || '' : ''));   // [AGENT-EXP] licznik; 🎯 wynik auto-ramki
             const txt = clean(r.lines);
             if (!txt) { if (eng === 'ppocr' && st.last) { st.last = ''; showText('', ''); zdLiveGone(); } return; }
+            st.quiet = 0;   // [AGENT-EXP] 🎯 jest tekst w ramce
             if (similar(txt, st.last)) return;
             st.last = txt; showText(txt, '');
             sayZd(txt);   // [AGENT-EXP] całe zdania
@@ -458,7 +583,8 @@
         st.esig = null; st.askAt = 0; st.asked = 0; st.skipped = 0; st.nextCap = 0;   // [AGENT-EXP]
         setStatus('uruchamiam silnik — ' + engineLabel() + '…'); ui();
         clearInterval(st.timer); st.timer = setInterval(tick, 250);   // [AGENT-EXP] było 500 ms
-        tick();
+        st.quiet = 0; st.quietAt = 0; st.autoAt = 0; st.afNote = '';   // [AGENT-EXP] 🎯
+        if (st.auto) autoFind(bigVideo()); else tick();   // [AGENT-EXP] 🎯 auto-ramka: najpierw znajdź napisy
         send({ action: 'OCR_TOOL_STATE', on: true, status: st.status });
     }
     // [AGENT-EXP] ocr: true w EXT_TR_LIVE = przepustka trybu „tylko OCR”. Strona zamykana / przeładowana
@@ -868,7 +994,7 @@
         const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
         const close = () => { ov.remove(); window.removeEventListener('keydown', onKey, true); };
         bar.appendChild(mkb('✓ Zapisz', () => {
-            st.region = reg.map((x) => Math.round(x * 1000) / 1000); st.sig = null;
+            st.region = reg.map((x) => Math.round(x * 1000) / 1000); st.sig = null; st.afScreen = false;   // [AGENT-EXP] ręczna ramka
             try { chrome.storage.local.get('ocrToolRegions', (r) => { const m = (r && r.ocrToolRegions) || {}; m[HOST] = st.region; chrome.storage.local.set({ ocrToolRegions: m }); }); } catch (e) {}
             close();
         }, '#a21caf'));
