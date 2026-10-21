@@ -6,6 +6,12 @@
 
 > 💡 **Przerabiaj go po swojemu!** Ten program możesz dowolnie zmieniać pod własne potrzeby — i gorąco zachęcam, żeby go ulepszać. Szczegóły niżej w „🛠️ Wolno modyfikować”.
 
+## ⬇️ Pobierz ZIP
+
+**[📦 Pobierz Multilektor 3.4.0 (ZIP, ~220 MB)](https://github.com/buteleczka2345/lektor-google-rpc/releases/download/v3.4.0/Multilektor-3.4.0-sklep-2026-10-21.zip)** · [wszystkie wydania](https://github.com/buteleczka2345/lektor-google-rpc/releases/latest)
+
+Instalacja: rozpakuj ZIP do folderu → otwórz `chrome://extensions` → włącz **Tryb dewelopera** → **Załaduj rozpakowane** → wskaż rozpakowany folder (ten z `manifest.json`).
+
 ## 🆕 Co nowego (3.1 → 3.4.0)
 
 - **Nowa nazwa: Multilektor** (wcześniej „Lektor Multilanguage”). Nazwa i opis w dwóch językach przez `_locales/pl` i `_locales/en`.
