@@ -109,8 +109,8 @@ Supertonic z Hugging Face i pliki językowe OCR — nie kod.)
 **Oświadczenia (zaznacz wszystkie trzy):** nie sprzedaję danych stronom trzecim · nie używam ich w celach niezwiązanych z
 jedynym celem · nie używam ich do oceny zdolności kredytowej.
 
-**Polityka prywatności (URL):** wymagany adres publiczny — tekst jest w `sklep/polityka-prywatnosci.html`
-(np. Google Sites, GitHub Pages). Uzupełnij w nim swój e-mail kontaktowy.
+**Polityka prywatności (URL):** `https://buteleczka2345.github.io/lektor-google-rpc/sklep/polityka-prywatnosci.html`
+(GitHub Pages z repozytorium; kontakt w polityce = zgłoszenia na GitHubie).
 
 ---
 
