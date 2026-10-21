@@ -14,7 +14,7 @@
   o „Automatyczne tłumaczenie → polski” (`tlang=pl`), bez limitu i bez kluczy; gdy się nie da — tłumaczy jak dotąd.
 - **🗣 Głos przeglądarki** — nowy silnik mowy przez Web Speech API (`src/offscreen/browser_tts.js`): Google polski w Chrome,
   Microsoft Natural w Edge, darmowy, bez serwera; własna kolejka, przełączenie na głos lokalny przy błędzie, strażnik zawieszeń.
-- **Supertonic 3** (silnik z VoxNemesis, `supertonic/`) — 4 głosy liczone lokalnie na CPU / GPU (WebGPU).
+- **Supertonic 3** — lektor w przeglądarce z VoxNemesis (`supertonic/`): 4 głosy liczone lokalnie na CPU / GPU (WebGPU).
 - **Gotowe do Chrome Web Store:** kod OCR tylko z paczki (bez CDN i bez uruchamiania kodu z tekstu), przepisane od nowa
   przechwytywanie napisów Netflixa (`src/content/inject.js`), dokument offscreen i router mowy; teksty do panelu Sklepu
   i polityka prywatności w `sklep/`.
@@ -24,6 +24,10 @@
 Projekt wyrósł z rozszerzenia „Live Dubbing” (Chrome Web Store) i od tamtej pory został wielokrotnie przebudowany.
 Fragmenty przejęte stamtąd dosłownie (przechwytywanie napisów Netflixa, dokument offscreen, router mowy) zostały w wersji 3.2.0
 napisane od nowa.
+
+Lektor liczony w przeglądarce **Supertonic 3** (folder `supertonic/` — silnik, workery CPU / WebGPU, 4 głosy) pochodzi
+z lektora **VoxNemesis** i został tu przeniesiony; z VoxNemesis jest też wygląd popupu (zakładki, karty, kolory).
+Sam model głosu to Supertone Supertonic 3 (ONNX), pobierany z Hugging Face przy pierwszym użyciu.
 
 ## 🛠️ Wolno modyfikować
 
@@ -66,7 +70,7 @@ Instalacja deweloperska: chrome://extensions → tryb dewelopera → Załaduj ro
 - assets/ocr_tool.js — OCR wtopionych napisów (zrzut klatki co 0,5 s → offscreen → okienko + lektor; język ocrToolLang, ramka ocrToolRegions)
 - assets/i18n.js + i18n_en.js — 🌐 język interfejsu PL / EN (MLi18n: page, watch, t; słownik pl → en)
 - _locales/pl, _locales/en — nazwa i opis rozszerzenia w dwóch językach
-- supertonic/ — silnik Supertonic 3 (CPU / WebGPU), model pobierany z Hugging Face przy pierwszym użyciu
+- supertonic/ — silnik Supertonic 3 przeniesiony z lektora VoxNemesis (CPU / WebGPU), model pobierany z Hugging Face przy pierwszym użyciu
 - sklep/ — teksty do Chrome Web Store (opis, uprawnienia, prywatność) i polityka prywatności (HTML)
 - assets/phrase_dict.js — 571 idiomów (DUO_PHRASE_MAP) — sprawdzany PRZED tłumaczem i PRZED cache
 - glos/ — Głos i Napisy: glos_bg.js (Alt+Shift+1/2, okienka, badge REC/CC, dziennik gnDbg), glos.html/js (mikrofon→tekst w pole), karta.html/js (tabCapture cyfrowo→napisy), overlay.js, historia.html/js (napisy na bieżąco), common.js (DeepFilterNet, boost mowy 1–2,5 kHz), dfn/ (DeepFilterNet3 WASM, licencje MIT/Apache). Pełna instrukcja: glos/CZYTAJ MNIE.txt
