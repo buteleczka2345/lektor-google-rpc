@@ -237,6 +237,7 @@
             + 'color:#eee;font:13px system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.65);'
             + 'box-sizing:border-box;touch-action:manipulation;';
         (document.body || document.documentElement).appendChild(sheet);
+        try { if (self.MLi18n) { MLi18n.watch(sheet); } } catch (e) {}   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
 
         // Nagłówek
         var head = document.createElement('div');
@@ -312,6 +313,7 @@
 
         var blockList = document.createElement('div');
         blockList.id = 'lektor-settings-block-list';
+        blockList.setAttribute('data-noi18n', '');   // [AGENT-EXP] 2026-10-21: frazy użytkownika — bez tłumaczenia
         blockList.style.cssText = 'display:flex;flex-wrap:wrap;gap:2px;max-height:110px;overflow-y:auto;';
         sheet.appendChild(blockList);
 
@@ -330,6 +332,7 @@
         sheet.appendChild(spokenTools);
         var spokenList = document.createElement('div');
         spokenList.id = 'lektor-settings-spoken-list';
+        spokenList.setAttribute('data-noi18n', '');   // [AGENT-EXP] 2026-10-21: przeczytane napisy — bez tłumaczenia
         spokenList.style.cssText = 'display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto;';
         sheet.appendChild(spokenList);
         var spokenHint = document.createElement('div');
@@ -381,6 +384,7 @@
             + 'font:bold 10px system-ui,sans-serif;padding:1px 5px;border-radius:9px;display:none;white-space:nowrap;';
         gear.appendChild(badge);
         (document.body || document.documentElement).appendChild(gear);
+        try { if (self.MLi18n) { MLi18n.watch(gear); } } catch (e) {}   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
         updateGearBadge();
     }
 

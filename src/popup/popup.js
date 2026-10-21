@@ -224,13 +224,13 @@ function updateCustomVoiceUi(cv) {
     if (!detail) return;
     if (enabled) {
         detail.textContent = '✓ Aktywny własny głos: „' + (cv.name || 'model') + '” (' + fmtBytes(cv.sizeOnnx) + ').';
-        detail.style.color = '#7effa0';
+        detail.className = 'footnote ok';   // [VOX] kolory z popup.css
         if (btn) btn.textContent = '📂 Zamień pliki własnego głosu…';
     } else {
         detail.textContent = (cv && cv._failed)
             ? '⛔ Własny głos „' + (cv.name || '') + '” nie wystartował — działa wbudowany. Przyczyna: log silnika w sekcji „Test lektora”. Możesz wczytać pliki ponownie.'
             : 'Wskaż 3 pliki modelu Sherpa/Piper: model.onnx + tokens.txt + model.onnx.json (json opcjonalny). Głos zapisze się w rozszerzeniu i przeżyje restart przeglądarki.';
-        detail.style.color = (cv && cv._failed) ? '#ff9090' : '';
+        detail.className = (cv && cv._failed) ? 'footnote err' : 'footnote';
         if (btn) btn.textContent = '📂 Wskaż pliki własnego głosu (onnx + txt + json)';
     }
 }
@@ -250,24 +250,24 @@ function renderVoiceList(list, active) {
     const actId = active && active.enabled ? active.id : null;
     list.forEach((v) => {
         const row = document.createElement('div');
-        row.style.cssText = 'display:flex;align-items:center;gap:4px;margin-top:4px;font-size:10px;';
+        row.className = 'list-row';   // [VOX] wygląd w popup.css
         const isAct = v.id === actId;
         const label = document.createElement('span');
-        label.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:' + (isAct ? '#7effa0' : '#ccc') + ';';
+        label.className = 'name' + (isAct ? ' active' : '');
         label.textContent = (isAct ? '● ' : '○ ') + (v.name || v.id) + ' (' + fmtBytes(v.sizeOnnx) + ')';
         row.appendChild(label);
         if (!isAct) {
             const act = document.createElement('button');
             act.textContent = '▶';
             act.title = 'Aktywuj ten głos';
-            act.style.cssText = 'width:22px;height:18px;background:#1a3a1a;color:#7effa0;border:1px solid #3a7a3a;cursor:pointer;border-radius:4px;font-size:9px;flex-shrink:0;';
+            act.className = 'mini ok';
             act.addEventListener('click', () => activateVoice(v));
             row.appendChild(act);
         }
         const del = document.createElement('button');
         del.textContent = '🗑';
         del.title = 'Usuń ten głos z pamięci';
-        del.style.cssText = 'width:22px;height:18px;background:#331111;color:#ff9090;border:1px solid #933;cursor:pointer;border-radius:4px;font-size:9px;flex-shrink:0;';
+        del.className = 'mini danger';
         del.addEventListener('click', () => deleteVoice(v));
         row.appendChild(del);
         el.appendChild(row);
@@ -614,9 +614,7 @@ async function init() {
         const syncCensorUi = (on) => {
             censorToggle.dataset.on = on ? '1' : '0';
             censorToggle.textContent = on ? '🤬 Cenzura: WŁĄCZONA' : '🤬 Cenzura: WYŁĄCZONA';
-            censorToggle.style.background = on ? '#0f2d1a' : '#331111';
-            censorToggle.style.color = on ? '#7effa0' : '#ff9090';
-            censorToggle.style.border = on ? '1px solid #3a7a3a' : '1px solid #933';
+            censorToggle.className = 'btn ' + (on ? 'ok' : 'danger');   // [VOX] kolory z popup.css
             censorModeSel.disabled = !on;
             censorWords.disabled = !on;
             if (censorStatus) {
@@ -641,7 +639,8 @@ async function init() {
                         + ' Ustawienia zapisują się na stałe.';
                 }
                 if (censorToggle.dataset.on === '1'
-                    && (!censorStatus || censorStatus.textContent === CENSOR_STATUS_FALLBACK)) {
+                    && (!censorStatus || censorStatus.textContent === CENSOR_STATUS_FALLBACK
+                        || (self.MLi18n && censorStatus.textContent === self.MLi18n.t(CENSOR_STATUS_FALLBACK)))) {   // [AGENT-EXP] 2026-10-21: tekst bywa już po angielsku
                     syncCensorUi(true);
                 }
             });
@@ -797,12 +796,13 @@ async function init() {
     const testDetail = $('testDetail');
     if (testBtn) {
         testBtn.addEventListener('click', () => {
-            testStatus.textContent = '…inicjalizuję Piper…';
+            testStatus.textContent = '…uruchamiam silnik…';
             testDetail.style.display = 'none';
             testBtn.disabled = true;
             const showErr = (label, resp) => {
                 testStatus.textContent = resp && resp.status ? resp.status : 'błąd';
                 if (resp && resp.error) {
+                    testDetail.className = 'footnote err pre';
                     testDetail.textContent = label + '\n' + resp.error;
                     testDetail.style.display = 'block';
                 } else {
@@ -813,7 +813,7 @@ async function init() {
             chrome.runtime.sendMessage({ action: 'INIT_TTS' }, (resp1) => {
                 console.log('[Test] INIT_TTS ->', resp1);
                 if (resp1 && (resp1.status === 'error' || resp1.error)) {
-                    showErr('[INIT_TTS — błąd ładowania Piper]', resp1);
+                    showErr('[INIT_TTS — błąd uruchamiania silnika]', resp1);
                     testBtn.disabled = false;
                     return;
                 }
@@ -838,6 +838,7 @@ async function init() {
                         showErr('[TTS_PLAY]', resp2);
                     } else {
                         testStatus.textContent = resp2.status || 'ok';
+                        testDetail.className = 'footnote ok pre';
                         testDetail.textContent = 'Jeśli słyszysz głos — działa. Jeśli nie — sprawdź głośność / ustaw głos w popupie.';
                         testDetail.style.display = 'block';
                     }
@@ -1284,19 +1285,17 @@ async function init() {
         dbResults.textContent = '';
         r.items.forEach((it) => {
             const row = document.createElement('div');
-            row.style.cssText = 'padding:4px 6px;border-bottom:1px solid #1f3550;cursor:pointer;font:10.5px Arial;color:#cfe6ff;text-align:left;line-height:1.35;';
+            row.className = 'db-row';   // [VOX] wygląd i podświetlenie w popup.css
             const lang = document.createElement('b');
             lang.textContent = '[' + (it.lang || '?').toUpperCase() + '] ';
-            lang.style.color = /^pl/.test(it.lang || '') ? '#7ef0a0' : '#ffd27e';
+            lang.className = /^pl/.test(it.lang || '') ? 'lang-pl' : 'lang-x';
             row.appendChild(lang);
             row.appendChild(document.createTextNode(it.title || '?'));
             const sub = document.createElement('div');
-            sub.style.cssText = 'color:#7f9bbd;font-size:9.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            sub.className = 'meta';
             sub.textContent = it.providerName + (it.downloads ? ' · ⬇ ' + it.downloads : '') + (it.hi ? ' · dla niesłyszących' : '') + ' · ' + (it.release || '');
             row.appendChild(sub);
             row.title = it.release || '';
-            row.addEventListener('mouseenter', () => { row.style.background = '#13283f'; });
-            row.addEventListener('mouseleave', () => { row.style.background = ''; });
             row.addEventListener('click', () => dbLoad(it));
             dbResults.appendChild(row);
         });
@@ -1544,9 +1543,9 @@ function langRender() {
     const MAX = 80;
     for (const e of items.slice(0, MAX)) {
         const row = document.createElement('div');
-        row.style.cssText = 'display:flex;align-items:center;gap:5px;margin-top:3px;font-size:10px;';
+        row.className = 'list-row';   // [VOX] wygląd w popup.css
         const label = document.createElement('span');
-        label.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#ccc;';
+        label.className = 'name';
         const tagMap = { mms: 'MMS', piper: 'PIPER', coqui: 'COQUI', cantonese: 'YUE', vits: 'VITS' };
         const tag = tagMap[e.type] || 'VITS';
         label.textContent = e.name + (e.country ? ' — ' + e.country : '') + (e.iso ? ' [' + e.iso + ']' : '') + ' · ' + tag;
@@ -1558,7 +1557,7 @@ function langRender() {
         if (downloaded) {
             btn.textContent = '🗑';
             btn.title = 'Już pobrany — jest na liście „Własny głos”. Kliknij, aby wykasować z pamięci rozszerzenia.';
-            btn.style.cssText = 'width:24px;height:18px;background:#331111;color:#ff9090;border:1px solid #933;cursor:pointer;border-radius:4px;font-size:9px;flex-shrink:0;';
+            btn.className = 'mini danger';
             btn.addEventListener('click', async () => {
                 const { list } = await loadVoiceState();
                 const v = list.find((x) => x.id === e.id) || { id: e.id, name: e.name };
@@ -1572,7 +1571,7 @@ function langRender() {
                 ? 'Repozytorium tego modelu jest chwilowo niedostępne (zaloguj się na HuggingFace) — użyj sekcji „Własny głos”'
                 : 'Pobierz i zapisz ten głos w rozszerzeniu';
             btn.disabled = !!LANG_STORE.busy[e.id] || isVitsExtra;
-            btn.style.cssText = 'width:24px;height:18px;background:#112a33;color:' + (isVitsExtra ? '#555' : '#7ee0ff') + ';border:1px solid #2a6a7a;cursor:pointer;border-radius:4px;font-size:9px;flex-shrink:0;';
+            btn.className = 'mini';
             btn.addEventListener('click', () => langDownload(e));
         }
         row.appendChild(btn);
@@ -1823,15 +1822,17 @@ try {
     function probe(quiet) {   // quiet: odświeżenie w tle — bez migania „sprawdzam…”
         const eng = sel.value;
         const my = ++probeNo;
-        if (!WS[eng]) { show('#3ddc84', 'wbudowany'); return; }
-        if (!quiet) show('#e0b400', 'sprawdzam…');
+        if (eng === 'supertonic') { if (!quiet) show('#9aa0c8', 'sprawdzam…'); return; }   // [VOX] kropkę ustawia blok Supertonic (na dole)
+        if (eng === 'browser') { show('#34d399', 'bez serwera'); return; }   // [AGENT-EXP] 🗣
+        if (!WS[eng]) { show('#34d399', 'wbudowany'); return; }
+        if (!quiet) show('#fcd34d', 'sprawdzam…');
         let ws = null, done = false;
         const finish = (ok) => {
             if (done || my !== probeNo) return;
             done = true;
             clearTimeout(tm);
             try { if (ws) ws.close(); } catch (e) { /* ignore */ }
-            show(ok ? '#3ddc84' : '#ff5a5a', ok ? 'serwer działa' : 'serwer nie odpowiada');
+            show(ok ? '#34d399' : '#f87171', ok ? 'serwer działa' : 'serwer nie odpowiada');
         };
         const tm = setTimeout(() => finish(false), 2000);
         try {
@@ -1843,7 +1844,7 @@ try {
     }
     chrome.storage.local.get('ttsEngine', (r) => {
         const v = r && r.ttsEngine;
-        sel.value = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice'].indexOf(v) >= 0 ? v : 'sherpa';
+        sel.value = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(v) >= 0 ? v : 'sherpa';
         probe();
     });
     sel.addEventListener('change', () => { chrome.storage.local.set({ ttsEngine: sel.value }); probe(); });
@@ -1874,7 +1875,11 @@ try {
         f5: { k: 'tts2Voice', def: '', label: 'Próbka głosu (lektormarekf5tts\\probki)', list: TTS2 },
         pocket: { k: 'pocketVoice', def: 'ref', label: 'Głos Pocket-TTS-PL', list: POCKET },
         omnivoice: { k: 'omnivoiceVoice', def: 'male, young adult, moderate pitch', label: 'Głos OmniVoice', list: OMNI },
-        audio8: { k: 'audio8Voice', def: 'default', label: 'Głos Audio8 (ID katalogu w voices\\)', text: true }
+        audio8: { k: 'audio8Voice', def: 'default', label: 'Głos Audio8 (ID katalogu w voices\\)', text: true },
+        // [VOX] 2026-10-20: Supertonic 3 — 4 głosy wbudowane w model (VoxNemesis)
+        supertonic: { k: 'supertonicVoice', def: 'Supertonic M1', label: 'Głos Supertonic', list: [['Supertonic M1', 'Męski 1'], ['Supertonic M2', 'Męski 2'], ['Supertonic F1', 'Żeński 1'], ['Supertonic F2', 'Żeński 2']] },
+        // [AGENT-EXP] 2026-10-21: 🗣 głosy przeglądarki — lista z dokumentu lektora (BROWSER_TTS_VOICES), '' = automatycznie
+        browser: { k: 'browserVoice', def: '', label: 'Głos przeglądarki', dyn: true, list: null }
     };
     let cur = null;
     function render() {
@@ -1885,6 +1890,16 @@ try {
         sel.style.display = cur.text ? 'none' : '';
         txt.style.display = cur.text ? '' : 'none';
         const c = cur;
+        if (c.dyn && !c.list) {   // [AGENT-EXP] 🗣 lista głosów przychodzi z offscreen
+            c.list = [['', 'Automatycznie — wczytuję głosy…']];
+            chrome.runtime.sendMessage({ action: 'BROWSER_TTS_VOICES' }, (r) => {
+                void chrome.runtime.lastError;
+                const vs = (r && r.voices) || [];
+                c.list = [['', 'Automatycznie' + (r && r.selected ? ' (' + r.selected + ')' : ' (najlepszy)')]]
+                    .concat(vs.map((v) => [v.name, v.name + (v.local ? ' · lokalny' : ' · sieciowy')]));
+                if (cur === c) render();
+            });
+        }
         chrome.storage.local.get(c.k, (r) => {
             if (cur !== c) return;
             const v = r && typeof r[c.k] === 'string' ? r[c.k] : c.def;
@@ -1959,4 +1974,128 @@ try {
         chrome.storage.local.set({ bufferInBackground: chk.checked });
         chronKarte(chk.checked);
     });
+})();
+
+// [VOX] 2026-10-20: zakładki popupu (jak w VoxNemesis). Ostatnio otwarta zakładka wraca przy następnym otwarciu.
+(function () {
+    const tabs = Array.from(document.querySelectorAll('.tabs .tab'));
+    const panes = Array.from(document.querySelectorAll('.pane[data-pane]'));
+    if (!tabs.length || !panes.length) return;
+    function show(name) {
+        if (!panes.some((p) => p.dataset.pane === name)) name = 'lektor';
+        tabs.forEach((t) => {
+            const on = t.dataset.tab === name;
+            t.classList.toggle('active', on);
+            t.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+        panes.forEach((p) => { p.hidden = p.dataset.pane !== name; });
+        try { localStorage.setItem('lektorTab', name); } catch (e) { /* ignore */ }
+    }
+    tabs.forEach((t) => t.addEventListener('click', () => { show(t.dataset.tab); window.scrollTo(0, 0); }));
+    let last = 'lektor';
+    try { last = localStorage.getItem('lektorTab') || 'lektor'; } catch (e) { /* ignore */ }
+    show(last);
+    // dodatkowe przyciski „⚙️ Wszystkie opcje”
+    document.querySelectorAll('[data-open-options]').forEach((b) => b.addEventListener('click', () => {
+        try { chrome.runtime.openOptionsPage(); } catch (e) { chrome.tabs.create({ url: chrome.runtime.getURL('src/options/options.html') }); }
+    }));
+})();
+
+// [VOX] 2026-10-20: Supertonic (silnik z VoxNemesis) — sprzęt CPU / GPU, jakość i stan silnika.
+// Te same klucze co na stronie Ustawień (engineBackend, supertonicSteps); background przekazuje je do offscreen.
+(function () {
+    const eng = document.getElementById('ttsEngineSelect');
+    const rows = document.getElementById('stRows');
+    const backendSel = document.getElementById('stBackend');
+    const stepsSel = document.getElementById('stSteps');
+    const statusEl = document.getElementById('stStatus');
+    const dot = document.getElementById('ttsEngineDot');
+    const dotTxt = document.getElementById('ttsEngineText');
+    const hint = document.getElementById('ttsEngineHint');
+    if (!eng || !rows || !backendSel || !stepsSel || !statusEl) return;
+    const hintDefault = hint ? hint.textContent : '';
+    const HINT_ST = 'Głos liczony na tym komputerze — bez serwera. Za pierwszym razem model pobiera się z Hugging Face (kilkaset MB), potem działa offline. GPU jest kilka–kilkanaście razy szybsze niż CPU.';
+    const BACKEND_NAME = { cpu: 'CPU', igpu: 'GPU zintegrowana', gpu: 'GPU dedykowana' };
+    let timer = null;
+
+    function setDot(color, label) {
+        if (eng.value !== 'supertonic' || !dot || !dotTxt) return;
+        dot.style.background = color;
+        dotTxt.textContent = label;
+    }
+    function setStatus(text, cls) {
+        statusEl.textContent = text;
+        statusEl.className = 'st-status' + (cls ? ' ' + cls : '');
+    }
+    function render(r) {
+        const want = BACKEND_NAME[backendSel.value] || 'CPU';
+        if (!r || !r.running || !r.loaded) {
+            setDot('#9aa0c8', 'czeka');
+            setStatus('Silnik: ' + want + ' · uruchomi się przy pierwszej kwestii (albo kliknij ▶ Test w tej zakładce).'
+                + (r && r.running && r.isolated === false ? '\n⚠ Brak izolacji (COOP/COEP) — CPU liczy na 1 wątku.' : ''));
+            return;
+        }
+        const d = r.download || {};
+        if (d.phase === 'error' || (r.lastError && !r.slotsReady)) {
+            setDot('#f87171', 'błąd');
+            setStatus('⛔ ' + (d.error || r.lastError), 'err');
+            return;
+        }
+        if (d.phase === 'download' || d.phase === 'check') {
+            setDot('#fcd34d', 'model ' + (d.done || 0) + '/' + (d.total || 6));
+            setStatus('⬇ Pobieram model Supertonic 3 z Hugging Face: ' + (d.done || 0) + '/' + (d.total || 6) + ' plików'
+                + (d.file ? ' (' + d.file + ')' : '') + '. Tylko za pierwszym razem.', 'warn');
+            return;
+        }
+        if (!r.slotsReady) {
+            setDot('#fcd34d', r.starting ? 'start…' : 'czeka');
+            setStatus(r.starting ? '⏳ Uruchamiam silnik (' + want + ')…' : 'Silnik: ' + want + ' · czeka na pierwszą kwestię.', r.starting ? 'warn' : '');
+            return;
+        }
+        let line;
+        if (r.provider === 'webgpu') {
+            line = '✓ GPU (WebGPU)' + (r.gpuName ? ' · ' + r.gpuName : '');
+            setDot('#34d399', 'GPU' + (r.gpuName ? ' · ' + String(r.gpuName).split(' ')[0] : ''));
+        } else {
+            line = '✓ CPU · ' + r.slotsReady + '/' + r.slotsMax + ' worker(y) × ' + r.threads + ' wątki';
+            setDot('#34d399', 'CPU ×' + r.slotsReady);
+        }
+        if (r.queued) line += ' · w kolejce: ' + r.queued;
+        if (r.gpuFellBack && r.gpuError) line += '\n⚠ GPU niedostępne → CPU: ' + r.gpuError;
+        else if (r.backend === 'gpu' && r.provider === 'webgpu' && r.gpuName && !/nvidia/i.test(r.gpuName)) {
+            line += '\n🛈 Masz NVIDIA, a Chrome dał inną kartę? Instrukcja „NVIDIA na stałe” na stronie Ustawień.';
+        }
+        if (r.isolated === false && r.provider !== 'webgpu') line += '\n⚠ Brak izolacji (COOP/COEP) — CPU liczy na 1 wątku.';
+        setStatus(line, (r.gpuFellBack ? 'warn' : 'ok'));
+    }
+    function poll() {
+        if (eng.value !== 'supertonic') return;
+        try {
+            chrome.runtime.sendMessage({ action: 'SUPERTONIC_STATUS' }, (r) => { void chrome.runtime.lastError; render(r); });
+        } catch (e) { render(null); }
+    }
+    function sync() {
+        const on = eng.value === 'supertonic';
+        rows.style.display = on ? '' : 'none';
+        if (hint) hint.textContent = on ? HINT_ST : hintDefault;
+        clearInterval(timer);
+        timer = null;
+        if (on) { poll(); timer = setInterval(poll, 2000); }
+    }
+    chrome.storage.local.get(['engineBackend', 'supertonicSteps'], (r) => {
+        const b = r && r.engineBackend;
+        backendSel.value = (b === 'gpu' || b === 'igpu') ? b : 'cpu';
+        const st = String((r && r.supertonicSteps) || 4);
+        stepsSel.value = Array.from(stepsSel.options).some((o) => o.value === st) ? st : '4';
+    });
+    backendSel.addEventListener('change', () => { chrome.storage.local.set({ engineBackend: backendSel.value }); setTimeout(poll, 300); });
+    stepsSel.addEventListener('change', () => chrome.storage.local.set({ supertonicSteps: Number(stepsSel.value) }));
+    eng.addEventListener('change', () => setTimeout(sync, 0));
+    chrome.storage.onChanged.addListener((ch, area) => {
+        if (area !== 'local') return;
+        if (ch.engineBackend) backendSel.value = ch.engineBackend.newValue || 'cpu';
+        if (ch.supertonicSteps) stepsSel.value = String(ch.supertonicSteps.newValue || 4);
+        if (ch.ttsEngine) setTimeout(sync, 0);
+    });
+    chrome.storage.local.get('ttsEngine', () => setTimeout(sync, 0));   // po ustawieniu eng.value przez blok „Silnik mowy”
 })();

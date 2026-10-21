@@ -3924,6 +3924,7 @@
     host.style.cssText = 'all:initial;position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;';
     let root = host;
     try { if (O.attachShadow) root = O.attachShadow.call(host, { mode: 'closed' }); } catch (e) { root = host; }
+    try { if (W.MLi18n) W.MLi18n.watch(root); } catch (e) {}   // [AGENT-EXP] 2026-10-21: panel po angielsku, gdy tak wybrano (w Piperze MLi18n nie ma)
     try { const sheet = new W.CSSStyleSheet(); sheet.replaceSync(CSS); root.adoptedStyleSheets = [sheet]; }
     catch (e) { const st = doc.createElement('style'); st.textContent = CSS; root.appendChild(st); }
     ui.host = host; ui.root = root; uiHost = host; dlRoot = root;
@@ -4376,6 +4377,9 @@
   // Pobierz plik silnika/języka: najpierw z paczki (offline), a gdy go tam nie ma — z CDN.
   async function ocrFetch(what, lang) {
     if (ocr.base) { try { return await fetchBytes(ocrUrl(what, lang, ocr.base)); } catch (e) { dbg('ocr offline brak ' + what + ' ' + (lang || ''), e); } }
+    // [AGENT-EXP] 2026-10-21 (Multilektor, Chrome Web Store): kod silnika OCR WYŁĄCZNIE z paczki rozszerzenia —
+    // z internetu idą tylko dane języków (.traineddata). Sklep odrzuca rozszerzenia uruchamiające kod z serwera.
+    if (what !== 'lang') throw new Error('brak plików silnika OCR w rozszerzeniu (folder ocr/)');
     return fetchBytes(ocrUrl(what, lang, ''));
   }
   function ocrUrl(what, lang, base) {
@@ -4383,9 +4387,10 @@
     if (what === 'lang') return b ? b + '/' + lang + '.traineddata.gz' : 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/' + lang + '/4.0.0_best_int/' + lang + '.traineddata.gz';
     let simd = false; try { simd = W.WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11])); } catch (e) {}
     const core = simd ? 'tesseract-core-simd-lstm.wasm.js' : 'tesseract-core-lstm.wasm.js';
-    if (what === 'core') return b ? b + '/' + core : 'https://cdn.jsdelivr.net/npm/tesseract.js-core@6.1.2/' + core;
-    if (what === 'worker') return b ? b + '/worker.min.js' : 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js';
-    return b ? b + '/tesseract.min.js' : 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js';
+    if (!b) return '';   // [AGENT-EXP] 2026-10-21: kod silnika tylko z folderu ocr/ rozszerzenia (bez CDN)
+    if (what === 'core') return b + '/' + core;
+    if (what === 'worker') return b + '/worker.min.js';
+    return b + '/tesseract.min.js';
   }
   function ocrBlobUrl(text) { const mk = O.createObjectURL || W.URL.createObjectURL; const u = mk.call(W.URL, new W.Blob([text], { type: 'text/javascript' })); ownWorkerUrls.add(u); return u; }
   // Pamięć podręczna danych języka w IndexedDB strony (ten sam magazyn i klucz, z których czyta worker Tesseract: cachePath „ush\")
@@ -4410,13 +4415,18 @@
     ocr.status = 'ładuję bibliotekę OCR…'; uiLive();
     await ocrAskBase();
     if (!ocr.lib) {
-      const src = decodeWith((await ocrFetch('lib')).bytes, 'utf-8');
-      let T = null;
-      try { const mod = { exports: {} }; new Function('module', 'exports', 'define', src)(mod, mod.exports, undefined); T = mod.exports && (mod.exports.createWorker ? mod.exports : mod.exports.default); } catch (e) { dbg('ocr eval', e); }
-      if (!T || !T.createWorker) { // plan B: element <script> z blobu
-        await new Promise(function (res, rej) { const s = doc.createElement('script'); s.onload = res; s.onerror = function () { rej(new Error('strona blokuje uruchomienie biblioteki OCR (CSP)')); }; s.src = ocrBlobUrl(src); (doc.head || doc.documentElement).appendChild(s); });
-        T = W.Tesseract;
+      // [AGENT-EXP] 2026-10-21: biblioteka OCR jako <script src> z pliku rozszerzenia (ocr/tesseract.min.js, web_accessible)
+      // zamiast pobierania tekstu i uruchamiania go jako kod z napisu. Strona z AMD (window.define.amd) przejęłaby
+      // bibliotekę jako moduł — na czas wczytania chowamy define, żeby powstało window.Tesseract.
+      if (!ocr.base) throw new Error('brak plików silnika OCR w rozszerzeniu (folder ocr/)');
+      if (!W.Tesseract || !W.Tesseract.createWorker) {
+        const amd = W.define && W.define.amd ? W.define : null;
+        if (amd) { try { W.define = undefined; } catch (e) {} }
+        try {
+          await new Promise(function (res, rej) { const s = doc.createElement('script'); s.onload = res; s.onerror = function () { rej(new Error('nie udało się wczytać biblioteki OCR')); }; s.src = ocrUrl('lib', '', ocr.base); (doc.head || doc.documentElement).appendChild(s); });
+        } finally { if (amd) { try { W.define = amd; } catch (e) {} } }
       }
+      const T = W.Tesseract;
       if (!T || !T.createWorker) throw new Error('nie udało się uruchomić biblioteki OCR');
       ocr.lib = T;
     }
@@ -4536,6 +4546,7 @@
     let reg = (CFG.ocrRegion || [0, 0.62, 1, 0.38]).slice();
     const css = function (el, o) { Object.keys(o).forEach(function (k) { el.style.setProperty(k, o[k], 'important'); }); };
     const ov = doc.createElement('div'); ov.id = 'lektor-ocr-frame';
+    try { if (W.MLi18n) W.MLi18n.watch(ov); } catch (e) {}   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
     css(ov, { position: 'fixed', left: vb.left + 'px', top: vb.top + 'px', width: vb.width + 'px', height: vb.height + 'px', 'z-index': '2147483647', background: 'rgba(0,0,0,.35)', 'box-sizing': 'border-box', outline: '1px dashed rgba(255,255,255,.5)' });
     const box = doc.createElement('div');
     css(box, { position: 'absolute', border: '2px solid #e879f9', background: 'rgba(232,121,249,.12)', cursor: 'move', 'box-sizing': 'border-box' });

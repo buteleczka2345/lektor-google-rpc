@@ -1,8 +1,29 @@
-﻿# 🔊 Lektor Multilanguage — Polski Lektor do filmów (rozszerzenie Chrome MV3)
+# 🔊 Multilektor — polski lektor do filmów (rozszerzenie Chrome MV3)
 
-**Wersja:** 3.0.6 · **Typ:** rozszerzenie Chrome (Manifest V3) · **Język UI:** polski
+**Wersja:** 3.4.0 · **Typ:** rozszerzenie Chrome (Manifest V3) · **Język UI:** polski / English (automatycznie wg języka Chrome, przełącznik w popupie)
 
 > Rozszerzenie zamienia **obce napisy / mowę w filmie na polskiego lektora czytanego na żywo** — bezpośrednio na stronie (YouTube, Netflix, Prime Video, iQIYI, WeTV, Viki, Bilibili, Dailymotion, Rumble i inne). Tłumaczy lokalnie (Translator Chrome) albo przez silniki sieciowe (Google RPC, Bing, DeepL, AI), czyta wbudowanym głosem **Sherpa VITS pl_PL-meski_wg_glos-medium** albo zewnętrznymi serwerami TTS przez WebSocket. Ma też **Łowcę Napisów**, **OCR napisów wtopionych w obraz** (Tesseract + PP-OCRv6 ONNX), **cenzora przekleństw**, **Głos i Napisy** (dyktowanie + napisy z karty), pamięć napisów i tłumaczeń (IndexedDB, 90 dni) oraz stronę ustawień i benchmark OCR.
+
+## 🆕 Co nowego (3.1 → 3.4.0)
+
+- **Nowa nazwa: Multilektor** (wcześniej „Lektor Multilanguage”). Nazwa i opis w dwóch językach przez `_locales/pl` i `_locales/en`.
+- **🌐 Interfejs po polsku i angielsku** — popup, Ustawienia, panele na stronach z filmem, Łowca napisów, OCR, okienka „Głos”.
+  Domyślnie wg języka Chrome, przełącznik „Auto / PL / EN” w popupie i Ustawieniach (zmiana od razu, bez przeładowania).
+  Moduł `assets/i18n.js` + słownik `assets/i18n_en.js` (~1250 tekstów); wyświetlane napisy i frazy użytkownika nie są tłumaczone.
+- **🇵🇱 YouTube: polskie napisy z tłumaczenia YouTube** (opcja `ytTlangPl`, domyślnie wł.) — lektor najpierw prosi YouTube
+  o „Automatyczne tłumaczenie → polski” (`tlang=pl`), bez limitu i bez kluczy; gdy się nie da — tłumaczy jak dotąd.
+- **🗣 Głos przeglądarki** — nowy silnik mowy przez Web Speech API (`src/offscreen/browser_tts.js`): Google polski w Chrome,
+  Microsoft Natural w Edge, darmowy, bez serwera; własna kolejka, przełączenie na głos lokalny przy błędzie, strażnik zawieszeń.
+- **Supertonic 3** (silnik z VoxNemesis, `supertonic/`) — 4 głosy liczone lokalnie na CPU / GPU (WebGPU).
+- **Gotowe do Chrome Web Store:** kod OCR tylko z paczki (bez CDN i bez uruchamiania kodu z tekstu), przepisane od nowa
+  przechwytywanie napisów Netflixa (`src/content/inject.js`), dokument offscreen i router mowy; teksty do panelu Sklepu
+  i polityka prywatności w `sklep/`.
+
+## 📜 Pochodzenie
+
+Projekt wyrósł z rozszerzenia „Live Dubbing” (Chrome Web Store) i od tamtej pory został wielokrotnie przebudowany.
+Fragmenty przejęte stamtąd dosłownie (przechwytywanie napisów Netflixa, dokument offscreen, router mowy) zostały w wersji 3.2.0
+napisane od nowa.
 
 ## 🛠️ Wolno modyfikować
 
@@ -28,6 +49,7 @@ Instalacja deweloperska: chrome://extensions → tryb dewelopera → Załaduj ro
 - src/background/subs_db.js — bazy napisów: OpenSubtitles.org (bez klucza), .com (klucz osApiKey), SubDL (klucz subdlApiKey)
 - src/content/inject.js, netflix_seek_bridge.js — wstrzykiwanie MAIN + bezpieczne skoki Netflix (omija błąd M7375, nie rusza video.currentTime)
 - src/offscreen/offscreen.html/js — silnik TTS + audio: pula Sherpa, zdalne WS, głośność do 400% (Gain+Compressor), tempo A/B/C, log
+- src/offscreen/browser_tts.js — 🗣 głos przeglądarki (Web Speech API, klasa BrowserTTSManager)
 - src/offscreen/censor.js — cenzor PL/EN/DE/ES… (remove/beep/replace, granice słów Unicode)
 - src/offscreen/ocr_engine.js — Tesseract.js (pol/eng/chi_sim/chi_tra z folderu ocr/, inne z sieci)
 - src/offscreen/ppocr_engine.js + ppocr_core.js — PP-OCRv6 tiny/small ONNX (det DB + rec CTC, onnxruntime-web WASM)
@@ -42,6 +64,10 @@ Instalacja deweloperska: chrome://extensions → tryb dewelopera → Załaduj ro
 - assets/full_subs_ondemand.js — Pobierz całe napisy na żądanie (video.textTracks/<track>, WebVTT)
 - assets/lowca_napisow.js v1.3.1 (window.__USH__) — Łowca Napisów: hooki fetch/XHR/WS/canvas, HLS/DASH, CEA-608/708, TextTracks, MutationObserver; wstrzykiwany dopiero przyciskiem, zapamiętuje domeny lowcaSites
 - assets/ocr_tool.js — OCR wtopionych napisów (zrzut klatki co 0,5 s → offscreen → okienko + lektor; język ocrToolLang, ramka ocrToolRegions)
+- assets/i18n.js + i18n_en.js — 🌐 język interfejsu PL / EN (MLi18n: page, watch, t; słownik pl → en)
+- _locales/pl, _locales/en — nazwa i opis rozszerzenia w dwóch językach
+- supertonic/ — silnik Supertonic 3 (CPU / WebGPU), model pobierany z Hugging Face przy pierwszym użyciu
+- sklep/ — teksty do Chrome Web Store (opis, uprawnienia, prywatność) i polityka prywatności (HTML)
 - assets/phrase_dict.js — 571 idiomów (DUO_PHRASE_MAP) — sprawdzany PRZED tłumaczem i PRZED cache
 - glos/ — Głos i Napisy: glos_bg.js (Alt+Shift+1/2, okienka, badge REC/CC, dziennik gnDbg), glos.html/js (mikrofon→tekst w pole), karta.html/js (tabCapture cyfrowo→napisy), overlay.js, historia.html/js (napisy na bieżąco), common.js (DeepFilterNet, boost mowy 1–2,5 kHz), dfn/ (DeepFilterNet3 WASM, licencje MIT/Apache). Pełna instrukcja: glos/CZYTAJ MNIE.txt
 - ocr/ — Tesseract: traineddata pol/eng/chi_sim/chi_tra + rdzenie WASM SIMD/LSTM
@@ -50,7 +76,7 @@ Instalacja deweloperska: chrome://extensions → tryb dewelopera → Załaduj ro
 - AI Subtitle Translator.js — osobny userscript (nie część rozszerzenia)
 - test_xtts_websocket.mjs.js — test serwera XTTS (JSON {text,voice} → WAV)
 
-Rozmiar: ~448 plików, ~269 MB (głównie modele: Sherpa ~150 MB, PP-OCR ~35 MB, Tesseract ~9 MB, DeepFilterNet ~8 MB).
+Rozmiar: ~465 plików, ~305 MB (głównie modele: Sherpa ~150 MB, PP-OCR ~35 MB, Tesseract ~9 MB, DeepFilterNet ~8 MB).
 
 ## 🧠 Jak to działa pod maską
 
@@ -76,4 +102,4 @@ Serwery zdalne TTS opcjonalne — bez nich działa wbudowana Sherpa offline.
 
 Największy plik ~92 MB < limit 100 MB GitHub — push bez LFS, ale klonowanie potrwa. Przed szeroką publikacją uzupełnij licencję (Sherpa/Piper, espeak-ng-data, DeepFilterNet, Tesseract, PaddleOCR) i rozważ usunięcie test_*.mjs.js. Klucze API trzymane są w chrome.storage przeglądarki, nie w repo.
 
-*Opis na podstawie analizy kodu (manifest 3.0.6, service-worker-loader.js, src/background, src/offscreen, src/popup, src/options, assets, glos/CZYTAJ MNIE.txt).*
+*Opis na podstawie analizy kodu (manifest 3.4.0, service-worker-loader.js, src/background, src/offscreen, src/popup, src/options, assets, glos/CZYTAJ MNIE.txt).*

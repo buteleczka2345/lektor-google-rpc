@@ -53,6 +53,9 @@ if (!('__lektorBufPauza' in window)) {
         });
     } catch (e) {}
     var REMOTE_PREROLL = 300;    // 300ms wcześniej dla głosów remote
+    var PRELOAD_NEAR_MS = 20000;     // [AGENT-EXP] 2026-10-20: kwestie w najbliższych 20 s — synteza bez hamulca
+    var PRELOAD_FAR_GAP_MS = 400;    // [AGENT-EXP] dalsze — najwyżej 1 co 0,4 s, gdy film gra (patrz schedule)
+    var lastFarPreloadAt = 0;
     var recAheadMs = 0;          // telemetria: najdalszy timestamp kwestii wysłanej do syntezy
     var spokenWords = 0;         // telemetria: wyrazy już wypowiedziane
     var recentSpoken = [];       // telemetria: ostatnie kwestie {t: tekst, w: wyrazy}
@@ -112,7 +115,9 @@ if (!('__lektorBufPauza' in window)) {
         if (res.engine !== undefined) engine = res.engine;
         if (res.onlineVoiceRemote !== undefined) remoteVoice = !!res.onlineVoiceRemote;
         if (res.duckLevel !== undefined) duckLevel = clampPct(res.duckLevel);
+        duckReady = true;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
         if (enabled) schedule();
+        else duckRestoreWhenVideo();   // [AGENT-EXP] 2026-10-20
     });
 
     chrome.storage.onChanged.addListener(function (changes, area) {
@@ -171,17 +176,40 @@ if (!('__lektorBufPauza' in window)) {
             video.addEventListener('volumechange', function () {
                 if (enabled) applyDuck();
             });
+            video.addEventListener('play', function () { if (!enabled && duckReady && duckMemGet() !== null) restoreVideo(); });   // [AGENT-EXP] 2026-10-20
             if (enabled) applyDuck();
         }
         return video;
     }
 
     // --- Ducking: ścisz wideo do duckLevel% ---
+    // [AGENT-EXP] 2026-10-20: pamięć głośności sprzed ściszenia (localStorage strony). Netflix/YouTube same zapamiętują
+    // głośność — gdy karta zamknęła się w trakcie ściszenia, film startował na 20% i wyłączony lektor nie miał
+    // czego przywrócić. Teraz pierwotna głośność wraca (przy wyłączonym lektorze — przy starcie filmu).
+    var DUCK_MEM_KEY = 'lektorDuckOrig';
+    function duckMemGet() { try { var n = parseFloat(localStorage.getItem(DUCK_MEM_KEY)); return n > 0 && n <= 1 ? n : null; } catch (e) { return null; } }
+    function duckMemSet(v) { try { if (v === null) localStorage.removeItem(DUCK_MEM_KEY); else localStorage.setItem(DUCK_MEM_KEY, String(v)); } catch (e) {} }
+    function duckOrig(v) { if (savedVolume === null) { var m = duckMemGet(); if (m !== null && m > v.volume) savedVolume = m; } }
+    // [AGENT-EXP] 2026-10-20: lektor WYŁ., a w pamięci jest głośność sprzed ściszenia — czekamy na film (pojawia się
+    // później niż ustawienia) i przywracamy przy jego starcie (po tym, jak odtwarzacz ustawi swoją zapamiętaną).
+    function duckRestoreWhenVideo() {
+        var n = 0;
+        (function tryIt() {
+            if (enabled || duckMemGet() === null) return;
+            var v = getVideo();   // podpina też nasłuch 'play'
+            if (v) { if (!v.paused) restoreVideo(); return; }
+            if (++n < 120) setTimeout(tryIt, 1000);
+        })();
+    }
+    var duckReady = false;
     function applyDuck() {
+        if (!duckReady || !enabled) return;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
         var v = getVideo();
         if (!v) return;
         var target = duckLevel / 100;
+        duckOrig(v);   // [AGENT-EXP] 2026-10-20
         if (savedVolume === null && v.volume > target) savedVolume = v.volume;
+        if (savedVolume !== null) duckMemSet(savedVolume);   // [AGENT-EXP] 2026-10-20
         // Fix: po zwiększeniu duckLevel (np. z 0% na wyższy) głośność filmu ma WRACAĆ.
         // Ustawiamy min(target, savedVolume), żeby nigdy nie przekroczyć pierwotnej
         // głośności ustawionej przez użytkownika.
@@ -194,6 +222,8 @@ if (!('__lektorBufPauza' in window)) {
 
     function restoreVideo() {
         var v = getVideo();
+        if (v) duckOrig(v);   // [AGENT-EXP] 2026-10-20
+        duckMemSet(null);
         if (v && savedVolume !== null) {
             v.volume = savedVolume;
             savedVolume = null;
@@ -232,6 +262,16 @@ if (!('__lektorBufPauza' in window)) {
             .replace(/\s+/g, ' ')
             .trim();
     }
+    // [AGENT-EXP] 2026-10-20: tekst elementu z <br> jako spacją — textContent sklejał linie napisów („możesz”+„wypierdalać”
+    // → „możeszwypierdalać”), więc słowa z listy nie były rozpoznawane. innerText odpada: jest pusty, gdy napisy są schowane.
+    function domText(node) {
+        var out = '';
+        for (var n = node.firstChild; n; n = n.nextSibling) {
+            if (n.nodeType === 3) out += n.nodeValue;
+            else if (n.nodeType === 1) out += String(n.nodeName).toUpperCase() === 'BR' ? ' ' : domText(n);
+        }
+        return out;
+    }
     function collectScreenTexts(selectors, limit) {
         var out = [];
         for (var i = 0; i < selectors.length; i++) {
@@ -240,7 +280,7 @@ if (!('__lektorBufPauza' in window)) {
             if (!nodes || !nodes.length) continue;
             for (var j = 0; j < nodes.length && out.length < limit; j++) {
                 if (nodes[j].closest && nodes[j].closest('[data-lektor-ocr]')) continue; // [AGENT-EXP] most OCR
-                var t = String(nodes[j].textContent || '').replace(/\s+/g, ' ').trim();
+                var t = String(domText(nodes[j]) || '').replace(/\s+/g, ' ').trim();   // [AGENT-EXP] 2026-10-20: było textContent
                 if (t && out.indexOf(t) === -1) out.push(t);
             }
         }
@@ -379,6 +419,10 @@ if (!('__lektorBufPauza' in window)) {
     }
     // Jedno „mrugnięcie" kontrolne: co jest na ekranie i czy zgadza się z naszą osią czasu.
     var screenStable = 0;
+    // [AGENT-EXP] 2026-10-20: tryb na żywo dopiero po LIVE_MISS_TICKS sekundach niezgodności z rzędu. Wcześniej wystarczyła jedna
+    // (napis na ekranie przed paczką napisów, napis-tablica) → wejście i zaraz wyjście z trybu, za każdym razem
+    // TTS_CLEAR_BUFFER — lektor „przeskakiwał”/odświeżał się co jakiś czas.
+    var LIVE_MISS_TICKS = 3, liveMiss = 0;
     function screenTick() {
         if (!enabled) return;
         var v = getVideo();
@@ -394,6 +438,7 @@ if (!('__lektorBufPauza' in window)) {
         if (act && screenMatchNear(act, screenTextsNorm, nowMs) > 0) {
             screenMatchKey = act.key;
             screenStable++;
+            liveMiss = 0;   // [AGENT-EXP] 2026-10-20
             setLiveMode(false);
             return;
         }
@@ -406,10 +451,11 @@ if (!('__lektorBufPauza' in window)) {
                 var s = subSources[k];
                 if (!s.cues.length) continue;
                 var hits = screenMatch(s, screenTextsNorm);
-                if (hits > bestHits) { bestHits = hits; bestKey = s.key; }
+                if (hits > bestHits || (hits && hits === bestHits && screenTieWins(s, subSources[bestKey]))) { bestHits = hits; bestKey = s.key; }   // [AGENT-EXP]
             }
             if (bestKey) {
                 screenMatchKey = bestKey;
+                liveMiss = 0;   // [AGENT-EXP] 2026-10-20
                 if (bestKey !== activeSrcKey) { applyActiveSource(bestKey, true); schedule(); }
                 setLiveMode(false);
                 return;
@@ -418,6 +464,7 @@ if (!('__lektorBufPauza' in window)) {
         // 3) Żadne źródło nie pasuje do ekranu → czytamy wprost tekst widoczny na ekranie.
         var lines = liveLinesFrom(scr.shown);
         if (!lines.length) return;
+        if (!liveMode && ++liveMiss < LIVE_MISS_TICKS) return;   // [AGENT-EXP] 2026-10-20: jeszcze nie — może to chwilowe
         if (!liveMode) setLiveMode(true);
         liveSpeak(pickLectorText(lines, lines.join(' ')));
     }
@@ -437,13 +484,20 @@ if (!('__lektorBufPauza' in window)) {
             var preloadBudget = (v.paused && window.__lektorBufPauza === false) ? 0
                 : document.visibilityState !== 'visible' ? (window.__lektorBufTlo === false ? 0 : 50) : 4;   // [AGENT-EXP] pauza / tło
             // max nowe syntezy na tick (50 ms) — bez burstów obciążających Pipyera
+            // [AGENT-EXP] 2026-10-20: film GRA na widocznej karcie → kwestie dalej niż PRELOAD_NEAR_MS idą do syntezy
+            // najwyżej 1 na PRELOAD_FAR_GAP_MS. Po resecie (nowa partia napisów Netflixa, pauza) cały zapas (3 min)
+            // leciał naraz, 6 wątków syntezy zajmowało procesor i obraz filmu gubił klatki („przeskakuje”).
+            var farPaced = !v.paused && document.visibilityState === 'visible';
+            var farOk = !farPaced || Date.now() - lastFarPreloadAt >= PRELOAD_FAR_GAP_MS;
             for (var i = 0; i < subtitles.length; i++) {
                 var sub = subtitles[i];
                 var startT = sub.startMs + off;
                 var endT = sub.endMs + off;
                 if (nowMs > endT + 1000) continue;
-                if (!preloaded.has(sub.id) && startT >= nowMs && startT <= nowMs + LOOKAHEAD && preloadBudget > 0) {
+                var far = startT > nowMs + PRELOAD_NEAR_MS;   // [AGENT-EXP]
+                if (!preloaded.has(sub.id) && startT >= nowMs && startT <= nowMs + LOOKAHEAD && preloadBudget > 0 && (!far || farOk)) {
                     preloadBudget--;
+                    if (far && farPaced) { farOk = false; lastFarPreloadAt = Date.now(); }   // [AGENT-EXP]
                     preloaded.add(sub.id);
                     if (startT > recAheadMs) recAheadMs = startT;
                     chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: sub.id, text: sub.text, startMs: startT, endMs: endT, platform: 'netflix' });
@@ -602,6 +656,22 @@ if (!('__lektorBufPauza' in window)) {
         if (a.cues.length > b.cues.length + 3) return true;              // wyraźnie większy plik
         return (a.lastSeen - b.lastSeen) > 30000 && a.cues.length >= 3;  // stary plik zamarł, nowy żyje
     }
+    // [AGENT-EXP] 2026-10-20: remis w zgodności z ekranem (ten sam napis jest w kilku źródłach). Wcześniej wygrywało
+    // źródło dodane PIERWSZE — zwykle kawałek napisów z odtwarzacza Netflixa (kilka minut), a nie cały plik. Gdy kawałek
+    // się kończył, lektor przeskakiwał na inne źródło z pełnym resetem i falą syntezy (obraz filmu gubił klatki co ~10 min).
+    // Teraz przy remisie: zostaje aktywne źródło (chyba że drugie to cały plik — co najmniej 2× więcej kwestii),
+    // potem lepsze wg rankBetter (polskie → więcej kwestii = cały plik). Bez lastSeen: cały plik przychodzi raz i „starzeje się”.
+    function screenTieWins(a, b) {
+        if (!b) return true;
+        var aAct = a.key === activeSrcKey, bAct = b.key === activeSrcKey;
+        if (aAct || bAct) {
+            var o = aAct ? b : a, act = aAct ? a : b;
+            var ap = isPolishSrc(o) ? 1 : 0, bp = isPolishSrc(act) ? 1 : 0;
+            var otherWins = ap !== bp ? ap > bp : o.cues.length >= act.cues.length * 2 + 10;
+            return aAct ? !otherWins : otherWins;
+        }
+        return rankBetter(a, b);
+    }
     function pickSourceKey() {
         var best = null;
         for (var k in subSources) {
@@ -620,7 +690,7 @@ if (!('__lektorBufPauza' in window)) {
                 var ss = subSources[sk];
                 if (!ss.cues.length) continue;
                 var h = screenMatch(ss, screenTextsNorm);
-                if (h > sHits) { sHits = h; sBest = ss; }
+                if (h > sHits || (h && h === sHits && screenTieWins(ss, sBest))) { sHits = h; sBest = ss; }   // [AGENT-EXP]
             }
             if (sBest) { screenMatchKey = sBest.key; return sBest.key; }
         }
@@ -695,7 +765,8 @@ if (!('__lektorBufPauza' in window)) {
     try {
         (window.__lektorBarProviders = window.__lektorBarProviders || {}).netflix = function () {
             if (!subtitles.length) return null;
-            return { video: getVideo(), list: subtitles, ready: function (c) { return !!c.text; }, spoken: function (c) { return played.has(c.id); }, audioId: function (c) { return c.id; } };
+            return { video: getVideo(), list: subtitles, noTranslate: true,   // [AGENT-EXP] 2026-10-20: Netflix nic nie tłumaczy — pasek pisze „napisy gotowe”
+                ready: function (c) { return !!c.text; }, spoken: function (c) { return played.has(c.id); }, audioId: function (c) { return c.id; } };
         };
     } catch (e) {}
 
@@ -751,4 +822,54 @@ if (!('__lektorBufPauza' in window)) {
             return true;
         }
     });
+})();
+// [AGENT-EXP] 2026-10-20: strażnik napisów Netflixa. Rozszerzenie Immersive Translate dokłada regułę
+// `.player-timedtext {display:none!important}` i pokazuje napisy we własnym oknie
+// (#immersive-translate-caption-window). Gdy to okno zostaje PUSTE, a Netflix ma napis, na ekranie nie było
+// nic. Wtedy (po 1,5 s) odkrywamy napisy Netflixa; gdy w oknie Immersive pojawi się tekst — oddajemy mu ekran.
+(function () {
+    'use strict';
+    if (window.__lektorNfSubsGuard) return;
+    window.__lektorNfSubsGuard = true;
+    var WAIT_MS = 1500;
+    var STYLE_ID = 'lektor-nf-subs-guard';
+    var st = { on: false, emptySince: 0 };
+
+    // Czysta decyzja (test: _test_straz_napisow_nf.mjs.js). nf — tekst napisu Netflixa, imt — tekst okna
+    // Immersive, hidden — napisy Netflixa ukryte przez kogoś innego. Zwraca: czy odkrywać napisy Netflixa.
+    function guardStep(s, nf, imt, hidden, now) {
+        if (imt) { s.on = false; s.emptySince = 0; return s.on; }        // Immersive pokazuje — nie przeszkadzamy
+        if (!nf) { s.emptySince = 0; return s.on; }                       // przerwa między kwestiami: bez mrugania
+        if (s.on) return s.on;
+        if (!hidden) { s.emptySince = 0; return s.on; }
+        if (!s.emptySince) s.emptySince = now;
+        if (now - s.emptySince >= WAIT_MS) s.on = true;
+        return s.on;
+    }
+    window.__lektorNfGuardStep = guardStep;
+
+    function setStyle(on) {
+        var el = document.getElementById(STYLE_ID);
+        if (on && !el) {
+            el = document.createElement('style');
+            el.id = STYLE_ID;
+            // wyższa szczegółowość niż `.player-timedtext` z Immersive (oba !important)
+            el.textContent = 'html body .player-timedtext{display:block!important}';
+            (document.head || document.documentElement).appendChild(el);
+        } else if (!on && el) el.remove();
+    }
+
+    setInterval(function () {
+        try {
+            var tt = document.querySelector('.player-timedtext');
+            var imtWin = document.getElementById('immersive-translate-caption-window');
+            if (!tt || !imtWin) { if (st.on) { st.on = false; setStyle(false); } st.emptySince = 0; return; }
+            var nf = (tt.textContent || '').trim();
+            var imt = (imtWin.textContent || '').trim();
+            var hidden = !st.on && getComputedStyle(tt).display === 'none';
+            var was = st.on;
+            guardStep(st, nf, imt, hidden, Date.now());
+            if (st.on !== was) setStyle(st.on);
+        } catch (e) {}
+    }, 400);
 })();

@@ -20,7 +20,7 @@
         ['ita', 'Włoski (z internetu)'], ['rus', 'Rosyjski (z internetu)'], ['ukr', 'Ukraiński (z internetu)'],
         ['jpn', 'Japoński (z internetu)'], ['kor', 'Koreański (z internetu)']
     ];
-    let on = false, host = null, btn = null, menu = null, ocrBtn = null, langSel = null, info = null, ocrOn = false, busy = false, ocrChk = null, obEl = null, engSelEl = null, trSelEl = null, detSelEl = null, afChkEl = null;   // [AGENT-EXP] trSelEl; afChkEl = 🎯 auto-ramka
+    let on = false, host = null, btn = null, menu = null, ocrBtn = null, langSel = null, info = null, ocrOn = false, busy = false, ocrChk = null, obEl = null, engSelEl = null, trSelEl = null, detSelEl = null, afChkEl = null, bigChkEl = null, bigSelEl = null, bigLinEl = null;   // [AGENT-EXP] trSelEl; afChkEl = 🎯 auto-ramka
 
     function lowcaVisible() {
         const h = document.querySelector('[data-ush-host]');
@@ -47,6 +47,7 @@
         host.setAttribute('data-lektor-cc', '');
         host.style.cssText = 'all:initial;position:fixed;right:18px;bottom:18px;z-index:2147483646;';
         const root = host.attachShadow({ mode: 'closed' });
+        try { if (self.MLi18n) MLi18n.watch(root); } catch (e) {}   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
         const st = document.createElement('style');
         st.textContent =
             '.cc{all:initial;box-sizing:border-box;width:44px;height:44px;border-radius:50%;background:rgba(18,18,22,.85);border:1px solid rgba(255,255,255,.3);' +
@@ -100,6 +101,26 @@
         afLab.addEventListener('click', (e) => e.stopPropagation());
         afLab.append(afChk, document.createTextNode('🎯 Auto-ramka (sama szuka napisów)'));
         afChkEl = afChk;
+        // [AGENT-EXP] 2026-10-19: 🔠 duże napisy (tłumaczenie od razu na obrazie filmu, też bez lektora) + rozmiar
+        const bigLab = document.createElement('label'); bigLab.className = 'i'; bigLab.style.cssText = 'display:flex;align-items:center;gap:6px';
+        bigLab.title = 'Przetłumaczony napis pojawia się od razu, dużą czcionką na dole filmu — także gdy lektor jest wyłączony. Lektor (gdy włączony) czyta po swojemu.';
+        const bigChk = document.createElement('input'); bigChk.type = 'checkbox'; bigChk.style.cssText = 'margin:0;accent-color:#e879f9;cursor:pointer';
+        bigChk.addEventListener('change', (e) => { e.stopPropagation(); try { chrome.storage.local.set({ ocrToolBigSubs: bigChk.checked }); } catch (e2) {} });
+        bigLab.addEventListener('click', (e) => e.stopPropagation());
+        bigLab.append(bigChk, document.createTextNode('🔠 Duże napisy na filmie (tłumaczenie)'));
+        bigChkEl = bigChk;
+        const bigSel = document.createElement('select'); bigSel.className = 'i'; bigSel.title = 'Wielkość dużych napisów';
+        [['m', '🔠 Czcionka: średnia'], ['l', '🔠 Czcionka: duża'], ['xl', '🔠 Czcionka: bardzo duża']].forEach((p) => { const o = document.createElement('option'); o.value = p[0]; o.textContent = p[1]; bigSel.appendChild(o); });
+        bigSel.addEventListener('change', (e) => { e.stopPropagation(); try { chrome.storage.local.set({ ocrToolBigSize: bigSel.value }); } catch (e2) {} });
+        bigSel.addEventListener('click', (e) => e.stopPropagation());
+        bigSelEl = bigSel;
+        // [AGENT-EXP] 2026-10-19: ile napis wisi po zniknięciu oryginału (cisza)
+        const bigLin = document.createElement('select'); bigLin.className = 'i'; bigLin.title = 'Jak długo duży napis zostaje na ekranie, gdy oryginalny napis już zniknął (cisza). Nowy napis zawsze od razu zastępuje stary.';
+        [['0', '⏳ Po ciszy: znika od razu'], ['1000', '⏳ Po ciszy: zostaje 1 s'], ['2500', '⏳ Po ciszy: zostaje 2,5 s'], ['4000', '⏳ Po ciszy: zostaje 4 s'], ['6000', '⏳ Po ciszy: zostaje 6 s']]
+            .forEach((p) => { const o = document.createElement('option'); o.value = p[0]; o.textContent = p[1]; bigLin.appendChild(o); });
+        bigLin.addEventListener('change', (e) => { e.stopPropagation(); try { chrome.storage.local.set({ ocrToolBigLinger: Number(bigLin.value) }); } catch (e2) {} });
+        bigLin.addEventListener('click', (e) => e.stopPropagation());
+        bigLinEl = bigLin;
         info = document.createElement('div'); info.className = 'inf';
         const sep = document.createElement('div'); sep.className = 'sep';
         const lowcaBtn = document.createElement('button'); lowcaBtn.className = 'i'; lowcaBtn.type = 'button'; lowcaBtn.textContent = '🔍 Łowca napisów (przeszukaj stronę)';
@@ -110,7 +131,7 @@
                 busy = false; lowcaBtn.textContent = '🔍 Łowca napisów (przeszukaj stronę)'; menu.classList.remove('open'); update();
             });
         });
-        menu.append(h1, ocrBtn, engSel, langSel, trSel, detSel, afLab, frameBtn, raceBtn, info, sep, lowcaBtn);   // [AGENT-EXP] trSel, raceBtn
+        menu.append(h1, ocrBtn, engSel, langSel, trSel, detSel, afLab, bigLab, bigSel, bigLin, frameBtn, raceBtn, info, sep, lowcaBtn);   // [AGENT-EXP] trSel, raceBtn
         // Mały checkbox „OCR” obok CC — szybkie włącz/wyłącz bez otwierania menu
         const ob = document.createElement('label'); ob.className = 'ob'; ob.title = 'OCR napisów z obrazu: zaznaczone = włączony (bez Łowcy)';
         ocrChk = document.createElement('input'); ocrChk.type = 'checkbox';
@@ -128,7 +149,7 @@
             const open = !menu.classList.contains('open');
             menu.classList.toggle('open', open);
             if (open) {
-                try { chrome.storage.local.get(['ocrToolLang', 'ocrToolEngine', 'ocrToolTr', 'ocrToolDetect', 'ocrToolAutoFrame'], (r) => { if (afChkEl) afChkEl.checked = !!(r && r.ocrToolAutoFrame === true); /* [AGENT-EXP] 🎯 */ if (detSelEl) detSelEl.value = (r && r.ocrToolDetect) === 'krawedzie' ? 'krawedzie' : 'jasnosc'; langSel.value = (r && r.ocrToolLang) || ''; if (engSelEl) { const v = r && r.ocrToolEngine; engSelEl.value = v === 'ppocr6t' ? 'ppocr6t' : (v === 'ppocr6s' || v === 'ppocr') ? 'ppocr6s' : 'tesseract'; } if (trSelEl) { const t = r && r.ocrToolTr; trSelEl.value = ['bing', 'google', 'deepl', 'strona', 'lokalny'].indexOf(t) !== -1 ? t : 'skrypt'; } }); } catch (e2) {}   // [AGENT-EXP] ocrToolTr
+                try { chrome.storage.local.get(['ocrToolLang', 'ocrToolEngine', 'ocrToolTr', 'ocrToolDetect', 'ocrToolAutoFrame', 'ocrToolBigSubs', 'ocrToolBigSize', 'ocrToolBigLinger'], (r) => { if (afChkEl) afChkEl.checked = !!(r && r.ocrToolAutoFrame === true); if (bigChkEl) bigChkEl.checked = !(r && r.ocrToolBigSubs === false); if (bigSelEl) bigSelEl.value = (r && (r.ocrToolBigSize === 'm' || r.ocrToolBigSize === 'xl')) ? r.ocrToolBigSize : 'l'; if (bigLinEl) { const L = Number(r && r.ocrToolBigLinger); bigLinEl.value = [0, 1000, 2500, 4000, 6000].indexOf(L) >= 0 ? String(L) : '2500'; } /* [AGENT-EXP] 2026-10-19 🔠 */ /* [AGENT-EXP] 🎯 */ if (detSelEl) detSelEl.value = (r && r.ocrToolDetect) === 'krawedzie' ? 'krawedzie' : 'jasnosc'; langSel.value = (r && r.ocrToolLang) || ''; if (engSelEl) { const v = r && r.ocrToolEngine; engSelEl.value = v === 'ppocr6t' ? 'ppocr6t' : (v === 'ppocr6s' || v === 'ppocr') ? 'ppocr6s' : 'tesseract'; } if (trSelEl) { const t = r && r.ocrToolTr; trSelEl.value = ['bing', 'google', 'deepl', 'strona', 'lokalny'].indexOf(t) !== -1 ? t : 'skrypt'; } }); } catch (e2) {}   // [AGENT-EXP] ocrToolTr
                 paintOcr();
                 if (ocrOn) ocrCmd('state').then(() => { btn.classList.toggle('ocr', ocrOn); }); // OCR mógł się sam zatrzymać (np. DRM)
             }

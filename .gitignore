@@ -1,3 +1,2 @@
-﻿*.bak_glos
+*.bak*
 .claude/
-

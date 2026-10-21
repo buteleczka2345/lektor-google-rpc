@@ -104,6 +104,8 @@ if (!('__lektorBufPauza' in window)) {
         chrome.storage.local.get(['enabled', 'duckLevel', 'lookaheadMin'], function (r) {
             if (r && r.enabled !== undefined) enabled = !!r.enabled;
             if (r && r.duckLevel !== undefined) duckLevel = Number(r.duckLevel) || 0;
+            duckReady = true;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
+            if (!enabled) restoreVolume();
             if (r && r.lookaheadMin !== undefined) { var m = Number(r.lookaheadMin); LOOKAHEAD = m > 0 ? Math.max(8000, m * 60000) : 8000; }   // [AGENT-EXP]
         });
         chrome.storage.onChanged.addListener(function (ch, area) {
@@ -233,8 +235,9 @@ if (!('__lektorBufPauza' in window)) {
     }
 
     // ===== Czytanie =====
+    var duckReady = false;
     function applyDuck() {
-        if (!video) return;
+        if (!video || !duckReady || !enabled) return;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
         var target = duckLevel / 100;
         if (savedVolume === null && video.volume > target) savedVolume = video.volume;
         if (video.volume > target) video.volume = target;

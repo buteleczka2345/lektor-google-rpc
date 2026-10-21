@@ -16,6 +16,7 @@ function applyView() {
 
 function item(h) {
     const d = document.createElement('div');
+    d.setAttribute('data-noi18n', '');   // [AGENT-EXP] 2026-10-21: napis z filmu — bez tłumaczenia interfejsu
     if (h.sep) { d.className = 'sep'; d.textContent = h.t + '  ' + h.pl; return d; }
     d.className = 'it';
     const pl = document.createElement('div');
@@ -73,6 +74,7 @@ async function pipOpen() {
     for (const st of document.querySelectorAll('style')) PIP.document.head.appendChild(st.cloneNode(true));
     PIP.document.title = document.title;
     PIP.document.body.appendChild(APP);
+    try { if (self.MLi18n) MLi18n.watch(APP); } catch (e) {}   // [AGENT-EXP] 2026-10-21: w okienku na wierzchu też PL / EN
     $('pipNote').style.display = 'block';
     $('pip').classList.add('on'); $('pip').textContent = '📌 Na wierzchu ✓';
     if ($('follow').checked) list.scrollTop = list.scrollHeight;

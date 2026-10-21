@@ -5,6 +5,19 @@
 'use strict';
 
 const SCHEMA = [
+  // [VOX] 2026-10-20: 🗣 Silnik mowy — ten sam klucz ttsEngine co w popupie, plus Supertonic (silnik z VoxNemesis).
+  // Głos dla serwerów (Matcha, XTTS, Pocket…) dalej wybiera się w popupie.
+  { sec: '🗣 Silnik mowy', id: 'engineSec', sub: 'Którym głosem czyta lektor. Supertonic (z VoxNemesis) liczy na tym komputerze — procesorem albo kartą graficzną. Głos dla serwerów (Matcha, XTTS, Pocket…) wybierasz w popupie.', items: [
+    { k: 'ttsEngine', t: 'select', def: 'sherpa', label: 'Silnik', hint: 'Ten sam wybór co „🗣 Silnik mowy” w popupie. Głos przeglądarki (Web Speech API) gra prosto z systemu: bez wzmocnienia ponad 100%, kompresora, nagrywania i zapisu bufora', options: [ /* [AGENT-EXP] 2026-10-21 */
+      ['sherpa', 'Sherpa VITS — wbudowany'], ['browser', 'Głos przeglądarki (Google / Microsoft) — darmowy'], ['supertonic', 'Supertonic 3 (VoxNemesis) — CPU / GPU'], ['matcha', 'Matcha-TTS-PL — serwer :9000'], ['xtts', 'XTTS v2 (TTS2) — serwer :8000'],
+      ['audio8', 'Audio8 ONNX INT8 — serwer :9300'], ['f5', 'Lektor Marek (F5-TTS) — serwer :9400'], ['pocket', 'Pocket-TTS-PL — serwer :9200'], ['omnivoice', 'OmniVoice — serwer :9100']] },
+    { k: 'supertonicVoice', t: 'select', def: 'Supertonic M1', label: 'Supertonic — głos', hint: '4 głosy wbudowane w model', st: true, options: [
+      ['Supertonic M1', 'Męski 1'], ['Supertonic M2', 'Męski 2'], ['Supertonic F1', 'Żeński 1'], ['Supertonic F2', 'Żeński 2']] },
+    { k: 'engineBackend', t: 'select', def: 'cpu', label: 'Supertonic — sprzęt', hint: 'Karta graficzna liczy kilka–kilkanaście razy szybciej. Gdy GPU nie działa, silnik sam wraca na CPU.', st: true, options: [
+      ['cpu', 'CPU — procesor'], ['igpu', 'GPU zintegrowana (np. AMD Radeon / Intel)'], ['gpu', 'GPU dedykowana (np. NVIDIA)']] },
+    { k: 'supertonicSteps', t: 'select', num: true, def: 4, label: 'Supertonic — jakość', hint: 'Kroki syntezy: więcej = lepszy głos, ale wolniej. Wolny procesor: 2–3.', st: true, options: [
+      ['2', '2 — najszybciej'], ['3', '3 — szybko'], ['4', '4 — zalecane'], ['5', '5'], ['6', '6 — lepiej'], ['8', '8 — wolniej'], ['10', '10 — najlepsza']] }
+  ]},
   // [AGENT-EXP] 2026-10-17: sekcja „🎙 Silnik lektora” usunięta — silnik i głos wybiera się w popupie
   // (🗣 Silnik mowy + Głos); buforowanie w pauzie / w tle też jest w popupie.
   { sec: '⏩ Tempo', sub: 'Jak lektor nadąża za przyspieszonym filmem (np. 1.5×).', items: [
@@ -30,6 +43,7 @@ const SCHEMA = [
     { k: 'autoSubsOn', t: 'bool', def: false, label: 'Automatycznie pobieraj całe napisy (iQIYI, WeTV, Viki, Bilibili, Bstation)', hint: 'Lektor sam ściąga pełny plik napisów odcinka (polskie → angielskie → inne) i tłumaczy go z wyprzedzeniem wybranym silnikiem. Ręcznie wczytany plik ma pierwszeństwo.' },
     // [AGENT-EXP] 2026-10-15 — „lokalny”: angielski Translatorem Chrome, inne języki Bingiem (src/background/ext_net.js).
     { k: 'extTrNonEnCloud', t: 'bool', def: true, label: 'Angielski lokalnie, inne języki w chmurze', hint: 'Przy silniku „Lokalny”: napisy po angielsku tłumaczy Translator Chrome (ze słownikiem fraz), a każdy inny język od razu Bing (gdy zawiedzie — Google / DeepL). Język ze ścieżki napisów albo z samej kwestii. Wyłączone = jak dawniej (YouTube lokalnie, reszta Bingiem).' },
+    { k: 'ytTlangPl', t: 'bool', def: true, label: 'YouTube: polskie napisy z tłumaczenia YouTube (jak Live Dubbing)', hint: 'Lektor najpierw prosi YouTube o „Automatyczne tłumaczenie → polski” — tłumaczy serwer YouTube, bez limitu i bez kluczy. Gdy film tego nie ma, tłumaczy lektor jak dotąd (Translator Chrome / Bing). Dotyczy trybu napisów „auto” na YouTube.' },   // [AGENT-EXP] 2026-10-21
     // [AGENT-EXP] 2026-10-15 — całe zdania zamiast kawałków (lokalny Translator Chrome i silniki sieciowe).
     { k: 'lektorBar', t: 'bool', def: true, label: '📊 Pasek lektora: nagrany dźwięk do przodu', hint: 'Cienki pasek na dole filmu, zgodny z jego osią czasu: pomarańczowe = dźwięk lektora już nagrany, zielone = przeczytane, jasnoszare = tekst gotowy, dźwięku jeszcze nie ma, ciemne = czeka na tłumaczenie, biała kreska = bieżące miejsce. Obok: na ile minut do przodu lektor ma nagrany dźwięk.' },   // [AGENT-EXP] 2026-10-17
     { k: 'extTrContext', t: 'bool', def: true, label: 'Tłumacz z kontekstem (do pauzy w mowie)', hint: 'Kolejne kwestie idą do tłumacza razem — aż do dłuższej przerwy w mowie (2 s), najwyżej 8 kwestii — więc tłumacz widzi, co było przed i po (ty / wy, on / ona). Lektor dalej czyta kwestia po kwestii. Gdy tłumacz pomiesza linie, te kwestie są tłumaczone pojedynczo. Wyłączone = każda kwestia osobno.' },   // [AGENT-EXP] 2026-10-17
@@ -46,6 +60,23 @@ const SCHEMA = [
     { k: 'extTrMicrosoftBatch', t: 'bool', def: false, label: 'Microsoft — tryb batch (eksperymentalny)', hint: 'Nowa metoda Microsoft: czysta tablica tekstów + limit 7 żądań/1250 ms (jak Immersive Translate), bez tagów <bN> i regexa. Działa gdy włączone jest tłumaczenie sieciowe i wybrany Bing (lub rotacja). Wył. = dokładnie jak dotychczas (metoda z tagami).' },
     // [AGENT-EXP] 2026-10-17: pola „Włącz silnik AI” i „Klucz API (CometAPI)” usunięte z Ustawień (niepotrzebne).
     // ext_net.js dalej obsługuje aiOn / aiApiKey — powrót: przywróć oba obiekty z kopii kodu z 2026-10-17.
+  ]},
+  // [AGENT-EXP] 2026-10-19 — 🤐 Cenzor przekleństw (assets/cenzor_main.js + cenzor_bridge.js). Wycisza oryginalny
+  // dźwięk filmu (video.muted), głos lektora gra dalej. Domyślnie WYŁ. = zachowanie jak przed zmianą.
+  { sec: '🤐 Cenzor przekleństw', sub: 'Wycisza samo przekleństwo w oryginalnym dźwięku filmu. Pracuje tylko na tekście napisów (nie słucha dźwięku). Działa także przy wyłączonym lektorze; głos lektora, gdy jest włączony, gra dalej.', items: [
+    { k: 'cenzorOn', t: 'bool', def: false, label: 'Wyciszaj z pobranych napisów (YouTube, Netflix)', hint: 'Napisy filmu są pobierane z góry (tak jak robi to lektor; CC nie trzeba włączać), więc wiadomo, które słowa padną i kiedy — cisza wchodzi PRZED słowem. Auto-napisy YouTube mają czas każdego słowa — wtedy jest najdokładniej.' },
+    { k: 'cenzorNfPl', t: 'bool', def: true, label: 'Netflix: zawsze pobieraj całe polskie napisy', hint: 'Cenzor sam ściąga CAŁY polski plik napisów odcinka (z listy ścieżek filmu), nawet gdy w odtwarzaczu wybrane są inne napisy albo żadne — wszystkie przekleństwa są znane od pierwszej minuty. Gdy polski plik jest pobrany, wystarcza — inne napisy nie są już potrzebne. Lektor też dostaje ten cały plik, więc ma komplet polskich napisów od pierwszej minuty. Działa razem z opcją „Wyciszaj z pobranych napisów”.' },
+    { k: 'cenzorYtPl', t: 'bool', def: true, label: 'YouTube: zawsze polskie napisy', hint: 'Jak na Netfliksie: cenzor bierze polskie napisy — ręczne, potem automatyczne, a gdy filmu nie ma po polsku — ścieżkę filmu przetłumaczoną przez YouTube na polski. Wył. = napisy w języku filmu (dokładniejsze przy angielskich filmach: słychać „fuck”, w napisie też jest „fuck”).' },
+    { k: 'cenzorLive', t: 'bool', def: false, label: 'Cenzor LIVE — na bieżąco, bez pobierania napisów', hint: 'Czyta napisy widoczne na ekranie (YouTube, Netflix, Prime, Kreator napisów, ścieżki odtwarzacza) i szacuje, kiedy padnie słowo. Działa na wszystkich stronach lektora; mniej dokładny, bo napis pojawia się razem z mową. Przy włączonej opcji wyżej jest tylko zapasem, gdy napisów z sieci brak.' },
+    { k: 'cenzorBufferMs', t: 'range', def: 500, min: 0, max: 3000, step: 50, unit: ' ms', label: 'Wstecz — cisza przed słowem', hint: 'Słychać początek przekleństwa → zwiększ.' },
+    { k: 'cenzorHoldMs', t: 'range', def: 100, min: 0, max: 2000, step: 50, unit: ' ms', label: 'Przód — cisza po słowie', hint: 'Słychać końcówkę → zwiększ.' },
+    // [AGENT-EXP] 2026-10-20: trzeci suwak z „Netflix Cenzor” — tempo tekstu (Wstecz/Przód liczone w tym tempie).
+    { k: 'cenzorTextAuto', t: 'bool', def: true, label: 'Tempo tekstu: auto (= tempo filmu)', hint: 'Wył. = działa suwak niżej, niezależnie od prędkości filmu.' },
+    { k: 'cenzorTextRate', t: 'range', def: 1, min: 0.25, max: 2.5, step: 0.05, unit: '×', label: 'Tempo tekstu', hint: 'Mnoży Wstecz i Przód (oraz „Długość słowa”). Mniej = krótsza cisza, więcej = dłuższa. Działa, gdy „auto” wyłączone. W starym cenzorze domyślnie 0,6×.' },
+    { k: 'cenzorLenMode', t: 'select', def: 'normal', label: 'Długość słowa', hint: 'Dłuższe przekleństwo trzymane dłużej', options: [
+      ['off', 'wyłącz'], ['normal', 'normalnie'], ['strong', 'mocno']] },
+    { k: 'cenzorAsrTag', t: 'bool', def: true, label: 'Wyciszaj „[ __ ]” z auto-napisów YouTube', hint: 'YouTube sam zamienia przekleństwa w auto-napisach na „[ __ ]”.' },
+    { k: 'cenzorWords', t: 'textarea', def: '', label: 'Lista słów (puste = wbudowana)', hint: 'Po przecinku; * na końcu = dowolna końcówka, np. kurw*, fuck*. Puste pole = wbudowana lista (polskie + kilka angielskich).' }
   ]},
   { sec: '🔍 Łowca napisów', sub: 'Szukanie napisów na żądanie (przycisk w popupie). Pokazuj GUI tylko wtedy, gdy go potrzebujesz.', items: [
     // [AGENT-EXP] 2026-10-15 — 🔋 tryb oszczędny Łowcy (assets/lowca_napisow.js, przekazuje mostek).
@@ -95,8 +126,9 @@ function el(tag, props, text) {
   if (text != null) e.textContent = text;
   return e;
 }
-function section(title, sub, wide) {
+function section(title, sub, wide, id) {
   const s = el('section', wide ? { class: 'wide' } : null);
+  if (id) s.id = id;   // [VOX]
   s.appendChild(el('h2', null, title));
   s.appendChild(el('p', { class: 'sub' }, sub));
   grid.appendChild(s);
@@ -124,7 +156,7 @@ function buildRow(def) {
     row.appendChild(input); row.appendChild(valSpan);
   } else if (def.t === 'text') { // [AGENT-EXP] nowy typ pola: tekstowe (np. klucz API, URL, model)
     input = el('input', { type: def.secret ? 'password' : 'text', placeholder: def.placeholder || '' });
-    input.style.cssText = 'width:100%;box-sizing:border-box;padding:6px 8px;border-radius:6px;border:1px solid #2a3b52;background:#0d1b2e;color:#e6f0ff;font:13px system-ui,sans-serif';
+    input.style.width = '100%';   // [VOX] kolory i obramowanie z options.html
     input.addEventListener('change', () => save({ [def.k]: input.value }));
     row.appendChild(input);
   } else if (def.t === 'textarea') { // AI Chrome: edytowalny prompt lektorski
@@ -138,7 +170,7 @@ function buildRow(def) {
     def.options.forEach(([v, t]) => input.appendChild(el('option', { value: v }, t)));
     input.addEventListener('change', () => {
       if (def.k === 'extTrEngine') save({ extTrEngine: input.value, extTrOn: input.value !== 'lokalny' });
-      else save({ [def.k]: input.value });
+      else save({ [def.k]: def.num ? Number(input.value) : input.value });   // [VOX] num: liczba zamiast tekstu
     });
     row.appendChild(input);
   }
@@ -898,11 +930,108 @@ function buildExport() {
   s.appendChild(btns);
 }
 
+// ---------------- [VOX] Silnik mowy: test, restart, stan Supertonic ----------------
+// Wzór: buildEngineTools / refreshEngine ze strony ustawień VoxNemesis.
+let engineLive = null;
+function syncEngineRows() {
+  const eng = fields.ttsEngine && fields.ttsEngine.input.value;
+  Object.keys(fields).forEach((k) => {
+    const f = fields[k];
+    if (!f.def || !f.def.st) return;
+    const row = f.input.closest('.row');
+    if (row) row.style.opacity = eng === 'supertonic' ? '' : '.5';
+  });
+  refreshEngine();
+}
+function describeSupertonic(r) {
+  const want = { cpu: 'CPU', igpu: 'GPU zintegrowana', gpu: 'GPU dedykowana' }[(fields.engineBackend && fields.engineBackend.input.value) || 'cpu'];
+  if (!r || !r.running || !r.loaded) {
+    return { cls: '', txt: 'Supertonic: ' + want + ' · silnik uruchomi się przy pierwszej kwestii (albo kliknij ▶ Test lektora).'
+      + (r && r.running && r.isolated === false ? '\n⚠ Brak izolacji COOP/COEP — CPU liczy na 1 wątku.' : '') };
+  }
+  const d = r.download || {};
+  if (d.phase === 'error' || (r.lastError && !r.slotsReady)) return { cls: 'err', txt: '⛔ Supertonic: ' + (d.error || r.lastError) };
+  if (d.phase === 'download' || d.phase === 'check') {
+    return { cls: 'warn', txt: '⬇ Pobieram model Supertonic 3 z Hugging Face: ' + (d.done || 0) + '/' + (d.total || 6) + ' plików' + (d.file ? ' (' + d.file + ')' : '') + ' — tylko za pierwszym razem.' };
+  }
+  if (!r.slotsReady) return { cls: 'warn', txt: r.starting ? '⏳ Uruchamiam silnik Supertonic (' + want + ')…' : 'Supertonic: ' + want + ' · czeka na pierwszą kwestię.' };
+  let txt = r.provider === 'webgpu'
+    ? '✓ Supertonic na GPU (WebGPU)' + (r.gpuName ? ' · karta: ' + r.gpuName : '')
+    : '✓ Supertonic na CPU · ' + r.slotsReady + '/' + r.slotsMax + ' worker(y) × ' + r.threads + ' wątki' + (r.isolated ? '' : ' (brak izolacji — 1 wątek)');
+  txt += ' · głos ' + String(r.voice || '').replace('Supertonic ', '') + ' · jakość ' + r.steps;
+  if (r.queued) txt += ' · w kolejce: ' + r.queued;
+  if (r.gpuFellBack && r.gpuError) txt += '\n⚠ GPU niedostępne, liczy CPU: ' + r.gpuError;
+  else if (r.backend === 'gpu' && r.provider === 'webgpu' && r.gpuName && !/nvidia/i.test(r.gpuName)) {
+    txt += '\n🛈 Wybrano „GPU dedykowana”, a Chrome dał inną kartę. Masz NVIDIA? Kliknij „📄 NVIDIA na stałe — instrukcja”.';
+  }
+  return { cls: r.gpuFellBack ? 'warn' : '', txt };
+}
+function refreshEngine() {
+  if (!engineLive) return;
+  const eng = fields.ttsEngine && fields.ttsEngine.input.value;
+  if (eng !== 'supertonic') {
+    engineLive.className = 'live';
+    engineLive.textContent = 'Aktywny silnik: ' + (fields.ttsEngine ? fields.ttsEngine.input.selectedOptions[0].textContent : '—') + '.';
+    return;
+  }
+  try {
+    chrome.runtime.sendMessage({ action: 'SUPERTONIC_STATUS' }, (r) => {
+      void chrome.runtime.lastError;
+      const d = describeSupertonic(r);
+      engineLive.className = 'live' + (d.cls ? ' ' + d.cls : '');
+      engineLive.textContent = d.txt;
+    });
+  } catch (e) { /* ignore */ }
+}
+function buildEngineTools() {
+  const s = $('engineSec');
+  if (!s) return;
+  const btns = el('div', { class: 'btns' });
+  const test = el('button', { class: 'btn primary' }, '▶ Test lektora');
+  const restart = el('button', { class: 'btn' }, '⟳ Restart silnika Supertonic');
+  const nvidia = el('button', { class: 'btn' }, '📄 NVIDIA na stałe — instrukcja');
+  btns.appendChild(test); btns.appendChild(restart); btns.appendChild(nvidia);
+  s.appendChild(btns);
+  engineLive = el('div', { class: 'live' }, '…');
+  s.appendChild(engineLive);
+  test.addEventListener('click', () => {
+    test.disabled = true;
+    engineLive.className = 'live warn';
+    engineLive.textContent = '⏳ Uruchamiam silnik… (Supertonic za pierwszym razem pobiera model — to może potrwać)';
+    const done = (txt, cls) => { test.disabled = false; engineLive.className = 'live' + (cls ? ' ' + cls : ''); engineLive.textContent = txt; setTimeout(refreshEngine, 2500); };
+    chrome.runtime.sendMessage({ action: 'INIT_TTS' }, (r1) => {
+      void chrome.runtime.lastError;
+      if (!r1 || r1.status === 'error' || r1.error) { done('⛔ ' + ((r1 && r1.error) || 'brak odpowiedzi silnika'), 'err'); return; }
+      chrome.runtime.sendMessage({ action: 'TTS_PLAY', id: 'test_' + Date.now(), text: 'To jest test lektora.', durationMs: 0 }, (r2) => {
+        void chrome.runtime.lastError;
+        if (!r2 || r2.status === 'error' || r2.error) done('⛔ ' + ((r2 && r2.error) || 'brak odpowiedzi'), 'err');
+        else done('✓ Test wysłany — jeśli słyszysz „To jest test lektora”, silnik działa.');
+      });
+    });
+  });
+  restart.addEventListener('click', () => {
+    restart.disabled = true;
+    engineLive.className = 'live warn';
+    engineLive.textContent = '⟳ Restartuję silnik Supertonic…';
+    chrome.runtime.sendMessage({ action: 'SUPERTONIC_RESTART' }, (r) => {
+      void chrome.runtime.lastError;
+      restart.disabled = false;
+      if (!r || !r.ok) { engineLive.className = 'live err'; engineLive.textContent = '⛔ Restart nieudany: ' + ((r && r.error) || 'brak odpowiedzi'); }
+      refreshEngine();
+    });
+  });
+  nvidia.addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('supertonic/GPU-NVIDIA-instrukcja.txt') }));
+  fields.ttsEngine.input.addEventListener('change', () => setTimeout(syncEngineRows, 0));
+  fields.engineBackend.input.addEventListener('change', () => setTimeout(refreshEngine, 400));
+  setInterval(() => { if (!document.hidden) refreshEngine(); }, 2000);
+}
+
 function build() {
   SCHEMA.forEach((group) => {
-    const s = section(group.sec, group.sub);
+    const s = section(group.sec, group.sub, false, group.id);
     group.items.forEach((def) => s.appendChild(buildRow(def)));
   });
+  buildEngineTools();   // [VOX]
   buildSubTranslator();
   buildSubsMemory();
   buildAiMemory();
@@ -917,6 +1046,7 @@ if (location.hash === '#ait') { const a = $('ait'); if (a) a.scrollIntoView(); }
 chrome.storage.local.get(null, (all) => {
   all = all || {};
   applyValues(all);
+  syncEngineRows();   // [VOX]
   fields.__domainWl.ta.value = String(all.domainWhitelist || '');
   fields.__domainBl.ta.value = String(all.domainBlacklist || '');
   customSources = (all.customSources && typeof all.customSources === 'object') ? all.customSources : {};
@@ -931,4 +1061,22 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.host) $('kHost').value = msg.host;
   $('kResult').textContent = '🎯 Wskazano: ' + (msg.selector || '?') + (msg.text ? '\n„' + msg.text + '"' : '');
   renderKreatorList();
+});
+
+// [VOX] 2026-10-20: zmiany z popupu (silnik, sprzęt, suwaki…) widać tu od razu, bez przeładowania strony.
+chrome.storage.onChanged.addListener((ch, area) => {
+  if (area !== 'local') return;
+  let touched = false;
+  Object.keys(ch).forEach((k) => {
+    const f = fields[k];
+    if (!f || !f.def || document.activeElement === f.input) return;
+    const v = ch[k].newValue === undefined ? f.def.def : ch[k].newValue;
+    if (f.def.t === 'bool') f.input.checked = !!v;
+    else if (k !== 'extTrEngine') {
+      f.input.value = String(v);
+      if (f.valSpan) f.valSpan.textContent = f.input.value + (f.def.unit || '');
+    }
+    touched = true;
+  });
+  if (touched && (ch.ttsEngine || ch.engineBackend)) syncEngineRows();
 });

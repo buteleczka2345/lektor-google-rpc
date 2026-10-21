@@ -26,6 +26,7 @@
         extTrContext: true,         // [AGENT-EXP] 2026-10-17: tłumacz dostaje kwestie blokami do pauzy w mowie (kontekst)
         extTrJoinSentences: true,   // [AGENT-EXP] 2026-10-15: całe zdania do tłumacza (skrypty czytają też chrome.storage same)
         extTrNonEnCloud: true,      // [AGENT-EXP] 2026-10-15: „lokalny” — angielski Translatorem Chrome, inne języki Bingiem
+        ytTlangPl: true,            // [AGENT-EXP] 2026-10-21: YouTube — najpierw polska wersja od YouTube (tlang=pl, jak Live Dubbing)
         // [AGENT-EXP] silnik AI (OpenAI-compatible) — CometAPI domyślnie, z.ai przez zmianę URL
         aiOn: false,
         aiApiUrl: 'https://api.cometapi.com/v1/chat/completions',

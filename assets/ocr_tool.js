@@ -158,7 +158,8 @@
     const OCR_LANGS = { pl: 'pol', en: 'eng', de: 'deu', fr: 'fra', es: 'spa', it: 'ita', ru: 'rus', uk: 'ukr', ja: 'jpn', ko: 'kor', zh: 'chi_sim' };
     const st = { on: false, busy: false, timer: 0, sig: null, last: '', lang: '', region: DEF_REGION.slice(), fails: 0, cv: null, cv2: null, cv3: null, status: '', engine: 'tesseract',
         tr: 'skrypt', esig: null, askAt: 0, asked: 0, skipped: 0, nextCap: 0,
-        auto: false, afScreen: false, finding: false, autoAt: 0, quiet: 0, quietAt: 0, afNote: '', cvA: null };   // [AGENT-EXP] 🎯 auto-ramka   // [AGENT-EXP] tr = kto tłumaczy; esig/askAt/asked/skipped = krawędzie liter (PP-OCR)
+        auto: false, afScreen: false, finding: false, autoAt: 0, quiet: 0, quietAt: 0, afNote: '', cvA: null,
+        big: true, bigSize: 'l', bigLinger: 2500 };   // [AGENT-EXP] 2026-10-19: 🔠 duże napisy na filmie (ocrToolBigSubs / ocrToolBigSize)   // [AGENT-EXP] 🎯 auto-ramka   // [AGENT-EXP] tr = kto tłumaczy; esig/askAt/asked/skipped = krawędzie liter (PP-OCR)
     // [AGENT-EXP] kto tłumaczy (menu CC → „Kto tłumaczy”, storage ocrToolTr):
     //   skrypt = silnik z ustawień rozszerzenia (przy „lokalnym” — Bing), google / bing = ten silnik,
     //   strona = Immersive Translate / TWP przez element-most (brak odpowiedzi w 2,5 s → silnik rozszerzenia)
@@ -167,15 +168,19 @@
     // (domyślnie — łapie każdy napis), 'krawedzie' = krawędzie liter (mniej zapytań, ale tylko jasne białe/żółte napisy;
     // szare / kolorowe uchodziły za „brak liter” i część kwestii przepadała).
     function detKey(v) { return v === 'krawedzie' ? 'krawedzie' : 'jasnosc'; }
+    function bigSizeKey(v) { return v === 'm' || v === 'xl' ? v : 'l'; }   // [AGENT-EXP] 2026-10-19 🔠 m / l / xl
+    // [AGENT-EXP] 2026-10-19: ile ms napis zostaje na ekranie PO zniknięciu oryginału (cisza) — domyślnie 2,5 s
+    function bigLingerMs(v) { const n = Number(v); return [0, 1000, 2500, 4000, 6000].indexOf(n) >= 0 ? n : 2500; }
     let lektorOn = true, duckLevel = 20;
 
     try {
-        chrome.storage.local.get(['ocrToolLang', 'ocrToolRegions', 'enabled', 'duckLevel', 'ocrToolEngine', 'ocrToolTr', 'ocrToolDetect', 'ocrToolBoxPos', 'ocrToolAutoFrame'], (r) => {
+        chrome.storage.local.get(['ocrToolLang', 'ocrToolRegions', 'enabled', 'duckLevel', 'ocrToolEngine', 'ocrToolTr', 'ocrToolDetect', 'ocrToolBoxPos', 'ocrToolAutoFrame', 'ocrToolBigSubs', 'ocrToolBigSize', 'ocrToolBigLinger'], (r) => {
             r = r || {};
             st.engine = engineKey(r.ocrToolEngine);
             st.tr = trKey(r.ocrToolTr); if (boxTr) boxTr.value = st.tr;   // [AGENT-EXP]
             st.detect = detKey(r.ocrToolDetect);   // [AGENT-EXP]
             st.auto = r.ocrToolAutoFrame === true;   // [AGENT-EXP] 🎯 auto-ramka
+            st.big = r.ocrToolBigSubs !== false; st.bigSize = bigSizeKey(r.ocrToolBigSize); st.bigLinger = bigLingerMs(r.ocrToolBigLinger);   // [AGENT-EXP] 2026-10-19 🔠
             const bp = r.ocrToolBoxPos && r.ocrToolBoxPos[HOST];   // [AGENT-EXP] (cz. 5) zapamiętane miejsce okienka OCR
             if (bp && Number.isFinite(bp.x) && Number.isFinite(bp.y)) { boxPos = bp; placeBox(); }
             if (typeof r.ocrToolLang === 'string') st.lang = r.ocrToolLang;
@@ -192,6 +197,9 @@
             if (ch.ocrToolDetect) { st.detect = detKey(ch.ocrToolDetect.newValue); st.sig = null; st.esig = null; }   // [AGENT-EXP]
             if (ch.ocrToolTr) { st.tr = trKey(ch.ocrToolTr.newValue); if (boxTr) boxTr.value = st.tr; br.misses = 0; br.offUntil = 0; if (st.tr !== 'strona') bridgeHide(); showEng(''); }   // [AGENT-EXP]
             if (ch.enabled) lektorOn = ch.enabled.newValue !== false;
+            if (ch.ocrToolBigSubs) { st.big = ch.ocrToolBigSubs.newValue !== false; if (!st.big) bigHide(true); }   // [AGENT-EXP] 2026-10-19 🔠
+            if (ch.ocrToolBigSize) { st.bigSize = bigSizeKey(ch.ocrToolBigSize.newValue); bigPlace(); }
+            if (ch.ocrToolBigLinger) st.bigLinger = bigLingerMs(ch.ocrToolBigLinger.newValue);
             if (ch.duckLevel) duckLevel = Number(ch.duckLevel.newValue) || 0;
         });
     } catch (e) { /* kontekst rozszerzenia unieważniony */ }
@@ -387,7 +395,10 @@
         } catch (e) {}
     }
     function say(text) {
-        if (!lektorOn) return;
+        // [AGENT-EXP] 2026-10-19: 🔠 duże napisy — tłumaczenie idzie na ekran OD RAZU, gdy tylko przyjdzie (bez
+        // czekania na lektora), także przy WYŁĄCZONYM lektorze. Lektor (gdy włączony) czyta po swojemu, później.
+        const speak = lektorOn, wantBig = st.big;
+        if (!speak && !wantBig) return;
         const my = ++seq, lg = langs();
         // [AGENT-EXP] tłumacz wg „Kto tłumaczy” + w okienku: kto przetłumaczył i ile to trwało (albo dlaczego nie)
         let ready;
@@ -399,6 +410,14 @@
                 return r && r.text ? String(r.text).trim() : '';
             });
         } else { ready = Promise.resolve(text); if (lg !== 'pol') showEng('🇵🇱 po polsku — bez tłumaczenia'); }
+        if (wantBig) {
+            ready.then((pl) => {
+                if (!pl || !st.on || !st.big || my < bigSeq) return;   // starsze tłumaczenie nie zasłoni nowszego
+                bigSeq = my; bigShow(pl);
+                if (!speak) showText(st.last, pl);
+            }).catch(() => {});
+        }
+        if (!speak) return;
         chain = chain.then(() => ready).then((pl) => {
             if (!pl || !lektorOn || !st.on) return;
             if (seq - my > 2) return;            // OCR już dalej — stary napis pomijamy
@@ -553,12 +572,12 @@
                 // najwyżej co 1,5 s (litery w ramce) albo co 3 s (bez liter — kontrola, żeby nie zgubić bladych napisów).
                 const now = Date.now(), lumCh = changedColor(st.sig, cap.grid);
                 let ask;
-                if (!cap.text) { if (st.last) { st.last = ''; showText('', ''); zdLiveGone(); } ask = lumCh && now - st.askAt > 3000; }
+                if (!cap.text) { if (st.last) { st.last = ''; showText('', ''); zdLiveGone(); bigHide(); } ask = lumCh && now - st.askAt > 3000; }
                 else ask = changedColor(st.esig, cap.edge, OCR_EDGE_DIFF) || (lumCh && now - st.askAt > 1500);
                 if (!ask) { st.skipped++; return; }
                 st.esig = cap.edge; st.askAt = now; st.asked++;
             } else {
-                if (cap.ratio < 0.0015 || cap.ratio > 0.35) { if (st.last) { st.last = ''; showText('', ''); zdLiveGone(); } st.sig = null; return; }
+                if (cap.ratio < 0.0015 || cap.ratio > 0.35) { if (st.last) { st.last = ''; showText('', ''); zdLiveGone(); bigHide(); } st.sig = null; return; }
                 if (!changed(st.sig, cap.grid)) return;
             }
             st.sig = cap.grid;
@@ -569,7 +588,7 @@
             if (!r || !r.ok) { st.fails++; setStatus('błąd silnika: ' + ((r && (r.error || r.status)) || 'brak odpowiedzi')); if (st.fails > 8) stop('OCR zatrzymany po błędach.'); return; }
             st.fails = 0; setStatus('działa — ' + engineLabel() + (g.screen ? ' · zrzut ekranu' : '') + (eng === 'ppocr' && st.detect === 'krawedzie' ? ' · zapytań ' + st.asked + ', pominiętych klatek ' + st.skipped : '') + (st.auto ? st.afNote || '' : ''));   // [AGENT-EXP] licznik; 🎯 wynik auto-ramki
             const txt = clean(r.lines);
-            if (!txt) { if (eng === 'ppocr' && st.last) { st.last = ''; showText('', ''); zdLiveGone(); } return; }
+            if (!txt) { if (eng === 'ppocr' && st.last) { st.last = ''; showText('', ''); zdLiveGone(); bigHide(); } return; }
             st.quiet = 0;   // [AGENT-EXP] 🎯 jest tekst w ramce
             if (similar(txt, st.last)) return;
             st.last = txt; showText(txt, '');
@@ -593,6 +612,7 @@
     function stop(why) {
         st.on = false; clearInterval(st.timer); st.timer = 0; st.last = '';
         bridgeHide(); showEng('');   // [AGENT-EXP]
+        bigHide(true);   // [AGENT-EXP] 2026-10-19 🔠
         setStatus(why || 'wyłączony'); ui();
         if (why) { showBox(true); setTimeout(() => { if (!st.on) showBox(false); }, 5000); }
         send({ action: 'OCR_TOOL_STOP' });
@@ -610,7 +630,8 @@
             '.s{font-size:10px;color:#e9b5f5;margin-bottom:2px}.t{white-space:pre-wrap}.p{color:#ffee58;white-space:pre-wrap}.e{font-size:10px;color:#7dd3fc;white-space:pre-wrap}' +
             '.x,.r{position:absolute;top:4px;cursor:pointer;color:#e9b5f5;font:bold 13px sans-serif;border:0;background:none}.x{right:6px}.r{right:24px;font-size:12px}' +
             '.w{display:block;margin:2px 0 3px;font:11px system-ui,sans-serif;color:#fff;background:#2a1436;border:1px solid #a21caf;border-radius:4px;padding:1px 3px;cursor:pointer;max-width:100%}</style>' +
-            '<div class="b"><button class="x" title="Wyłącz OCR">✕</button><div class="s"></div><select class="w" title="Kto tłumaczy obcy tekst z OCR — zmiana działa od razu"></select><div class="t"></div><div class="p"></div><div class="e"></div></div>';
+            '<div class="b"><button class="x" title="Wyłącz OCR">✕</button><div class="s"></div><select class="w" title="Kto tłumaczy obcy tekst z OCR — zmiana działa od razu"></select><div class="t" data-noi18n></div><div class="p" data-noi18n></div><div class="e"></div></div>';
+        try { if (self.MLi18n) MLi18n.watch(root); } catch (e) {}   // [AGENT-EXP] 2026-10-21: okienko OCR PL / EN (.t / .p = napis — bez tłumaczenia)
         boxStatus = root.querySelector('.s'); boxText = root.querySelector('.t'); boxPl = root.querySelector('.p'); boxEng = root.querySelector('.e');
         root.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); stop(); });
         // [AGENT-EXP] 2026-10-17: wybór tłumacza w samym okienku OCR (ten sam ocrToolTr co w menu CC)
@@ -667,6 +688,55 @@
     function setStatus(s) { st.status = s; if (boxStatus) boxStatus.textContent = 'OCR: ' + s; }
     function showText(t, pl) { if (boxText) boxText.textContent = t || ''; if (boxPl && pl !== undefined) boxPl.textContent = pl || ''; }
     function showEng(s) { if (boxEng) boxEng.textContent = s || ''; }   // [AGENT-EXP] kto przetłumaczył / ile ms / błąd
+
+    // ---------- [AGENT-EXP] 2026-10-19: 🔠 duże napisy (tłumaczenie) na obrazie filmu ----------
+    // Na dole filmu, wyśrodkowane, czcionka liczona od wysokości filmu (m / l / xl = 5,5 / 7 / 9 %). Element ma
+    // data-lektor-ocr: zrzut ekranu OCR go chowa (OWN_UI), a skanery napisów lektora go pomijają — OCR nie czyta
+    // własnego tłumaczenia. Gdy napis zniknie z ramki (cisza), tłumaczenie WISI jeszcze st.bigLinger ms (menu CC
+    // „Napis zostaje po ciszy”, domyślnie 2,5 s) i nigdy krócej niż czas na przeczytanie (BIG_MIN_MS albo ~60 ms
+    // na znak). Nowy napis od razu zastępuje stary. Bez nowego napisu znika najpóźniej po BIG_MAX_MS.
+    const BIG_FONT = { m: 0.055, l: 0.07, xl: 0.09 }, BIG_MIN_MS = 3000, BIG_MS_PER_CHAR = 60, BIG_MAX_MS = 20000;
+    let big = null, bigTxt = null, bigSeq = 0, bigAt = 0, bigHideT = 0, bigReadUntil = 0;
+    function buildBig() {
+        const host = document.createElement('div');
+        host.setAttribute('data-lektor-ocr', '');
+        host.style.cssText = 'all:initial;position:fixed;z-index:2147483645;pointer-events:none;display:none;text-align:center;';
+        const root = host.attachShadow({ mode: 'closed' });
+        root.innerHTML = '<style>.t{display:inline-block;max-width:100%;box-sizing:border-box;padding:.12em .45em;border-radius:.25em;'
+            + 'background:rgba(0,0,0,.55);color:#fff;font-family:system-ui,"Segoe UI",Arial,sans-serif;font-weight:700;line-height:1.22;'
+            + 'white-space:pre-wrap;overflow-wrap:break-word;text-shadow:0 0 3px #000,0 0 3px #000,2px 2px 2px #000}</style><div class="t"></div>';
+        bigTxt = root.querySelector('.t');
+        big = host;
+    }
+    function bigPlace() {
+        if (!big || big.style.display === 'none') return;
+        const v = bigVideo(); if (!v) return;
+        const r = v.getBoundingClientRect();
+        const fs = Math.round(Math.max(20, Math.min(96, r.height * (BIG_FONT[st.bigSize] || BIG_FONT.l))));
+        big.style.left = Math.round(r.left + r.width * 0.04) + 'px';
+        big.style.width = Math.round(r.width * 0.92) + 'px';
+        big.style.bottom = Math.round(Math.max(0, innerHeight - r.bottom) + r.height * 0.07) + 'px';
+        if (bigTxt) bigTxt.style.fontSize = fs + 'px';
+        const t = mountTarget(); if (big.parentNode !== t) t.appendChild(big);
+    }
+    function bigShow(text) {
+        if (!big) buildBig();
+        clearTimeout(bigHideT);
+        bigTxt.textContent = text;
+        big.style.display = 'block';
+        bigAt = Date.now();
+        bigReadUntil = bigAt + Math.max(BIG_MIN_MS, String(text).length * BIG_MS_PER_CHAR);
+        bigPlace();
+        bigHideT = setTimeout(() => bigHide(true), BIG_MAX_MS);
+    }
+    function bigHide(now) {
+        if (!big || big.style.display === 'none') return;
+        clearTimeout(bigHideT);
+        const left = now ? 0 : Math.max(st.bigLinger, bigReadUntil - Date.now());
+        if (left > 0) { bigHideT = setTimeout(() => bigHide(true), left); return; }
+        big.style.display = 'none';
+    }
+    ['resize', 'fullscreenchange', 'scroll'].forEach((n) => window.addEventListener(n, () => bigPlace(), true));
 
     // ---------- [AGENT-EXP] tłumaczenie kwestii wg „Kto tłumaczy” ----------
     const TR_CHOICES = [['lokalny', '💻 Lokalny (Translator Chrome, bez sieci)'], ['bing', '🌐 Bing'], ['google', '🌐 Google'], ['deepl', '🌐 DeepL'],
@@ -887,6 +957,7 @@
             raceHost.setAttribute('data-lektor-ocr', 'wyscig');
             raceHost.style.cssText = 'all:initial;position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:2147483647;';
             raceRoot = raceHost.attachShadow({ mode: 'closed' });
+            try { if (self.MLi18n) MLi18n.watch(raceRoot); } catch (e) {}   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
             ['mousedown', 'pointerdown', 'click', 'dblclick'].forEach((n) => raceHost.addEventListener(n, (e) => e.stopPropagation()));
         }
         const t = mountTarget(); if (raceHost.parentNode !== t) t.appendChild(raceHost);
@@ -966,6 +1037,7 @@
             ? { x0: -vb.left / vb.width, x1: (innerWidth - vb.left) / vb.width, y0: -vb.top / vb.height, y1: (innerHeight - vb.top) / vb.height }
             : { x0: 0, x1: 1, y0: 0, y1: 1 };
         const ov = document.createElement('div'); ov.id = 'lektor-ocr-frame';
+        try { if (self.MLi18n) MLi18n.watch(ov); } catch (e) {}   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
         css(ov, { position: 'fixed', left: area.left + 'px', top: area.top + 'px', width: area.width + 'px', height: area.height + 'px', 'z-index': '2147483647', background: 'rgba(0,0,0,.35)', 'box-sizing': 'border-box' });
         const pic = document.createElement('div');   // obraz filmu (przerywana linia)
         css(pic, { position: 'absolute', left: (vb.left - area.left) + 'px', top: (vb.top - area.top) + 'px', width: vb.width + 'px', height: vb.height + 'px', outline: '1px dashed rgba(255,255,255,.6)', 'pointer-events': 'none' });

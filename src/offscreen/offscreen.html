@@ -1,17 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- [AGENT-EXP] 2026-10-21: Multilektor — dokument offscreen (silnik mowy, OCR). Napisany od nowa.
+     keepAlive: cicha pętla (własny 25-ms WAV), żeby Chrome nie zamykał dokumentu w trakcie pracy lektora;
+     tts-player: odtwarzacz kwestii. Identyfikatory czyta offscreen.js. -->
+<html lang="pl">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiveDub Offscreen TTS Engine</title>
-  <script src="censor.js"></script>
-  <script src="ocr_engine.js"></script>
-  <script src="ppocr_engine.js"></script>
-  <script type="module" src="offscreen.js"></script>
+<meta charset="UTF-8">
+<title>Multilektor — silnik mowy</title>
+<script src="censor.js"></script>
+<script src="ocr_engine.js"></script>
+<script src="ppocr_engine.js"></script>
+<script type="module" src="offscreen.js"></script>
 </head>
 <body>
-    <!-- Hidden audio elements -->
-    <audio id="keepAlive" loop src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"></audio>
-    <audio id="tts-player" autoplay></audio>
+<audio id="keepAlive" loop src="data:audio/wav;base64,UklGRuwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YcgAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA=="></audio>
+<audio id="tts-player" autoplay></audio>
 </body>
 </html>

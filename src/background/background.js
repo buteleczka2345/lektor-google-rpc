@@ -72,7 +72,7 @@ async function hasOffscreen() {
 
 async function createOffscreenDocument() {
     const url = OFFSCREEN_PATH;
-    const justification = 'Play Piper TTS audio and run ONNX/WASM workers';
+    const justification = 'Multilektor: odtwarzanie mowy lektora i silniki ONNX/WASM';   // [AGENT-EXP] 2026-10-21
     await chrome.offscreen.createDocument({
         url,
         reasons: ['AUDIO_PLAYBACK'],
@@ -103,7 +103,7 @@ async function sendOffscreen(payload) {
     } catch (err) {
         const msg = String((err && err.message) || err);
         if (!msg.includes('Receiving end does not exist')) {
-            console.warn('[LiveDub SW] offscreen message:', msg);
+            console.warn('[Multilektor SW] offscreen:', msg);
         }
         return null;
     }
@@ -170,15 +170,44 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
 // ENERGIA: dokument lektora (offscreen) NIE startuje razem z przeglądarką — tworzy go dopiero
 // pierwsza kwestia do przeczytania (callOffscreen → ensureOffscreen). Bez lektora nic nie działa w tle.
 
-const TTS_ACTIONS = [
-    'TTS_PRELOAD',
-    'TTS_PLAY',
-    'TTS_PAUSE',
-    'TTS_CLEAR_BUFFER',
-    'INIT_TTS',
-    'CLEAR_CACHE',
-    'TTS_RESTART_OFFSCREEN'
-];
+// [VOX] 2026-10-20: Supertonic (silnik z VoxNemesis) — wartości ze storage z domyślnymi i walidacją.
+const SUPERTONIC_VOICES = ['Supertonic M1', 'Supertonic M2', 'Supertonic F1', 'Supertonic F2'];
+function supertonicSettings(items) {
+    const steps = Math.round(Number(items.supertonicSteps));
+    return {
+        supertonicVoice: SUPERTONIC_VOICES.indexOf(items.supertonicVoice) >= 0 ? items.supertonicVoice : 'Supertonic M1',
+        supertonicSteps: Number.isFinite(steps) && steps >= 1 && steps <= 20 ? steps : 4,
+        engineBackend: (items.engineBackend === 'gpu' || items.engineBackend === 'igpu') ? items.engineBackend : 'cpu'
+    };
+}
+
+// [VOX] Stan / restart silnika Supertonic dla popupu i strony Ustawień.
+// Status NIE tworzy dokumentu lektora (popup pyta co 2 s) — brak dokumentu = silnik nie działa.
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (!msg || msg.target === 'offscreen') return;
+    if (msg.action !== 'SUPERTONIC_STATUS' && msg.action !== 'SUPERTONIC_RESTART' && msg.action !== 'BROWSER_TTS_VOICES') return;
+    (async () => {
+        try {
+            if (msg.action === 'BROWSER_TTS_VOICES') {   // [AGENT-EXP] 2026-10-21: 🗣 głosy przeglądarki dla popupu
+                const r = await callOffscreen({ action: 'BROWSER_TTS_VOICES' }, 20);
+                sendResponse(r || { ok: false, voices: [] });
+                return;
+            }
+            if (msg.action === 'SUPERTONIC_STATUS') {
+                if (!(await hasOffscreen())) { sendResponse({ running: false }); return; }
+                const r = await sendOffscreen({ action: 'SUPERTONIC_STATUS' });
+                sendResponse(r ? Object.assign({ running: true }, r) : { running: false });
+                return;
+            }
+            const r = await callOffscreen({ action: 'SUPERTONIC_RESTART' });
+            sendResponse(r || { ok: false, error: 'brak odpowiedzi' });
+        } catch (e) {
+            sendResponse({ ok: false, running: false, error: (e && e.message) || String(e) });
+        }
+    })();
+    return true;
+});
+
 
 // Offscreen nie ma dostępu do chrome.storage (nowsze Chrome ograniczyły API offscreen),
 // więc diagnostykę (__offscreenError/__offscreenLog) zapisuje za nie service worker.
@@ -210,7 +239,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.action === 'GET_TTS_SETTINGS') {
         // [AGENT-EXP] 2026-10-16 — przekazuje wybór Sherpa/Matcha do dokumentu offscreen.
         // [AGENT-EXP] Przekaż wybór silnika i lokalnych głosów także przy starcie dokumentu offscreen.
-        chrome.storage.local.get(['tempoMode', 'autoCatchup', 'compressor', 'liveBufTTLDays', 'ttsVolume', 'piperSpeed', 'offlineVoice', 'customVoice', 'builtinVoiceRemoved', 'censorEnabled', 'censorMode', 'censorCustomWords', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice'], (items) => {
+        chrome.storage.local.get(['tempoMode', 'autoCatchup', 'compressor', 'liveBufTTLDays', 'ttsVolume', 'piperSpeed', 'offlineVoice', 'customVoice', 'builtinVoiceRemoved', 'censorEnabled', 'censorMode', 'censorCustomWords', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'], (items) => {
             sendResponse({
                 settings: {
                     tempoMode: ['A', 'B', 'C'].indexOf(items.tempoMode) >= 0 ? items.tempoMode : 'A', // OPTIONS-PAGE
@@ -219,12 +248,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                     liveBufTTLDays: Number(items.liveBufTTLDays) || 0,
                     ttsVolume: items.ttsVolume === undefined ? 100 : items.ttsVolume,
                     piperSpeed: Number(items.piperSpeed) || 1,
-                    ttsEngine: ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice'].indexOf(items.ttsEngine) >= 0 ? items.ttsEngine : 'sherpa',
+                    ttsEngine: ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(items.ttsEngine) >= 0 ? items.ttsEngine : 'sherpa',
                     tts2Voice: typeof items.tts2Voice === 'string' ? items.tts2Voice : '',
                     audio8Voice: typeof items.audio8Voice === 'string' ? items.audio8Voice : 'default',
                     pocketVoice: typeof items.pocketVoice === 'string' && items.pocketVoice ? items.pocketVoice : 'ref',   // [AGENT-EXP]
                     omnivoiceVoice: typeof items.omnivoiceVoice === 'string' ? items.omnivoiceVoice : 'male, young adult, moderate pitch',   // [AGENT-EXP] OmniVoice ('' = losowy)
                     matchaVoice: typeof items.matchaVoice === 'string' && items.matchaVoice ? items.matchaVoice : 'v2:male_voxcpm_1:elegancki',   // [AGENT-EXP] 2026-10-17 Matcha: głos z VOICES serwer_matcha.py
+                    ...supertonicSettings(items),   // [VOX] Supertonic: głos, jakość, CPU/GPU
+                    browserVoice: typeof items.browserVoice === 'string' ? items.browserVoice : '',   // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki
                     offlineVoice: SHERPA_VOICE,
                     customVoice: (items.customVoice && typeof items.customVoice === 'object') ? items.customVoice : null,
                     builtinVoiceRemoved: !!items.builtinVoiceRemoved,
@@ -258,6 +289,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.pocketVoice) patch.pocketVoice = changes.pocketVoice.newValue;   // [AGENT-EXP] Pocket-TTS-PL
     if (changes.omnivoiceVoice) patch.omnivoiceVoice = changes.omnivoiceVoice.newValue;   // [AGENT-EXP] OmniVoice
     if (changes.matchaVoice) patch.matchaVoice = changes.matchaVoice.newValue;   // [AGENT-EXP] Matcha-TTS-PL
+    if (changes.supertonicVoice) patch.supertonicVoice = changes.supertonicVoice.newValue;   // [VOX] Supertonic
+    if (changes.supertonicSteps) patch.supertonicSteps = changes.supertonicSteps.newValue;
+    if (changes.engineBackend) patch.engineBackend = changes.engineBackend.newValue;
+    if (changes.browserVoice) patch.browserVoice = changes.browserVoice.newValue;   // [AGENT-EXP] 🗣 głos przeglądarki
     if (changes.offlineVoice) patch.offlineVoice = changes.offlineVoice.newValue;
     if (changes.customVoice) patch.customVoice = changes.customVoice.newValue;
     if (changes.builtinVoiceRemoved) patch.builtinVoiceRemoved = changes.builtinVoiceRemoved.newValue;
@@ -404,65 +439,62 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return true;
     }
 
-    if (!TTS_ACTIONS.includes(msg.action)) return;
-
-    (async () => {
-        try {
-            // [AGENT-EXP] 2026-10-16 — wybór silnika dołączany do każdego zlecenia,
-            // żeby pierwsza kwestia po zmianie ustawienia trafiła od razu do właściwego TTS.
-            // [AGENT-EXP] Ustawienia silnika i głosu są dołączane do każdego żądania TTS.
-            const settings = await chrome.storage.local.get(['engine', 'piperSpeed', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice']);
-            const voiceId = SHERPA_VOICE;
-            const ttsEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice'].indexOf(settings.ttsEngine) >= 0 ? settings.ttsEngine : 'sherpa';
-            const tts2Voice = typeof settings.tts2Voice === 'string' ? settings.tts2Voice : '';
-            const audio8Voice = typeof settings.audio8Voice === 'string' ? settings.audio8Voice : 'default';
-            const pocketVoice = typeof settings.pocketVoice === 'string' && settings.pocketVoice ? settings.pocketVoice : 'ref';   // [AGENT-EXP]
-            const omnivoiceVoice = typeof settings.omnivoiceVoice === 'string' ? settings.omnivoiceVoice : 'male, young adult, moderate pitch';   // [AGENT-EXP]
-            const matchaVoice = typeof settings.matchaVoice === 'string' && settings.matchaVoice ? settings.matchaVoice : 'v2:male_voxcpm_1:elegancki';   // [AGENT-EXP] Matcha
-
-            if (msg.action === 'TTS_RESTART_OFFSCREEN') {
-                try { await chrome.offscreen.closeDocument(); } catch (_) { /* ignore */ }
-                await ensureOffscreen();
-                sendResponse({ status: 'Offscreen restarted' });
-                return;
-            }
-
-            if (msg.action === 'INIT_TTS' || msg.action === 'CLEAR_CACHE') {
-                const resp = await callOffscreen({ ...msg, voiceId, ttsEngine, tts2Voice, audio8Voice, pocketVoice, omnivoiceVoice, matchaVoice });
-                sendResponse(resp);
-                return;
-            }
-
-            if (msg.action === 'TTS_PRELOAD') {
-                if (isBlockedPhrase(msg.text)) { sendResponse({ status: 'blocked' }); return; } // pomijamy wstępną syntezę
-                callOffscreen({ ...msg, voiceId, ttsEngine, tts2Voice, audio8Voice, pocketVoice, omnivoiceVoice, matchaVoice }, 20).catch(() => {});
-                sendResponse({ status: 'Preload handled' });
-                return;
-            }
-
-            if (msg.action === 'TTS_PLAY') {
-                const piperSpeed = Number(settings.piperSpeed) || 1;
-                if (isBlockedPhrase(msg.text)) { sendResponse({ status: 'blocked' }); return; } // fraza na czarnej liście
-                const resp = await callOffscreen({ ...msg, voiceId, piperSpeed, ttsEngine, tts2Voice, audio8Voice, pocketVoice, omnivoiceVoice, matchaVoice });
-                sendResponse(resp);
-                return;
-            }
-
-            if (msg.action === 'TTS_PAUSE' || msg.action === 'TTS_CLEAR_BUFFER') {
-                // [AGENT-EXP] 2026-10-17: pauza / czyszczenie NIE tworzą i NIE zamykają dokumentu lektora. Wcześniej
-                // callOffscreen(…, allowKill) zamykał dokument, gdy ten (świeżo tworzony) nie odpowiedział na PING
-                // w ~1 s — YouTube wysyła je często, więc dokument był zabijany w kółko (serwery TTS widziały
-                // zerwane połączenie 1001, nagrania do przodu przepadały). Nie ma dokumentu = nie ma czego czyścić.
-                if (await hasOffscreen()) sendOffscreen(msg).catch(() => {});
-                sendResponse({ status: 'Paused/Cleared' });
-            }
-        } catch (err) {
-            console.error('[LiveDub SW] TTS:', err);
-            sendResponse({ status: 'error', error: (err && err.message) || String(err) });
-        }
-    })();
+    const route = Object.hasOwn(TTS_ROUTES, msg.action) ? TTS_ROUTES[msg.action] : null;   // nie metody Object.prototype
+    if (!route) return;
+    route(msg).then(sendResponse, (err) => {
+        console.error('[Multilektor SW] mowa:', err);
+        sendResponse({ status: 'error', error: (err && err.message) || String(err) });
+    });
     return true;
 });
+
+// [AGENT-EXP] 2026-10-21: router mowy napisany od nowa (Multilektor). Każde zlecenie dla dokumentu lektora dostaje
+// aktualny silnik i głosy ze storage — pierwsza kwestia po zmianie ustawienia trafia od razu do właściwego silnika.
+const TTS_KEYS = ['engine', 'piperSpeed', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice',
+    'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'];
+const TTS_ENGINES = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'];
+const str = (v, dflt, allowEmpty) => (typeof v === 'string' && (allowEmpty || v) ? v : dflt);
+async function ttsEngineFields(withSpeed) {
+    const s = await chrome.storage.local.get(TTS_KEYS);
+    const f = {
+        voiceId: SHERPA_VOICE,
+        ttsEngine: TTS_ENGINES.includes(s.ttsEngine) ? s.ttsEngine : 'sherpa',
+        tts2Voice: str(s.tts2Voice, '', true),
+        audio8Voice: str(s.audio8Voice, 'default', true),
+        pocketVoice: str(s.pocketVoice, 'ref'),
+        omnivoiceVoice: str(s.omnivoiceVoice, 'male, young adult, moderate pitch', true),   // '' = losowy
+        matchaVoice: str(s.matchaVoice, 'v2:male_voxcpm_1:elegancki'),
+        ...supertonicSettings(s),   // [VOX] Supertonic: głos, jakość, CPU/GPU
+        browserVoice: str(s.browserVoice, '', true)   // 🗣 głos przeglądarki ('' = automatycznie)
+    };
+    if (withSpeed) f.piperSpeed = Number(s.piperSpeed) || 1;
+    return f;
+}
+const TTS_ROUTES = {
+    async TTS_RESTART_OFFSCREEN() {
+        try { await chrome.offscreen.closeDocument(); } catch (_) { /* dokumentu nie było */ }
+        await ensureOffscreen();
+        return { status: 'restarted' };
+    },
+    async INIT_TTS(msg) { return callOffscreen({ ...msg, ...(await ttsEngineFields()) }); },
+    async CLEAR_CACHE(msg) { return callOffscreen({ ...msg, ...(await ttsEngineFields()) }); },
+    async TTS_PRELOAD(msg) {
+        if (isBlockedPhrase(msg.text)) return { status: 'blocked' };   // fraza na czarnej liście — bez syntezy
+        const fields = await ttsEngineFields();
+        callOffscreen({ ...msg, ...fields }, 20).catch(() => {});   // nie czekamy: nagrywanie do przodu idzie w tle
+        return { status: 'queued' };
+    },
+    async TTS_PLAY(msg) {
+        if (isBlockedPhrase(msg.text)) return { status: 'blocked' };
+        return callOffscreen({ ...msg, ...(await ttsEngineFields(true)) });
+    },
+    // [AGENT-EXP] 2026-10-17: pauza / czyszczenie NIE tworzą i NIE zamykają dokumentu lektora. Wcześniej
+    // callOffscreen(…, allowKill) zamykał dokument, gdy ten (świeżo tworzony) nie odpowiedział na PING
+    // w ~1 s — YouTube wysyła je często, więc dokument był zabijany w kółko (serwery TTS widziały
+    // zerwane połączenie 1001, nagrania do przodu przepadały). Nie ma dokumentu = nie ma czego czyścić.
+    async TTS_PAUSE(msg) { if (await hasOffscreen()) sendOffscreen(msg).catch(() => {}); return { status: 'stopped' }; },
+    async TTS_CLEAR_BUFFER(msg) { if (await hasOffscreen()) sendOffscreen(msg).catch(() => {}); return { status: 'stopped' }; }
+};
 
 // ===== Nagrywanie lektora (REC) — orkiestracja sesji + pobieranie WAV =====
 // Przycisk REC na stronie (assets/rec_button.js) → tu → offscreen (zapis kwestii do IndexedDB).
@@ -630,7 +662,7 @@ async function lowcaInject(tabId) {
     await chrome.scripting.executeScript({
         target: { tabId, allFrames: true },
         world: 'MAIN',
-        files: ['assets/lowca_napisow.js']
+        files: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_napisow.js']   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
     });
     // GUI (checkbox „Pokazuj GUI Łowcy”) ustawiamy bezpośrednio w MAIN — nie zależy od mostka,
     // który po przeładowaniu rozszerzenia może zostać osierocony (flaga __LOWCA_BRIDGE__ w karcie).
@@ -649,7 +681,7 @@ async function lowcaInject(tabId) {
 // Na zapamiętanych domenach Łowca + lektor startują same (registerContentScripts), a znalezione
 // napisy idą prosto do lektora (lowca_auto.js → LOWCA_AUTO_CUES → LOWCA_AUTO_APPLY).
 // Lista do podglądu/usuwania: strona opcji, sekcja „Łowca napisów”.
-const LOWCA_ISOLATED = ['assets/lowca_bridge.js', 'assets/lowca_auto.js'];
+const LOWCA_ISOLATED = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_bridge.js', 'assets/lowca_auto.js'];   // [AGENT-EXP] 2026-10-21: i18n ustawia data-ml-lang dla Łowcy (MAIN)
 
 // [OCR-TOOL] OCR niezależny od Łowcy: menu przycisku CC → OCR_TOOL_CMD (wstrzyknij assets/ocr_tool.js do ramek
 // karty i przekaż komendę); strona → OCR_TOOL_RECOGNIZE / OCR_TOOL_STOP → silnik w dokumencie lektora (ocr_engine.js).
@@ -661,7 +693,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             if (msg.action === 'OCR_TOOL_CMD') {
                 const tabId = sender && sender.tab && sender.tab.id;
                 if (tabId == null) { sendResponse({ ok: false }); return; }
-                await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['assets/ocr_tool.js'] }).catch(() => {});
+                await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/ocr_tool.js'] }).catch(() => {});   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
                 chrome.tabs.sendMessage(tabId, { action: 'OCR_TOOL', cmd: msg.cmd }, (r) => {
                     void chrome.runtime.lastError;
                     sendResponse(r || { ok: false, novideo: true });
@@ -708,7 +740,7 @@ async function ccStubSync(on, injectOpen) {
         const reg = await chrome.scripting.getRegisteredContentScripts({ ids: [CC_STUB_ID] }).catch(() => []);
         if (on && !reg.length) {
             await chrome.scripting.registerContentScripts([{
-                id: CC_STUB_ID, js: ['assets/lowca_cc_stub.js'], matches: ['http://*/*', 'https://*/*'],
+                id: CC_STUB_ID, js: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_cc_stub.js'], matches: ['http://*/*', 'https://*/*'],
                 allFrames: false, runAt: 'document_idle'
             }]);
         } else if (!on && reg.length) {
@@ -717,7 +749,7 @@ async function ccStubSync(on, injectOpen) {
         if (on && injectOpen) {
             const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
             for (const t of tabs) {
-                chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['assets/lowca_cc_stub.js'] }).catch(() => {});
+                chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_cc_stub.js'] }).catch(() => {});   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
             }
         }
     } catch (e) { console.warn('[LiveDub SW] przycisk CC:', e); }
@@ -726,8 +758,8 @@ chrome.storage.local.get('lowcaGui').then((r) => ccStubSync(!!(r && r.lowcaGui),
 chrome.storage.onChanged.addListener((ch, area) => {
     if (area === 'local' && ch.lowcaGui) ccStubSync(!!ch.lowcaGui.newValue, true);
 });
-const LOWCA_LEKTOR_FRAMES = ['assets/options_hooks.js', 'assets/lektor_bar.js', 'assets/dom_content.js'];   // [AGENT-EXP] lektor_bar: 📊 pasek postępu
-const LOWCA_LEKTOR_TOP = ['assets/lektor-controls.js', 'assets/lektor-settings.js'];
+const LOWCA_LEKTOR_FRAMES = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/options_hooks.js', 'assets/lektor_bar.js', 'assets/dom_content.js'];   // [AGENT-EXP] 2026-10-21: i18n — język paneli   // [AGENT-EXP] lektor_bar: 📊 pasek postępu
+const LOWCA_LEKTOR_TOP = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lektor-controls.js', 'assets/lektor-settings.js'];   // [AGENT-EXP] 2026-10-21
 // Serwisy z wbudowanym lektorem (manifest) — tam nic nie dokładamy.
 const LOWCA_BUILTIN = /(^|\.)(netflix\.com|youtube\.com|youtube-nocookie\.com|primevideo\.com|amazon\.com|iq\.com|iqiyi\.com|dailymotion\.com|dai\.ly|rumble\.com|viki\.com|wetv\.vip|bilibili\.com|bilibili\.tv)$/;
 const LOWCA_SCRIPT_IDS = ['lowca-auto-isolated', 'lowca-auto-main', 'lowca-auto-lektor', 'lowca-auto-top'];
@@ -784,7 +816,7 @@ async function lowcaSyncScriptsNow() {
         if (!allM.length) return;
         const scripts = [
             { id: 'lowca-auto-isolated', js: LOWCA_ISOLATED, matches: allM, allFrames: true, runAt: 'document_start' },
-            { id: 'lowca-auto-main', js: ['assets/lowca_napisow.js'], world: 'MAIN', matches: allM, allFrames: true, runAt: 'document_start' },
+            { id: 'lowca-auto-main', js: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_napisow.js'], world: 'MAIN', matches: allM, allFrames: true, runAt: 'document_start' },
             { id: 'lowca-auto-lektor', js: LOWCA_LEKTOR_FRAMES, matches: allM, allFrames: true, runAt: 'document_idle' }
         ];
         if (topM.length) scripts.push({ id: 'lowca-auto-top', js: LOWCA_LEKTOR_TOP, matches: topM, allFrames: false, runAt: 'document_idle' });

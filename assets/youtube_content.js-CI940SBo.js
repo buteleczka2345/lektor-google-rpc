@@ -295,7 +295,9 @@ if (!('__lektorBufPauza' in window)) {
             if (res.engine !== undefined) engine = res.engine;
             if (typeof res.subtitleOffsetMs === 'number') storageOffsetMs = res.subtitleOffsetMs;
             if (engine !== 'offline') console.warn('[LiveDub] Silnik != offline. Tryb Immersive→Piper wymaga "Offline (Piper)" w popupie.');
+            duckReady = true;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
             if (enabled && document.visibilityState === 'visible' && !IS_EMBED) applyDuck();
+            else if (!enabled && !IS_EMBED) duckRestoreWhenVideo();   // [AGENT-EXP] 2026-10-20
         });
     }
     chrome.storage.onChanged.addListener(function (changes, area) {
@@ -332,24 +334,46 @@ if (!('__lektorBufPauza' in window)) {
                 __duckLastApply = now;
                 applyDuck();
             });
-            video.addEventListener('play', function () { if (enabled && !IS_EMBED) applyDuck(); });
+            video.addEventListener('play', function () { if (enabled && !IS_EMBED) applyDuck(); else if (!enabled && duckReady && !IS_EMBED && duckMemGet() !== null) restoreVolume(); });   // [AGENT-EXP] 2026-10-20
             if (enabled && tabFocused && !IS_EMBED) applyDuck();
         }
         return video;
     }
     // === EMBED: w ramce NIE duckujemy (mute oryginału załatwia sprawę); duck robi strona główna ===
+    // [AGENT-EXP] 2026-10-20: pamięć głośności sprzed ściszenia (localStorage strony). Netflix/YouTube same zapamiętują
+    // głośność — gdy karta zamknęła się w trakcie ściszenia, film startował na 20% i wyłączony lektor nie miał
+    // czego przywrócić. Teraz pierwotna głośność wraca (przy wyłączonym lektorze — przy starcie filmu).
+    var DUCK_MEM_KEY = 'lektorDuckOrig';
+    function duckMemGet() { try { var n = parseFloat(localStorage.getItem(DUCK_MEM_KEY)); return n > 0 && n <= 1 ? n : null; } catch (e) { return null; } }
+    function duckMemSet(v) { try { if (v === null) localStorage.removeItem(DUCK_MEM_KEY); else localStorage.setItem(DUCK_MEM_KEY, String(v)); } catch (e) {} }
+    function duckOrig(v) { if (savedVolume === null) { var m = duckMemGet(); if (m !== null && m > v.volume) savedVolume = m; } }
+    // [AGENT-EXP] 2026-10-20: lektor WYŁ., a w pamięci jest głośność sprzed ściszenia — czekamy na film (pojawia się
+    // później niż ustawienia) i przywracamy przy jego starcie (po tym, jak odtwarzacz ustawi swoją zapamiętaną).
+    function duckRestoreWhenVideo() {
+        var n = 0;
+        (function tryIt() {
+            if (enabled || duckMemGet() === null) return;
+            var v = getVideo();   // podpina też nasłuch 'play'
+            if (v) { if (!v.paused) restoreVolume(); return; }
+            if (++n < 120) setTimeout(tryIt, 1000);
+        })();
+    }
+    var duckReady = false;
     function applyDuck() {
         if (IS_EMBED) return;
+        if (!duckReady || !enabled) return;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
         var v = getVideo(); if (!v) return;
         var target = duckLevel / 100;
+        duckOrig(v);   // [AGENT-EXP] 2026-10-20
         if (savedVolume === null && v.volume > target) savedVolume = v.volume;
+        if (savedVolume !== null) duckMemSet(savedVolume);   // [AGENT-EXP] 2026-10-20
         if (savedVolume !== null) {
             v.volume = Math.min(target, savedVolume);
         } else if (v.volume > target) {
             v.volume = target;
         }
     }
-    function restoreVolume() { var v = getVideo(); if (v && savedVolume !== null) v.volume = savedVolume; savedVolume = null; }
+    function restoreVolume() { var v = getVideo(); if (v && !IS_EMBED) { duckOrig(v); duckMemSet(null); } if (v && savedVolume !== null) v.volume = savedVolume; savedVolume = null; }   // [AGENT-EXP] 2026-10-20: + pamięć
 
     // === HOVER: wyciszenie natywnego podglądu (poll 50 ms podbija, gdyby YT przywracał dźwięk) ===
     function muteHoverPreview() {
@@ -1397,7 +1421,7 @@ if (!('__lektorBufPauza' in window)) {
         } catch (e) {}
     }
 
-    function autoLoad(vid, attempt, skipMem) {
+    function autoLoad(vid, attempt, skipMem, noYtTr) {
         if (!attempt && !skipMem) {
             var memToken = ++autoToken;
             autoBusy = true;
@@ -1423,6 +1447,29 @@ if (!('__lektorBufPauza' in window)) {
         }
         var token = ++autoToken;
         autoBusy = true;
+        // [AGENT-EXP] 2026-10-21: najpierw polska wersja od YouTube („Automatyczne tłumaczenie”, tlang=pl — jak Live Dubbing):
+        // tłumaczy serwer YouTube, bez limitu. Nie wyszło (ścieżka nieprzetłumaczalna, pusto, błąd) → stara droga niżej.
+        if (!noYtTr && opt('ytTlangPl', true)) {
+            setStatus('Pobieram polskie napisy z YouTube…');
+            bridgeCall('get', { videoId: vid, tlang: 'pl' }, function (r) {
+                if (token !== autoToken) return;
+                if (!r.ok && /nie gotowy/i.test(r.error || '') && (attempt || 0) < 8) {
+                    setTimeout(function () { if (token === autoToken) autoLoad(vid, (attempt || 0) + 1, true); }, 2000);
+                    return;
+                }
+                var yc = r.ok && /^pl/i.test(r.lang || '') ? parseSrt(r.srt) : [];
+                if (!yc.length) { autoLoad(vid, attempt, true, true); return; }
+                // auto-napisy to kawałki zdań — przy „całych zdaniach” sklejamy je jak przy tłumaczeniu
+                yc = zdMerge(yc, 'src').map(function (c) { return { startMs: c.startMs, endMs: c.endMs, src: c.src, text: c.src }; });
+                ttSubs = yc;
+                ttPlayed.clear(); ttPreloaded.clear();
+                ytMemSave(vid, 'pl', yc);
+                autoBusy = false;
+                startTtLoop();
+                setStatus('Napisy PL' + (r.ytTr ? ' (tłumaczenie YouTube)' : '') + ': ' + yc.length + ' kwestii');
+            });
+            return;
+        }
         setStatus('Pobieram napisy…');
         bridgeCall('get', { videoId: vid }, function (r) {
             if (token !== autoToken) return;

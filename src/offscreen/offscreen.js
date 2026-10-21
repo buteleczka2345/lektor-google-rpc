@@ -1,4 +1,5 @@
 // Offscreen bootstrap: register the message listener before loading Sherpa.
+import BrowserTTSManager from './browser_tts.js';   // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki (Web Speech API)
 
 const SHERPA_VOICE = 'pl_PL-meski_wg_glos-medium';
 const TTS_NORM_VER = 'kropka2'; // znacznik wersji normalizacji — widoczny w logu offscreen (popup)
@@ -28,6 +29,49 @@ let audio8Voice = 'default';
 let pocketVoice = 'ref';   // [AGENT-EXP] ID głosu z VOICES w serwer_pocket.py
 let omnivoiceVoice = 'male, young adult, moderate pitch';   // [AGENT-EXP] opis głosu z VOICES w serwer_omnivoice.py
 let matchaVoice = 'v2:male_voxcpm_1:elegancki';   // [AGENT-EXP] 2026-10-17: ID głosu z VOICES w serwer_matcha.py (★ = nowe, naturalne)
+// [VOX] 2026-10-20: Supertonic — silnik przeniesiony z VoxNemesis (supertonic/engine.js). Liczy lokalnie,
+// na CPU (pula workerów) albo na karcie graficznej (WebGPU). Moduł ładowany dopiero przy pierwszym użyciu,
+// więc przy innych silnikach nie kosztuje nic. Zwraca WAV → ta sama kolejka/pamięć/nagrywanie co Pocket.
+const SUPERTONIC_VOICES = ['Supertonic M1', 'Supertonic M2', 'Supertonic F1', 'Supertonic F2'];
+let supertonicVoice = 'Supertonic M1';
+let supertonicSteps = 4;          // jakość: kroki dyfuzji (więcej = lepiej i wolniej)
+let engineBackend = 'cpu';        // 'cpu' | 'igpu' (GPU zintegrowana) | 'gpu' (GPU dedykowana)
+const supertonicInflight = new Map();   // id kwestii → { promise, ticket } — nagrywanie do przodu w toku
+let stGen = 0;        // rośnie przy zmianie silnika/głosu: wyniki starego głosu idą do kosza
+let stLiveGen = 0;    // rośnie przy pauzie/przewinięciu: kwestia „na teraz” nie wchodzi już do kolejki
+let stMod = null;     // załadowany moduł (do synchronicznych sprawdzeń: zajętość, status)
+// [AGENT-EXP] 2026-10-21: 🗣 Głos przeglądarki (ttsEngine 'browser') — speechSynthesis jak tryb Standard w DubMog.
+// Własna kolejka w browser_tts.js (nie playQueue): dźwięk nie idzie przez <audio>, więc bez pamięci nagrań,
+// nagrywania, wzmocnienia >100% i kompresora. Tworzony dopiero przy pierwszym użyciu.
+let browserVoice = '';   // nazwa głosu z popupu; '' = automatycznie (Google → Microsoft Natural → pl-PL → pl)
+let browserTts = null;
+function browserTtsGet() {
+    if (!browserTts) {
+        browserTts = new BrowserTTSManager('pl-PL', { log: offLogPush });
+        browserTts.setVoice(browserVoice);
+        // kolejka pusta → karty mogą zdjąć ściszenie / wznowić film (jak runQueue)
+        browserTts.onidle = () => { try { chrome.runtime.sendMessage({ action: 'TTS_QUEUE_IDLE' }).catch(() => {}); } catch (e) {} };
+    }
+    return browserTts;
+}
+let stModP = null;
+function supertonicEngine() {
+    if (!stModP) {
+        stModP = import('../../supertonic/engine.js').then((m) => {
+            m.setLogger(offLogPush);
+            m.configure({ backend: engineBackend });
+            stMod = m;
+            return m;
+        });
+        stModP.catch((e) => { stModP = null; offLogPush('supertonic-load-fail', errMsg(e)); });
+    }
+    return stModP;
+}
+function cancelSupertonicPreloads() {
+    stGen++;
+    supertonicInflight.clear();
+    if (stMod) stMod.cancelNormalWaiters();
+}
 let session = null;
 let sessionBusy = false;
 let sessionGen = 0;
@@ -200,7 +244,7 @@ function resumeAudioCtx() {
 function applySettings(s) {
     if (!s || typeof s !== 'object') return;
     if (s.ttsEngine !== undefined) {
-        const nextEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice'].indexOf(s.ttsEngine) >= 0 ? s.ttsEngine : 'sherpa';
+        const nextEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(s.ttsEngine) >= 0 ? s.ttsEngine : 'sherpa';
         if (nextEngine !== ttsEngine) {
             ttsEngine = nextEngine;
             cancelMatchaRequests();
@@ -209,6 +253,10 @@ function applySettings(s) {
             cancelPocketRequests();
             cancelOmnivoiceRequests();
             cancelRemotePreloads();   // [AGENT-EXP]
+            cancelSupertonicPreloads();   // [VOX]
+            // [VOX] inny silnik → Supertonic zwalnia workery / kartę (model zostaje pobrany na dysku)
+            if (stMod && nextEngine !== 'supertonic') stMod.resetEngine('Zmiana silnika');
+            if (browserTts && nextEngine !== 'browser') browserTts.stop();   // [AGENT-EXP] 🗣
             clearTtsPlayback();
             offLogPush('tts-engine', nextEngine);
         }
@@ -280,6 +328,40 @@ function applySettings(s) {
                 clearTtsPlayback();
             }
             offLogPush('omnivoice-voice', nextVoice || 'losowy');
+        }
+    }
+    // [VOX] Supertonic: zmiana głosu lub jakości czyści bufor poprzedniego głosu.
+    if (s.supertonicVoice !== undefined || s.supertonicSteps !== undefined) {
+        const nv = s.supertonicVoice === undefined ? supertonicVoice
+            : (SUPERTONIC_VOICES.indexOf(s.supertonicVoice) >= 0 ? s.supertonicVoice : 'Supertonic M1');
+        let ns = s.supertonicSteps === undefined ? supertonicSteps : Math.round(Number(s.supertonicSteps));
+        if (!Number.isFinite(ns) || ns < 1 || ns > 20) ns = 4;
+        if (nv !== supertonicVoice || ns !== supertonicSteps) {
+            supertonicVoice = nv;
+            supertonicSteps = ns;
+            if (ttsEngine === 'supertonic') {
+                cancelSupertonicPreloads();
+                clearTtsPlayback();
+            }
+            offLogPush('supertonic-voice', nv + ' · jakość ' + ns);
+        }
+    }
+    // [VOX] Supertonic: CPU ↔ GPU — workery wymieniane przy następnej kwestii.
+    if (s.engineBackend !== undefined) {
+        const nb = (s.engineBackend === 'gpu' || s.engineBackend === 'igpu') ? s.engineBackend : 'cpu';
+        if (nb !== engineBackend) {
+            engineBackend = nb;
+            if (stMod) stMod.configure({ backend: nb });
+            offLogPush('supertonic-sprzet', nb === 'gpu' ? 'GPU dedykowana' : nb === 'igpu' ? 'GPU zintegrowana' : 'CPU');
+        }
+    }
+    // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki wybrany w popupie ('' = automatycznie)
+    if (s.browserVoice !== undefined) {
+        const nv = typeof s.browserVoice === 'string' ? s.browserVoice : '';
+        if (nv !== browserVoice) {
+            browserVoice = nv;
+            if (browserTts) browserTts.setVoice(nv);
+            offLogPush('browser-voice', nv || 'automatycznie');
         }
     }
     if (s.ttsVolume !== undefined) {
@@ -556,6 +638,7 @@ function cancelAudio8Requests() {
 }
 
 function clearTtsPlayback() {
+    if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
     playQueue.length = 0;
     ordReset();
     finishCurrent();
@@ -617,13 +700,15 @@ function ttsDisk() {
     return ttsDiskDb;
 }
 function ttsPersistKey(msg) {
-    const eng = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice'].indexOf(msg.ttsEngine) >= 0 ? msg.ttsEngine : ttsEngine;
-    const voice = (eng === 'xtts' || eng === 'f5') ? (msg.tts2Voice !== undefined ? msg.tts2Voice : tts2Voice)
+    const eng = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(msg.ttsEngine) >= 0 ? msg.ttsEngine : ttsEngine;
+    const voice = eng === 'supertonic' ? ((msg.supertonicVoice || supertonicVoice) + '@' + (msg.supertonicSteps || supertonicSteps))   // [VOX]
+        : (eng === 'xtts' || eng === 'f5') ? (msg.tts2Voice !== undefined ? msg.tts2Voice : tts2Voice)
         : eng === 'audio8' ? (msg.audio8Voice || audio8Voice)
         : eng === 'pocket' ? (msg.pocketVoice || pocketVoice)
         : eng === 'omnivoice' ? (msg.omnivoiceVoice !== undefined ? msg.omnivoiceVoice : omnivoiceVoice)
         : eng === 'matcha' ? (msg.matchaVoice || matchaVoice)   // [AGENT-EXP] 2026-10-17: osobne nagrania dla każdego głosu
         : eng === 'sherpa' ? (msg.voiceId || voiceId) : '';
+    if (eng === 'browser') return '';   // [AGENT-EXP] 🗣 głos przeglądarki nie ma nagrań (pamięć / dysk)
     const text = censoredText(msg.text || '');
     return text && text.length >= 2 ? eng + '|' + voice + '|' + text : '';
 }
@@ -712,6 +797,30 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
             censorWords: (window.Censor && window.Censor.wordCount) ? window.Censor.wordCount() : 0
         });
     }
+    // [VOX] Stan silnika Supertonic dla popupu i strony Ustawień (sprzęt, karta, workery, pobieranie modelu).
+    if (msg.action === 'SUPERTONIC_STATUS') {
+        const base = { engine: ttsEngine, voice: supertonicVoice, steps: supertonicSteps, loaded: !!stMod };
+        sendResponse(Object.assign(base, stMod ? stMod.engineStatus()
+            : { backend: engineBackend, isolated: !!self.crossOriginIsolated, slotsReady: 0 }));
+        return;
+    }
+    // [AGENT-EXP] 2026-10-21: 🗣 lista głosów przeglądarki dla popupu
+    if (msg.action === 'BROWSER_TTS_VOICES') {
+        const m = browserTtsGet();
+        m.ready(1500).then(() => sendResponse({
+            ok: !!m.synth, voices: m.listVoices(),
+            selected: m.selectedVoice ? m.selectedVoice.name : ''
+        }));
+        return true;
+    }
+    if (msg.action === 'SUPERTONIC_RESTART') {
+        cancelSupertonicPreloads();
+        supertonicEngine()
+            .then((m) => { m.resetEngine('Restart z ustawień'); return m.warmUp(); })
+            .then(() => sendResponse({ ok: true }))
+            .catch((e) => sendResponse({ ok: false, error: errMsg(e) }));
+        return true;
+    }
 });
 
 
@@ -730,16 +839,17 @@ function keepAliveOn() {
 }
 chrome.runtime.onMessage.addListener((msg) => {
     if (!msg || msg.target !== 'offscreen') return;
-    if (msg.action === 'PING' || msg.action === 'GET_STATUS' || msg.action === 'TTS_CACHE_KEYS') return; // samo sprawdzenie stanu to nie praca
+    if (msg.action === 'PING' || msg.action === 'GET_STATUS' || msg.action === 'TTS_CACHE_KEYS' || msg.action === 'SUPERTONIC_STATUS' || msg.action === 'BROWSER_TTS_VOICES') return; // samo sprawdzenie stanu to nie praca
     lektorLastActivity = Date.now();
     keepAliveOn();
 });
 setInterval(() => {
     if (!lektorLastActivity) return;
-    if (queueActive || playQueue.length || sessionBusy || sherpaPool.some((w) => w.busy)) { lektorLastActivity = Date.now(); return; }
+    if (queueActive || playQueue.length || sessionBusy || sherpaPool.some((w) => w.busy) || (stMod && stMod.isBusy()) || (browserTts && browserTts.isBusy())) { lektorLastActivity = Date.now(); return; }
     if (Date.now() - lektorLastActivity < LEKTOR_IDLE_MS) return;
     lektorLastActivity = 0;
     try { terminatePool(); session = null; } catch (e) {}
+    try { if (stMod) stMod.resetEngine('Lektor bezczynny'); } catch (e) {}   // [VOX]
     const el = document.getElementById('keepAlive');
     if (el) { try { el.pause(); } catch (e) {} }
     console.info('[Offscreen] Lektor bezczynny ' + (LEKTOR_IDLE_MS / 60000) + ' min — model zwolniony, dokument się zamknie.');
@@ -1233,8 +1343,28 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
+        applySupertonicMsg(msg);   // [VOX]
+        // [VOX] Supertonic: pobiera model (pierwszy raz) i startuje pierwszy silnik — bez Sherpy.
+        if (ttsEngine === 'supertonic') {
+            supertonicEngine()
+                .then((m) => m.warmUp())
+                .then(() => sendResponse({ status: 'initialized', engine: 'supertonic' }))
+                .catch((err) => {
+                    recordBootError('Supertonic: ' + errMsg(err));
+                    sendResponse({ status: 'error', error: 'Supertonic: ' + errMsg(err) });
+                });
+            return true;
+        }
         if (ttsEngine === 'matcha') {
             sendResponse({ status: 'initialized', engine: 'matcha' });
+            return true;
+        }
+        // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki — tylko poczekaj na listę głosów
+        if (ttsEngine === 'browser') {
+            const m = browserTtsGet();
+            m.ready(1500).then((v) => sendResponse(m.synth
+                ? { status: 'initialized', engine: 'browser', voice: v ? v.name : '' }
+                : { status: 'error', error: 'Głos przeglądarki: brak Web Speech API (speechSynthesis)' }));
             return true;
         }
         // [AGENT-EXP] Nie inicjuj Sherpa, gdy wybrany jest serwer XTTS / F5.
@@ -1277,6 +1407,24 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
+        applySupertonicMsg(msg);   // [VOX]
+        if (msg.browserVoice !== undefined) applySettings({ browserVoice: msg.browserVoice });   // [AGENT-EXP] 🗣
+        // [AGENT-EXP] 2026-10-21: 🗣 głosu przeglądarki nie da się nagrać do przodu — czyta dopiero przy TTS_PLAY
+        if (ttsEngine === 'browser') {
+            sendResponse({ status: 'skipped', engine: 'browser' });
+            return true;
+        }
+        // [VOX] Supertonic: nagrywanie do przodu w zwykłym priorytecie (kwestia czytana teraz ma pierwszeństwo).
+        if (ttsEngine === 'supertonic') {
+            const text = censoredText(msg.text);
+            if (!text || text.length < 2) {
+                sendResponse({ status: 'muted' });
+                return true;
+            }
+            sendResponse({ status: 'preloading_supertonic' });
+            if (!supertonicInflight.has(msg.id)) supertonicPreload(msg, text);
+            return true;
+        }
         if (ttsEngine === 'matcha') {
             const { id } = msg;
             const text = censoredText(msg.text);
@@ -1425,6 +1573,29 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
+        applySupertonicMsg(msg);   // [VOX]
+        if (msg.browserVoice !== undefined) applySettings({ browserVoice: msg.browserVoice });   // [AGENT-EXP] 🗣
+        // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki — własna kolejka speechSynthesis (max MAX_QUEUE czekających,
+        // spóźnione kwestie z osi czasu pomijane jak w playQueue); tempo jak w playNext (popup × film wg tempoMode).
+        if (ttsEngine === 'browser') {
+            const btext = censoredText(msg.text);
+            if (!btext || btext.length < 2) { sendResponse({ status: 'muted' }); return true; }
+            const vr = Number(msg.rate) || 1;
+            const tempoMul = tempoMode === 'C' ? 1 : (tempoMode === 'B' ? (1 + (vr - 1) * 0.5) : vr);
+            let rate = clampSpeed(lectorSpeed * tempoMul);
+            const slotMs = Number(msg.slotMs) || 0;
+            if (slotMs > 0 && autoCatchup) {   // szacunek długości (14 znaków/s) zamiast duration z <audio>
+                const need = (btext.length / 14 * 1000) / slotMs;
+                if (need > rate) rate = Math.min(2.5, need);
+            }
+            browserTtsGet().speak(btext, {
+                clearQueue: false, rate, volume: lectorVolume, maxQueue: MAX_QUEUE, noSkip: !!msg.noSkip,
+                expireAt: slotMs > 0 && !msg.noSkip ? Date.now() + slotMs + 2500 : 0
+            });
+            offLogPush('play', String(msg.id || '').slice(0, 40) + ' (głos przeglądarki)');
+            sendResponse({ status: 'playing', engine: 'browser' });
+            return true;
+        }
         // [AGENT-EXP] Model/voice reset dotyczy wyłącznie wbudowanego Sherpa VITS.
         if (ttsEngine === 'sherpa') resetVoice(msg.voiceId);
         // noSkip: numer nadany przy przyjściu — gra w tej kolejności (patrz ordFlush)
@@ -1447,6 +1618,21 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             return true;
         }
         msg.text = ctext;
+        // [VOX] Supertonic: gotowy WAV do wspólnej kolejki (tempo, nagrywanie), jak Pocket.
+        if (ttsEngine === 'supertonic') {
+            playSupertonicStream(msg, put)
+                .then(() => {
+                    end();
+                    sendResponse({ status: 'playing', engine: 'supertonic' });
+                })
+                .catch((err) => {
+                    end();
+                    console.error('[Offscreen] Supertonic playback:', err);
+                    offLogPush('supertonic-play-fail', errMsg(err));
+                    sendResponse({ status: 'error', error: 'Supertonic: ' + errMsg(err) });
+                });
+            return true;
+        }
         if (ttsEngine === 'matcha') {
             playMatchaStream(msg, put)
                 .then(() => {
@@ -1533,6 +1719,8 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
     }
 
     if (msg.action === 'TTS_PAUSE') {
+        stLiveGen++;   // [VOX] Supertonic: kwestie liczone „na teraz” już nie wejdą do kolejki
+        if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
         cancelMatchaRequests();
         cancelXttsRequests();
         cancelAudio8Requests();
@@ -1547,6 +1735,8 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
     }
 
     if (msg.action === 'TTS_CLEAR_BUFFER') {
+        stLiveGen++;   // [VOX] Supertonic: kwestie liczone „na teraz” już nie wejdą do kolejki
+        if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
         cancelMatchaRequests();
         cancelXttsRequests();
         cancelAudio8Requests();
@@ -1890,6 +2080,98 @@ async function playXttsStream(msg, put, isF5) {   // [AGENT-EXP] isF5: lektor Ma
     put(url, msg.durationMs, msg.piperSpeed, msg.rate, msg.slotMs, msg.noSkip);
     recCapture(msg, blob).catch(() => {});
     offLogPush('xtts-play', String(msg.id || '').slice(0, 40));
+}
+
+// ===== [VOX] 2026-10-20: SUPERTONIC (silnik z VoxNemesis) =====
+// Background dołącza głos, jakość i sprzęt do każdej kwestii — pierwsza kwestia po zmianie od razu właściwa.
+function applySupertonicMsg(msg) {
+    if (msg.supertonicVoice !== undefined || msg.supertonicSteps !== undefined) {
+        applySettings({ supertonicVoice: msg.supertonicVoice, supertonicSteps: msg.supertonicSteps });
+    }
+    if (msg.engineBackend !== undefined) applySettings({ engineBackend: msg.engineBackend });
+}
+
+function supertonicJob(m, text, priority) {
+    return m.synthesizeWav(text, { priority, voiceName: supertonicVoice, steps: supertonicSteps });
+}
+
+// Nagrywanie do przodu: wynik do pamięci + dysku + nagrania. Zapisane w supertonicInflight, żeby TTS_PLAY
+// tej samej kwestii awansował syntezę (promoteTicket) zamiast liczyć ją drugi raz.
+function supertonicPreload(msg, text) {
+    const id = msg.id;
+    const gen = stGen;
+    const entry = { promise: null, ticket: null };
+    entry.promise = supertonicEngine().then((m) => {
+        const job = supertonicJob(m, text, 'normal');
+        entry.ticket = job.ticket;
+        return job.promise;
+    });
+    supertonicInflight.set(id, entry);
+    entry.promise
+        .then((blob) => {
+            if (gen !== stGen) return;   // w międzyczasie zmieniono głos / silnik
+            cacheRemoteTtsBlob(id, blob);
+            recCapture(msg, blob).catch(() => {});
+            offLogPush('supertonic-preload', String(id || '').slice(0, 40));
+        })
+        .catch((err) => {
+            if (gen === stGen && !/anulowano|zrestartowany|Zmiana/.test(errMsg(err))) offLogPush('supertonic-preload-fail', errMsg(err));
+        })
+        .finally(() => { if (supertonicInflight.get(id) === entry) supertonicInflight.delete(id); });
+}
+
+// Długie kwestie dzielimy po przecinkach/kropkach — pierwszy kawałek gra, gdy reszta jeszcze się liczy.
+// Podczas nagrywania (REC) nie dzielimy: nagranie ma jedną kwestię z jednym czasem.
+function splitForSupertonic(text) {
+    const t = String(text || '').trim();
+    if (t.length < 160) return null;
+    const frags = t.match(/[^.!?…,]+[.!?…,]+["'”’)\]]*\s*|[^.!?…,]+$/g) || [t];
+    const chunks = [frags[0].trim()];
+    let cur = '';
+    for (let i = 1; i < frags.length; i++) {
+        const f = frags[i];
+        if (cur && (cur + f).length > 120) { chunks.push(cur.trim()); cur = f; }
+        else cur += f;
+    }
+    if (cur.trim()) chunks.push(cur.trim());
+    return chunks.length > 1 ? chunks : null;
+}
+
+async function playSupertonicStream(msg, put) {
+    const gen = stGen, live = stLiveGen;
+    const stale = () => gen !== stGen || live !== stLiveGen;   // pauza / przewinięcie / zmiana głosu w trakcie
+    const m = await supertonicEngine();
+    const inflight = supertonicInflight.get(msg.id);
+    if (inflight) {
+        if (inflight.ticket) m.promoteTicket(inflight.ticket);
+        const blob = await inflight.promise;
+        if (stale()) return;
+        const url = audioCache.get(msg.id) || cacheRemoteTtsBlob(msg.id, blob);
+        put(url, msg.durationMs, msg.piperSpeed, msg.rate, msg.slotMs, msg.noSkip);
+        offLogPush('supertonic-play', String(msg.id || '').slice(0, 40) + ' (z nagrywania do przodu)');
+        return;
+    }
+    const chunks = recState.recording ? null : splitForSupertonic(msg.text);
+    if (!chunks) {
+        const blob = await supertonicJob(m, msg.text, 'urgent').promise;
+        if (gen !== stGen) return;
+        const url = cacheRemoteTtsBlob(msg.id, blob);   // do pamięci także po pauzie — przyda się po wznowieniu
+        recCapture(msg, blob).catch(() => {});
+        if (live !== stLiveGen) return;
+        put(url, msg.durationMs, msg.piperSpeed, msg.rate, msg.slotMs, msg.noSkip);
+        offLogPush('supertonic-play', String(msg.id || '').slice(0, 40));
+        return;
+    }
+    // wszystkie kawałki od razu w kolejce silnika (przy kilku workerach liczą się równolegle)
+    const jobs = chunks.map((c) => supertonicJob(m, c, 'urgent').promise);
+    jobs.forEach((j) => j.catch(() => {}));
+    for (let i = 0; i < jobs.length; i++) {
+        const blob = await jobs[i];
+        if (stale()) return;
+        const url = cacheRemoteTtsBlob(msg.id + '#' + i, blob);
+        put(url, 0, msg.piperSpeed, msg.rate, 0, msg.noSkip, msg.id);
+        offLogPush('supertonic-play', 'paczka ' + (i + 1) + '/' + chunks.length + ' · ' + String(msg.id || '').slice(0, 40));
+    }
 }
 
 // [AGENT-EXP] Pocket-TTS-PL: kwestia czytana teraz idzie z flagą pilne; długie teksty partiami (limit 2000).

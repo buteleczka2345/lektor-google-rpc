@@ -2,7 +2,7 @@
 // Cienki pasek na dole filmu, zgodny z osią czasu filmu (jak bufor w odtwarzaczu). Każda kwestia w swoim miejscu:
 //   pomarańczowa = dźwięk nagrany (gotowy w pamięci lektora),  zielona = lektor już przeczytał,
 //   jasnoszara = tekst gotowy, dźwięku jeszcze nie ma,  ciemna = czeka na tłumaczenie;  biała kreska = teraz.
-// Po prawej: „🔊 nagrane do przodu 2:35 (41 kwestii) · przetłumaczone 340/812”.
+// Po prawej: „🔊 nagrane do przodu 2:35 (41 kwestii) · przetłumaczone 340/812” (Netflix: „napisy gotowe” — noTranslate).
 // Dźwięk: background (LEKTOR_AUDIO_KEYS) podaje klucze nagrań tej karty z pamięci lektora (offscreen),
 // klucz kwestii = id + '|' + skrót tekstu (ten sam co ttsCacheId w background.js).
 // Skrypty lektora (youtube_content, dom_content, content.js Netflix, full_subs_ondemand) podają swoje kwestie
@@ -50,6 +50,7 @@
         lbl.style.cssText = 'position:absolute;right:4px;bottom:9px;font:600 11px system-ui,sans-serif;color:#fff;'
             + 'background:rgba(0,0,0,.55);padding:1px 6px;border-radius:8px;white-space:nowrap;';
         box.appendChild(cv); box.appendChild(lbl);
+        try { if (self.MLi18n) { MLi18n.watch(box); } } catch (e) {}   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
     }
     function hide() { if (box) box.style.display = 'none'; lastSig = ''; }
 
@@ -125,7 +126,8 @@
         }
         g.fillStyle = '#fff';
         g.fillRect(Math.min(W - 2, Math.max(0, (now / durMs) * W - 1)), 0, 2, H);
-        lbl.textContent = '🔊 nagrane do przodu ' + mmss(aheadEnd - now) + ' (' + aheadN + ' kwestii) · przetłumaczone ' + ready + '/' + list.length;
+        // [AGENT-EXP] 2026-10-20: dostawca bez tłumaczenia (Netflix — czyta napisy jak są) → „napisy gotowe”, nie „przetłumaczone”
+        lbl.textContent = '🔊 nagrane do przodu ' + mmss(aheadEnd - now) + ' (' + aheadN + ' kwestii) · ' + (d.noTranslate ? 'napisy gotowe ' : 'przetłumaczone ') + ready + '/' + list.length;
     }
     setInterval(tick, 500);
 })();

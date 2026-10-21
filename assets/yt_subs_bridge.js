@@ -16,8 +16,8 @@
     function keyFromUrl(url) {
         try {
             var u = new URL(url, location.origin);
-            if (u.searchParams.get('tlang')) return null; // pomijamy auto-tłumaczenie YouTube
-            return [u.searchParams.get('v'), u.searchParams.get('lang'), u.searchParams.get('kind') || ''].join('|');
+            // [AGENT-EXP] 2026-10-21: auto-tłumaczenie YouTube (tlang) ma własny klucz — nie miesza się z oryginałem
+            return [u.searchParams.get('v'), u.searchParams.get('lang'), u.searchParams.get('kind') || '', u.searchParams.get('tlang') || ''].join('|');
         } catch (e) { return null; }
     }
     function store(url, text) {
@@ -118,14 +118,18 @@
             || tracks[0] || null;
     }
 
-    async function getRaw(track, videoId) {
-        var key = [videoId, track.languageCode, track.kind || ''].join('|');
+    // [AGENT-EXP] 2026-10-21: tlang ('pl') = ścieżka przetłumaczona przez YouTube („Automatyczne tłumaczenie” w odtwarzaczu,
+    // jak w Live Dubbing) — tłumaczy serwer YouTube, bez limitu. Wzór: cenzor_main.js autoLoad.
+    async function getRaw(track, videoId, tlang) {
+        tlang = tlang || '';
+        var key = [videoId, track.languageCode, track.kind || '', tlang].join('|');
         if (cache.has(key)) return cache.get(key);
         try { // próba 1: bezpośredni fetch
             var u = new URL(track.baseUrl, location.origin);
             u.searchParams.set('fmt', 'json3');
+            if (tlang) u.searchParams.set('tlang', tlang);
             var t = await (await origFetch(u.toString(), { credentials: 'include' })).text();
-            if (t && t.trim()) return t;
+            if (t && t.trim() && (!tlang || parseRaw(t).length)) return t;   // [AGENT-EXP] tłumaczenie: tylko gdy są kwestie
         } catch (e) {}
         // próba 2: player sam ładuje ścieżkę, my łapiemy odpowiedź
         var player = getPlayer();
@@ -135,6 +139,7 @@
         await sleep(300);
         var list = player.getOption('captions', 'tracklist') || [];
         var target = list.filter(function (x) { return x.languageCode === track.languageCode && (x.kind || '') === (track.kind || ''); })[0] || { languageCode: track.languageCode };
+        if (tlang) target = Object.assign({}, target, { translationLanguage: { languageCode: tlang, languageName: 'Polski' } });   // [AGENT-EXP]
         player.setOption('captions', 'track', target);
         for (var i = 0; i < 30 && !cache.has(key); i++) await sleep(200);
         try {
@@ -216,9 +221,14 @@
             if (!info.videoId || (d.videoId && info.videoId !== d.videoId)) throw new Error('Player jeszcze nie gotowy');
             if (!info.tracks.length) throw new Error('Ten film nie ma napisów');
             var track = pickTrack(info.tracks);
-            var cues = parseRaw(await getRaw(track, info.videoId));
+            // [AGENT-EXP] 2026-10-21: d.tlang = 'pl' → polska wersja od YouTube (polska ścieżka zostaje sobą)
+            var isPlTrack = /^pl/i.test(track.languageCode || '');
+            var tl = d.tlang && !isPlTrack ? d.tlang : '';
+            if (tl && track.isTranslatable === false) throw new Error('YouTube nie tłumaczy tej ścieżki');
+            var cues = parseRaw(await getRaw(track, info.videoId, tl));
             if (!cues.length) throw new Error('Pusty plik napisów');
-            reply(d.reqId, { done: true, ok: true, videoId: info.videoId, lang: track.languageCode, kind: track.kind || '', srt: toSrt(cues) });
+            reply(d.reqId, { done: true, ok: true, videoId: info.videoId, lang: tl || track.languageCode, kind: track.kind || '',
+                ytTr: tl ? 1 : 0, srcLang: track.languageCode, srt: toSrt(cues) });
         } catch (err) {
             reply(d.reqId, { done: true, ok: false, error: String((err && err.message) || err) });
         }

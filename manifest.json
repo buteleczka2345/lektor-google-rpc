@@ -1,9 +1,10 @@
 {
     "update_url": "https://clients2.google.com/service/update2/crx",
     "manifest_version": 3,
-    "name": "Lektor Multilanguage",
-    "version": "3.0.6",
-    "description": "Lektor na YouTube, Netflix i wiele innych stron",
+    "name": "__MSG_extName__",
+    "default_locale": "pl",
+    "version": "3.4.0",
+    "description": "__MSG_extDesc__",
     "permissions": [
         "activeTab",
         "storage",
@@ -60,6 +61,7 @@
         },
         {
             "js": [
+                "assets/cenzor_main.js",
                 "assets/phrase_dict.js",
                 "assets/yt_subs_bridge.js"
             ],
@@ -71,6 +73,50 @@
         },
         {
             "js": [
+                "assets/cenzor_main.js"
+            ],
+            "matches": [
+                "*://*.netflix.com/*",
+                "*://*.primevideo.com/*",
+                "*://*.amazon.com/video/*",
+                "*://*.iq.com/*",
+                "*://*.iqiyi.com/*",
+                "*://*.dailymotion.com/*",
+                "*://dai.ly/*",
+                "*://*.rumble.com/*",
+                "*://*.viki.com/*",
+                "*://*.wetv.vip/*",
+                "*://*.bilibili.com/*",
+                "*://*.bilibili.tv/*"
+            ],
+            "run_at": "document_start",
+            "world": "MAIN"
+        },
+        {
+            "js": [
+                "assets/cenzor_bridge.js"
+            ],
+            "matches": [
+                "*://*.youtube.com/*",
+                "*://*.netflix.com/*",
+                "*://*.primevideo.com/*",
+                "*://*.amazon.com/video/*",
+                "*://*.iq.com/*",
+                "*://*.iqiyi.com/*",
+                "*://*.dailymotion.com/*",
+                "*://dai.ly/*",
+                "*://*.rumble.com/*",
+                "*://*.viki.com/*",
+                "*://*.wetv.vip/*",
+                "*://*.bilibili.com/*",
+                "*://*.bilibili.tv/*"
+            ],
+            "run_at": "document_start"
+        },
+        {
+            "js": [
+                "assets/i18n_en.js",
+                "assets/i18n.js",
                 "assets/options_hooks.js",
                 "assets/lektor-controls.js",
                 "assets/lektor-settings.js"
@@ -94,6 +140,8 @@
         },
         {
             "js": [
+                "assets/i18n_en.js",
+                "assets/i18n.js",
                 "assets/lektor_bar.js",
                 "assets/content.js-BgeP3Ise.js"
             ],
@@ -104,6 +152,8 @@
         },
         {
             "js": [
+                "assets/i18n_en.js",
+                "assets/i18n.js",
                 "assets/lektor_bar.js",
                 "assets/sub_panel.js",
                 "assets/youtube_content.js-CI940SBo.js"
@@ -116,6 +166,8 @@
         },
         {
             "js": [
+                "assets/i18n_en.js",
+                "assets/i18n.js",
                 "assets/lektor_bar.js",
                 "assets/dom_content.js",
                 "assets/auto_subs.js"
@@ -131,6 +183,8 @@
         },
         {
             "js": [
+                "assets/i18n_en.js",
+                "assets/i18n.js",
                 "assets/lektor_bar.js",
                 "assets/dom_content.js"
             ],
@@ -144,6 +198,8 @@
         },
         {
             "js": [
+                "assets/i18n_en.js",
+                "assets/i18n.js",
                 "assets/lektor_bar.js",
                 "assets/dom_content.js",
                 "assets/auto_subs.js"
@@ -170,17 +226,17 @@
     "commands": {
         "glos-toggle": {
             "suggested_key": { "default": "Alt+Shift+1" },
-            "description": "Mój głos → tekst: start / stop"
+            "description": "__MSG_cmdGlos__"
         },
         "karta-toggle": {
             "suggested_key": { "default": "Alt+Shift+2" },
-            "description": "Film w karcie → napisy: start / stop"
+            "description": "__MSG_cmdKarta__"
         }
     },
     "options_page": "src/options/options.html",
     "action": {
         "default_popup": "src/popup/popup.html",
-        "default_title": "Lektor Multilanguage - ustawienia",
+        "default_title": "__MSG_actionTitle__",
         "default_icon": {
             "16": "icon-16.png",
             "48": "icon-48.png",
@@ -224,6 +280,12 @@
             "use_dynamic_url": false
         }
     ],
+    "cross_origin_embedder_policy": {
+        "value": "require-corp"
+    },
+    "cross_origin_opener_policy": {
+        "value": "same-origin"
+    },
     "content_security_policy": {
         "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
     }

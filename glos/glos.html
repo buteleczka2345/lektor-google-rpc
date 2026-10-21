@@ -18,6 +18,9 @@
     button { flex: 1; background: #2d3340; color: #fff; border: 1px solid #555; border-radius: 6px; padding: 5px; font: 12px Arial; cursor: pointer; }
     #stop { background: #4a2a2a; }
 </style>
+<!-- [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN) -->
+<script src="../assets/i18n_en.js"></script>
+<script src="../assets/i18n.js" data-page></script>
 </head>
 <body>
 <div id="state" class="wait">Uruchamiam…</div>
@@ -25,8 +28,8 @@
 <div class="info" id="dfn"></div>
 <div class="info" id="loc"></div>
 <button id="locBtn" style="display:none;background:#1e3a55;width:100%;margin-top:4px;">⬇ Pobierz lokalny model mowy</button>
-<div id="live"></div>
-<div id="sent"></div>
+<div id="live" data-noi18n></div>
+<div id="sent" data-noi18n></div>
 <div class="btns">
     <button id="pause">⏸ Pauza</button>
     <button id="stop">✕ Zakończ (Alt+Shift+1)</button>

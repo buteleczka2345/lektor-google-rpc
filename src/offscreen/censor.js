@@ -362,6 +362,21 @@
         tn: ['masepa', 'tshwene', 'setshwene', 'phoofolo', 'sethoto', 'lefela'],
     };
 
+    // [AGENT-EXP] 2026-10-19: WZORCE Z GWIAZDKĄ (dowolna końcówka) — polska lista wyżej to pojedyncze formy,
+    // więc odmiany spoza niej („pierdolisz”, „spierdolił”, „zajebał”, „wkurwiony”, „przejebane”) lektor czytał
+    // na głos. Te same rdzenie co w 🤐 Cenzorze filmu (assets/cenzor_main.js). Gwiazdka działa też we własnych
+    // słowach z popupu (np. „cholern*”). Celowo BEZ „cip*” (łapałoby angielskie „cipher”) — formy cipa/cipka
+    // są na liście wyżej.
+    var STEMS = ['kurw*', 'kurew*', 'nakurw*', 'wkurw*', 'zakurw*', 'rozkurw*', 'pokurw*', 'skurwysyn*', 'skurwi*',
+        'chuj*', 'huj*', 'pizd*', 'spizdz*', 'wypizdz*', 'przypizdz*', 'zapizdz*', 'popizdz*', 'podpizdz*',
+        'dziwk*', 'jeb*', 'wjeb*', 'podjeb*', 'przyjeb*', 'ujeb*', 'zjeb*',
+        'pierdol*', 'pierdal*', 'spierdol*', 'spierdal*', 'wypierdol*', 'wypierdal*',
+        'odpierdol*', 'odpierdal*', 'napierdal*', 'rozpierdal*', 'zapierdal*', 'rozpierdol*',
+        'przepierdal*', 'opierdal*', 'wpierdal*', 'dopierdol*', 'dopierdal*',
+        'przypierdol*', 'przypierdal*', 'podpierdol*', 'podpierdal*', 'popierdol*', 'popierdal*',
+        'zajeb*', 'dojeb*', 'pojeb*', 'najeb*', 'wyjeb*', 'odjeb*', 'rozjeb*', 'przejeb*',
+        'fuck*', 'motherfuck*'];
+
     var cfg = { enabled: true, mode: DEFAULT_MODE, custom: [] };
     var reBounded = null;   // pisma ze spacjami (łacina, cyrylica, arabski, dewanagari...)
     var reUnbounded = null; // pisma bez spacji (japoński, chiński, tajski) — dopasowanie podciągiem
@@ -418,12 +433,18 @@
             (isNoSpaceScript(w) ? unbounded : bounded).push(w);
         }
         Object.keys(LISTS).forEach(function (k) { LISTS[k].forEach(add); });
+        STEMS.forEach(add);   // [AGENT-EXP] 2026-10-19
         (cfg.custom || []).forEach(add);
+        // [AGENT-EXP] 2026-10-19: „rdzeń*” = rdzeń + dowolne litery (kurw* → kurwa, kurwami, kurwiszon…).
+        function pat(w) {
+            if (w.length > 2 && w.charAt(w.length - 1) === '*') return esc(w.slice(0, -1)) + '\\p{L}*';
+            return esc(w.replace(/\*+$/, ''));
+        }
         function build(arr, withBounds) {
             if (!arr.length) return null;
             // Dłuższe warianty pierwsze — alternacja łapie najdłuższe dopasowanie.
             arr.sort(function (a, b) { return b.length - a.length; });
-            var body = arr.map(esc).join('|');
+            var body = arr.map(withBounds ? pat : esc).join('|');
             if (withBounds) {
                 try {
                     return new RegExp('(?<!\\p{L})(?:' + body + ')(?!\\p{L})', 'giu');
@@ -458,7 +479,7 @@
             .replace(/\s+([,.!?;:…])/g, '$1')
             .replace(TIGHTEN_AFTER, '$1')
             .replace(TIGHTEN_BEFORE, '$1');
-        return t.replace(/^\s+/, '').replace(/\s+$/, '');
+        return t.replace(/^[\s,;:]+/, '').replace(/\s+$/, '');   // [AGENT-EXP] 2026-10-19: bez „, stary.” po wycięciu
     }
 
     function applySettings(s) {

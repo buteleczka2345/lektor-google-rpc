@@ -158,7 +158,9 @@
         blockedBox = document.createElement('div');
         blockedBox.style.cssText = 'padding:3px 8px;border-bottom:1px solid rgba(255,255,255,0.12);max-height:54px;overflow-y:auto;';
         box.appendChild(blockedBox);
+        blockedBox.setAttribute('data-noi18n', '');   // [AGENT-EXP] 2026-10-21: frazy użytkownika
         list = document.createElement('div');
+        list.setAttribute('data-noi18n', '');   // [AGENT-EXP] 2026-10-21: czytane napisy — nigdy nie tłumaczymy
         list.style.cssText = 'overflow-y:auto;flex:1;min-height:0;';
         box.appendChild(list);
         root.appendChild(box);
@@ -169,6 +171,7 @@
         pill.style.cssText = 'position:fixed;left:10px;bottom:10px;z-index:2147483647;display:none;align-items:center;gap:5px;background:rgba(18,18,22,0.94);color:#eee;border:1px solid rgba(255,255,255,0.25);border-radius:999px;padding:4px 10px;font:10px system-ui,sans-serif;cursor:pointer;';
         pill.addEventListener('click', function () { setPanelVisible(true); });
         root.appendChild(pill);
+        try { if (self.MLi18n) { MLi18n.watch(box); MLi18n.watch(pill); } } catch (e) {}   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
         renderChips();
         applyVisibility();
         try { applyUiOptions(); } catch (e) {} // OPTIONS-PAGE
