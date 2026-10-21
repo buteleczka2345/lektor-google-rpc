@@ -4,6 +4,8 @@
 
 > Rozszerzenie zamienia **obce napisy / mowę w filmie na polskiego lektora czytanego na żywo** — bezpośrednio na stronie (YouTube, Netflix, Prime Video, iQIYI, WeTV, Viki, Bilibili, Dailymotion, Rumble i inne). Tłumaczy lokalnie (Translator Chrome) albo przez silniki sieciowe (Google RPC, Bing, DeepL, AI), czyta wbudowanym głosem **Sherpa VITS pl_PL-meski_wg_glos-medium** albo zewnętrznymi serwerami TTS przez WebSocket. Ma też **Łowcę Napisów**, **OCR napisów wtopionych w obraz** (Tesseract + PP-OCRv6 ONNX), **cenzora przekleństw**, **Głos i Napisy** (dyktowanie + napisy z karty), pamięć napisów i tłumaczeń (IndexedDB, 90 dni) oraz stronę ustawień i benchmark OCR.
 
+> 💡 **Przerabiaj go po swojemu!** Ten program możesz dowolnie zmieniać pod własne potrzeby — i gorąco zachęcam, żeby go ulepszać. Szczegóły niżej w „🛠️ Wolno modyfikować”.
+
 ## 🆕 Co nowego (3.1 → 3.4.0)
 
 - **Nowa nazwa: Multilektor** (wcześniej „Lektor Multilanguage”). Nazwa i opis w dwóch językach przez `_locales/pl` i `_locales/en`.
@@ -31,7 +33,9 @@ Sam model głosu to Supertone Supertonic 3 (ONNX), pobierany z Hugging Face przy
 
 ## 🛠️ Wolno modyfikować
 
-**Tak — ten projekt jest otwarty do modyfikowania.** Możesz go forkować, poprawiać, tłumaczyć, dokładać silniki TTS / tłumaczy, zmieniać UI i używać fragmentów we własnych projektach. Jeśli opublikujesz zmodyfikowaną wersję, dopisz skąd pochodzi oryginał i nie usuwaj informacji o licencjach modeli z folderów `glos/dfn`, `ppocr`, `ocr`, `sherpa`.
+**Tak — ten projekt jest otwarty do modyfikowania, a nawet do tego zachęcam.** Przerób go pod swoje potrzeby: inny język lektora, inne strony z filmami, własny głos, własny tłumacz, inny wygląd — co tylko Ci się przyda. Możesz go forkować, poprawiać, tłumaczyć, dokładać silniki TTS / tłumaczy, zmieniać UI i używać fragmentów we własnych projektach. Jeśli opublikujesz zmodyfikowaną wersję, dopisz skąd pochodzi oryginał i nie usuwaj informacji o licencjach modeli z folderów `glos/dfn`, `ppocr`, `ocr`, `sherpa`.
+
+Masz poprawkę albo pomysł, z którego skorzystają też inni? Śmiało — otwórz *Issue* albo wyślij *Pull Request*. Każde ulepszenie jest mile widziane: od literówki w opisie po nowy silnik mowy.
 
 ## ✨ Co to robi (w 30 sekund)
 
