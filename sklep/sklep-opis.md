@@ -1,6 +1,6 @@
-# Multilektor 3.4.0 — teksty do Chrome Web Store (do wklejenia)
+# Multilektor 3.5.0 — teksty do Chrome Web Store (do wklejenia)
 
-Paczka: `lektor najnowszy\Multilektor-3.4.0-sklep-2026-10-21.zip` (210 MB, 461 plików, bez kopii .bak, testów i `update_url`).
+Paczka: `lektor najnowszy\Multilektor-3.5.0-sklep-2026-10-21.zip` (210 MB, 461 plików, bez kopii .bak, testów i `update_url`).
 Nową paczkę zbudujesz poleceniem `python "_zbuduj_paczke_sklep.py"` w folderze `lektor najnowszy`.
 
 ---
@@ -11,7 +11,7 @@ wersję zgodną z językiem klienta:
 - **Nazwa:** Multilektor
 - **Krótki opis (126/132 znaki):** Polski lektor do filmów: czyta napisy na głos na YouTube, Netflixie i innych stronach, tłumaczy je i ścisza film na czas mowy.
 - **Krótki opis EN (127/132):** Polish voice-over for videos: reads subtitles aloud on YouTube, Netflix and more, translates them and lowers the video's sound.
-- **Wersja:** 3.4.0
+- **Wersja:** 3.5.0
 
 ---
 
