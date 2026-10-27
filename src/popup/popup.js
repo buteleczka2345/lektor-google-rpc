@@ -220,7 +220,7 @@ function updateCustomVoiceUi(cv) {
     if (voiceSelect) voiceSelect.disabled = enabled;
     if (foot) foot.textContent = enabled
         ? 'Wbudowany głos wstrzymany — aktywny jest własny (poniżej).'
-        : 'Jedyny głos w paczce — oryginalny, wbudowany model Sherpa-onnx (VITS). Nie ma innych głosów do wyboru.';
+        : 'Sherpa nie ma wbudowanego głosu — aktywuj głos z listy poniżej.';   // [AGENT-EXP] 2026-10-24
     if (!detail) return;
     if (enabled) {
         detail.textContent = '✓ Aktywny własny głos: „' + (cv.name || 'model') + '” (' + fmtBytes(cv.sizeOnnx) + ').';
@@ -228,7 +228,7 @@ function updateCustomVoiceUi(cv) {
         if (btn) btn.textContent = '📂 Zamień pliki własnego głosu…';
     } else {
         detail.textContent = (cv && cv._failed)
-            ? '⛔ Własny głos „' + (cv.name || '') + '” nie wystartował — działa wbudowany. Przyczyna: log silnika w sekcji „Test lektora”. Możesz wczytać pliki ponownie.'
+            ? '⛔ Własny głos „' + (cv.name || '') + '” nie wystartował. Przyczyna: log silnika w sekcji „Test lektora”. Możesz wczytać pliki ponownie.'   // [AGENT-EXP] 2026-10-24
             : 'Wskaż 3 pliki modelu Sherpa/Piper: model.onnx + tokens.txt + model.onnx.json (json opcjonalny). Głos zapisze się w rozszerzeniu i przeżyje restart przeglądarki.';
         detail.className = (cv && cv._failed) ? 'footnote err' : 'footnote';
         if (btn) btn.textContent = '📂 Wskaż pliki własnego głosu (onnx + txt + json)';
@@ -328,7 +328,7 @@ async function deleteVoice(v) {
         });
     }
     refreshCustomVoiceUi();
-    if (st) st.textContent = '🗑 Usunięto „' + (v.name || v.id) + '”' + (wasActive ? ' (był aktywny — wrócono na wbudowany głos).' : '.');
+    if (st) st.textContent = '🗑 Usunięto „' + (v.name || v.id) + '”' + (wasActive ? ' (był aktywny — Sherpa nie ma teraz głosu).' : '.')   // [AGENT-EXP] 2026-10-24;
 }
 async function refreshCustomVoiceUi() {
     const { active, list } = await loadVoiceState();
@@ -469,7 +469,7 @@ async function init() {
             chrome.storage.local.set({ customVoice: { enabled: false, id: '', name: '', sizeOnnx: 0, savedAt: Date.now() } }, () => {
                 try { chrome.runtime.sendMessage({ action: 'TTS_RESTART_OFFSCREEN' }); } catch (e) {}
                 refreshCustomVoiceUi();
-                if (customStatus) customStatus.textContent = 'Wrócono do wbudowanego głosu (własne głosy zostały w pamięci).';
+                if (customStatus) customStatus.textContent = 'Własny głos wyłączony (głosy zostały w pamięci).'   // [AGENT-EXP] 2026-10-24;
             });
         });
     }
@@ -1472,6 +1472,7 @@ function langNormalizeCatalog(json) {
             id: id,
             type: type,
             dl: dl,
+            voice: langVoiceName(m, url, type),   // [AGENT-EXP] 2026-10-24: nazwa lektora (np. meski_wg_glos, mai_female)
             name: String(lang['Language Name'] || lang.language_name || key),
             iso: String(lang['Iso Code'] || lang.lang_code || ''),
             country: String(lang['Country'] || lang.country || ''),
@@ -1484,6 +1485,180 @@ function langNormalizeCatalog(json) {
     out.sort((a, b) => a.name.localeCompare(b.name, 'pl'));
     return out;
 }
+// [AGENT-EXP] 2026-10-24: nazwa lektora z katalogu. Piper: z nazwy paczki (vits-piper-pl_PL-meski_wg_glos-medium →
+// „meski_wg_glos (medium)”), bo pole name bywa samą jakością („medium”). Coqui: name (mai_female). MMS: brak.
+function langVoiceName(m, url, type) {
+    const q = String(m.quality || '');
+    if (type === 'piper') {
+        const r = /\/vits-piper-[a-z]{2,3}(?:_[A-Za-z]{2})?-(.+?)\.tar\.bz2$/.exec(url);
+        let v = r ? r[1] : String(m.name || '');
+        if (q && v.endsWith('-' + q)) v = v.slice(0, -q.length - 1);
+        return v + (q && q !== 'unknown' ? ' (' + q + ')' : '');
+    }
+    if (type === 'mms') return '';
+    const n = String(m.name || '');
+    return n && n !== q ? n : '';
+}
+// [AGENT-EXP] 2026-10-24: 🌐 Matcha-TTS-PL-Edge-v2 (liczony w przeglądarce, matcha_web/) — pobieranie z HuggingFace do
+// pamięci rozszerzenia (klucze 'matcha/<głos>/<plik>'); worker czyta stamtąd, gdy modelu nie ma w paczce.
+const MATCHA_REPO = 'https://huggingface.co/machinekind/Matcha-TTS-PL-Edge-v2/resolve/main/';
+const MATCHA_FILES = ['voices.json', 'encoder_sdp_int8.onnx', 'decoder_t4_int8.onnx', 'vocoder.onnx'];   // [AGENT-EXP] 2026-10-24: INT8 osobno od F32 (~27 MB)
+const MATCHA_STORE = [
+    { id: 'matcha-male_voxcpm_2', mv: 'male_voxcpm_2', voice: 'Matcha 🌐 męski — INT8 (male_voxcpm_2)' },   // [AGENT-EXP] 2026-10-24: + INT8 w nazwie
+    { id: 'matcha-female_voxcpm_2', mv: 'female_voxcpm_2', voice: 'Matcha 🌐 żeński — INT8 (female_voxcpm_2)' }
+].map((e) => Object.assign({ type: 'matcha', dl: true, name: 'Polish', iso: 'pl', country: 'PL', region: 'Europe', sizeMb: 27, url: MATCHA_REPO + e.mv + '/' }, e));
+// [AGENT-EXP] 2026-10-24: w „Językach świata” dwie pozycje na głos: INT8 (wariant 'kombi') i F32 (wariant 'cpu_fp32',
+// wszystko na procesorze), ok. 85 MB. Pliki obok INT8 ('matcha/<głos>/encoder_sdp.onnx' itd.), znacznik '_ok32'.
+// voices.json i wokoder są wspólne: F32 dociąga je, gdy ich brak (działa bez INT8), kasowanie zostawia je drugiemu.
+// Pobranie wariantu od razu go włącza; przy dwóch dostępnych przełącza „Włącz” (albo lista „Matcha 🌐 — wariant”).
+const MATCHA_SHARED = ['voices.json', 'vocoder.onnx'];
+const MATCHA_F32_FILES = ['voices.json', 'vocoder.onnx', 'encoder_sdp.onnx', 'decoder_t4.onnx'];
+const MATCHA_F32_STORE = MATCHA_STORE.map((e) => Object.assign({}, e, { id: e.id + '-f32', f32: true, sizeMb: 89,
+    voice: e.voice.replace(' — INT8 (', ' — F32 (') }));
+const matchaFiles = (entry) => entry.f32 ? MATCHA_F32_FILES : MATCHA_FILES;
+const matchaOkKey = (entry) => 'matcha/' + entry.mv + '/' + (entry.f32 ? '_ok32' : '_ok');
+const matchaOtherOkKey = (entry) => 'matcha/' + entry.mv + '/' + (entry.f32 ? '_ok' : '_ok32');
+function matchaSetTryb(t) {
+    LANG_STORE.matchaTryb = t;
+    return new Promise((res) => chrome.storage.local.set({ matchaWebTryb: t }, () => res()));
+}
+// plik modelu w paczce? HEAD, żeby nie ciągnąć 40 MB
+function matchaPkgHas(mv, f) {
+    const url = chrome.runtime.getURL('matcha_web/models/' + mv + '/' + f);
+    return fetch(url, { method: 'HEAD' }).then((r) => !!r.ok).catch(() => fetch(url).then((r) => {
+        try { if (r.body && r.body.cancel) r.body.cancel(); } catch (e) {}
+        return !!r.ok;
+    }).catch(() => false));
+}
+// stan głosu Matcha: 'pkg' (w paczce), 'idb' (pobrany), '' (brak)
+async function matchaStoreState(mv) {
+    try {
+        const r = await fetch(chrome.runtime.getURL('matcha_web/models/' + mv + '/voices.json'));
+        if (r.ok) return 'pkg';
+    } catch (e) { /* brak w paczce */ }
+    try { if (await voiceGet('matcha/' + mv + '/_ok')) return 'idb'; } catch (e) {}
+    return '';
+}
+async function matchaRefreshState() {
+    LANG_STORE.matchaTryb = await new Promise((res) => chrome.storage.local.get('matchaWebTryb', (d) => res(d && d.matchaWebTryb === 'cpu_fp32' ? 'cpu_fp32' : 'kombi')));
+    LANG_STORE.matcha = {};
+    for (const e of MATCHA_STORE) LANG_STORE.matcha[e.mv] = await matchaStoreState(e.mv);
+    for (const e of MATCHA_F32_STORE) {   // [AGENT-EXP] 2026-10-24: stan F32 (klucz = id wpisu): paczka / pobrany / brak
+        let st = '';
+        if (await matchaPkgHas(e.mv, 'encoder_sdp.onnx') && await matchaPkgHas(e.mv, 'decoder_t4.onnx')) st = 'pkg';
+        else try {   // bez voices.json/wokodera — ⬇ dociąga brakujące
+            if (await voiceGet(matchaOkKey(e)) && await voiceGet('matcha/' + e.mv + '/voices.json') && await voiceGet('matcha/' + e.mv + '/vocoder.onnx')) st = 'idb';
+        } catch (err) {}
+        LANG_STORE.matcha[e.id] = st;
+    }
+}
+async function matchaDownload(entry) {
+    LANG_STORE.busy[entry.id] = true;
+    langRender();
+    try {
+        const got = [];
+        const files = [];   // [AGENT-EXP] 2026-10-24: INT8 albo F32; wspólnych plików, które już są, nie ciągnie drugi raz
+        for (const f of matchaFiles(entry)) {
+            let have = false;
+            if (MATCHA_SHARED.includes(f)) try { have = !!(await voiceGet('matcha/' + entry.mv + '/' + f)); } catch (err) {}
+            if (!have) files.push(f);
+        }
+        for (const f of files) {
+            const data = await langFetchProgress(entry.url + f, (n, total) => {
+                langStatus('⬇ „' + entry.voice + '”: ' + f + ' ' + fmtBytes(n) + (total ? ' / ' + fmtBytes(total) : '') + ' (' + (got.length + 1) + '/' + files.length + ')…');
+            });
+            if (/\.onnx$/.test(f) && !(data && data.length > 1024 * 1024 && data[0] === 0x08)) throw new Error(f + ' nie wygląda na model ONNX');
+            got.push([f, data]);
+        }
+        langStatus('💾 Zapisuję „' + entry.voice + '” w pamięci rozszerzenia…');
+        for (const [f, data] of got) await voicePut('matcha/' + entry.mv + '/' + f, data);
+        await voicePut(matchaOkKey(entry), Date.now());
+        await matchaSetTryb(entry.f32 ? 'cpu_fp32' : 'kombi');   // [AGENT-EXP] 2026-10-24: pobrany wariant od razu w użyciu
+        langStatus('✓ „' + entry.voice + '” pobrany i włączony (' + (entry.f32 ? 'F32, wszystko na procesorze' : 'INT8') + '). Wybierz silnik Matcha i głos 🌐 w ustawieniach lektora.');
+    } catch (e) {
+        langStatus('⛔ Pobieranie nieudane: ' + ((e && e.message) || e));
+    } finally {
+        delete LANG_STORE.busy[entry.id];
+        await matchaRefreshState();
+        langRender();
+    }
+}
+async function matchaDelete(entry) {
+    let other = false;   // [AGENT-EXP] 2026-10-24: INT8 i F32 osobno; wspólne pliki zostają, gdy drugi wariant jest pobrany
+    try { other = !!(await voiceGet(matchaOtherOkKey(entry))); } catch (err) {}
+    const files = matchaFiles(entry).concat(entry.f32 || other ? [] : ['encoder_sdp.onnx', 'decoder_t4.onnx']);   // + F32 ze starego pobierania „wszystko naraz”
+    for (const f of files) if (!(other && MATCHA_SHARED.includes(f))) await voiceDel('matcha/' + entry.mv + '/' + f);
+    await voiceDel(matchaOkKey(entry));
+    await matchaRefreshState();
+    const M = LANG_STORE.matcha || {};   // skasowany wariant był w użyciu → włącz pozostały
+    const hasF32 = MATCHA_F32_STORE.some((x) => M[x.id]), hasInt8 = MATCHA_STORE.some((x) => M[x.mv]);
+    if (entry.f32 && LANG_STORE.matchaTryb === 'cpu_fp32' && !hasF32 && hasInt8) await matchaSetTryb('kombi');
+    if (!entry.f32 && LANG_STORE.matchaTryb === 'kombi' && !hasInt8 && hasF32) await matchaSetTryb('cpu_fp32');
+    langRender();
+}
+
+// [AGENT-EXP] 2026-10-24: 🌐 Supertonic 3 (liczony w przeglądarce, supertonic/) — silnik sam pobiera model przy pierwszym
+// użyciu do Cache Storage; tu pobieramy zawczasu DOKŁADNIE te same adresy do tej samej pamięci podręcznej (muszą się
+// zgadzać z supertonic/engine.js: CACHE_NAME, MODEL_PATHS, downloadUrl, voice_styles/<głos>.json).
+const SUPERTONIC_CACHE = 'supertonic-assets-supertonic-3';
+const SUPERTONIC_BASE = 'https://huggingface.co/Supertone/supertonic-3/resolve/main/';
+const SUPERTONIC_FILES = ['onnx/tts.json', 'onnx/unicode_indexer.json', 'onnx/duration_predictor.onnx', 'onnx/text_encoder.onnx',
+    'onnx/vocoder.onnx', 'onnx/vector_estimator.onnx', 'voice_styles/M1.json', 'voice_styles/M2.json', 'voice_styles/F1.json', 'voice_styles/F2.json'];
+const SUPERTONIC_STORE = [{ id: 'supertonic-3', type: 'supertonic', dl: true, voice: 'Supertonic 3 🌐 (męski 1, 2 · żeński 1, 2)',
+    name: 'Polish', iso: 'pl', country: 'PL', region: 'Europe', sizeMb: 380, url: SUPERTONIC_BASE }];
+const supertonicUrl = (f) => SUPERTONIC_BASE + f + '?download=1';
+// stan: 'ok' (wszystkie pliki w pamięci), 'part' (część), '' (brak)
+async function supertonicRefreshState() {
+    let n = 0;
+    try {
+        if (!(await caches.has(SUPERTONIC_CACHE))) throw 0;   // [AGENT-EXP] 2026-10-24: samo sprawdzanie nie zakłada pustej pamięci
+        const cache = await caches.open(SUPERTONIC_CACHE);
+        for (const f of SUPERTONIC_FILES) if (await cache.match(supertonicUrl(f))) n++;
+    } catch (e) { /* brak Cache Storage */ }
+    LANG_STORE.supertonic = n === SUPERTONIC_FILES.length ? 'ok' : (n ? 'part' : '');
+    LANG_STORE.supertonicN = n;
+}
+async function supertonicDownload(entry) {
+    LANG_STORE.busy[entry.id] = true;
+    langRender();
+    try {
+        const cache = await caches.open(SUPERTONIC_CACHE);
+        let i = 0;
+        for (const f of SUPERTONIC_FILES) {
+            i++;
+            const url = supertonicUrl(f);
+            if (await cache.match(url)) continue;   // już jest (np. przerwane wcześniej pobieranie) — dokańczamy resztę
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' — ' + f);
+            const total = Number(resp.headers.get('content-length')) || 0;
+            const chunks = [];
+            let got = 0;
+            const reader = resp.body.getReader();
+            for (;;) {
+                const c = await reader.read();
+                if (c.done) break;
+                chunks.push(c.value);
+                got += c.value.length;
+                langStatus('⬇ Supertonic 3: ' + f.replace(/^.*\//, '') + ' ' + fmtBytes(got) + (total ? ' / ' + fmtBytes(total) : '') + ' (' + i + '/' + SUPERTONIC_FILES.length + ')…');
+            }
+            const type = /\.json$/.test(f) ? 'application/json' : 'application/octet-stream';
+            await cache.put(url, new Response(new Blob(chunks, { type }), { headers: { 'Content-Type': type } }));
+        }
+        langStatus('✓ Supertonic 3 pobrany (działa bez internetu). Wybierz silnik Supertonic w ustawieniach lektora.');
+    } catch (e) {
+        langStatus('⛔ Pobieranie nieudane: ' + ((e && e.message) || e) + ' — kliknij ⬇ jeszcze raz, pobrane pliki zostają.');
+    } finally {
+        delete LANG_STORE.busy[entry.id];
+        await supertonicRefreshState();
+        langRender();
+    }
+}
+async function supertonicDelete() {
+    try { await caches.delete(SUPERTONIC_CACHE); } catch (e) {}
+    await supertonicRefreshState();
+    langRender();
+}
+
 // Adresy plików w lustrze csukuangfj dla głosu Piper. Nazwę repo bierzemy z URL
 // tarballa (…/vits-piper-<język>-<głos>.tar.bz2 → repo csukuangfj/vits-piper-…),
 // więc mapa działa niezależnie od formatu id w katalogu (piper-… / vits-piper-…).
@@ -1525,7 +1700,7 @@ function langRender() {
         if (f.type !== 'all' && e.type !== f.type) return false;
         if (f.region !== 'all' && e.region !== f.region) return false;
         if (!q) return true;
-        return (e.name + ' ' + e.iso + ' ' + e.country + ' ' + e.id).toLowerCase().indexOf(q) >= 0;
+        return (e.name + ' ' + e.iso + ' ' + e.country + ' ' + e.id + ' ' + (e.voice || '')).toLowerCase().indexOf(q) >= 0;
     });
     // Jednorazowe uzupełnienie listy regionów w filtrze.
     const regionSel = $('langRegionFilter');
@@ -1546,12 +1721,65 @@ function langRender() {
         row.className = 'list-row';   // [VOX] wygląd w popup.css
         const label = document.createElement('span');
         label.className = 'name';
-        const tagMap = { mms: 'MMS', piper: 'PIPER', coqui: 'COQUI', cantonese: 'YUE', vits: 'VITS' };
+        const tagMap = { mms: 'MMS', piper: 'PIPER', coqui: 'COQUI', cantonese: 'YUE', vits: 'VITS', matcha: 'MATCHA 🌐', supertonic: 'SUPERTONIC 🌐' };
         const tag = tagMap[e.type] || 'VITS';
-        label.textContent = e.name + (e.country ? ' — ' + e.country : '') + (e.iso ? ' [' + e.iso + ']' : '') + ' · ' + tag;
+        // [AGENT-EXP] 2026-10-24: najpierw nazwa lektora, potem język (wcześniej same „Polish — PL [pl] · PIPER”)
+        label.textContent = (e.voice ? e.voice + ' · ' : '') + e.name + (e.country ? ' — ' + e.country : '') + (e.iso ? ' [' + e.iso + ']' : '') + ' · ' + tag;
         label.title = e.id + ' · ' + (e.sizeMb ? 'rozmiar spakowany: ' + e.sizeMb + ' MB' : '≈114 MB');
         row.appendChild(label);
         const btn = document.createElement('button');
+        if (e.type === 'supertonic') {   // [AGENT-EXP] 2026-10-24: Supertonic 🌐 — Cache Storage silnika
+            const st = LANG_STORE.supertonic || '';
+            btn.className = 'mini' + (st === 'ok' ? ' danger' : '');
+            if (st === 'ok') {
+                btn.textContent = '🗑';
+                btn.title = 'Pobrany (' + SUPERTONIC_FILES.length + ' plików, ok. ' + e.sizeMb + ' MB). Kliknij, aby wykasować — silnik pobierze go znowu przy użyciu.';
+                btn.addEventListener('click', () => supertonicDelete());
+            } else {
+                btn.textContent = LANG_STORE.busy[e.id] ? '⏳' : '⬇';
+                btn.disabled = !!LANG_STORE.busy[e.id];
+                btn.title = (st === 'part' ? 'Pobrany częściowo (' + LANG_STORE.supertonicN + '/' + SUPERTONIC_FILES.length + ') — dokończ. ' : '')
+                    + 'Pobierz z HuggingFace (Supertone/supertonic-3), ok. ' + e.sizeMb + ' MB. Nie zamykaj popupu w trakcie.';
+                btn.addEventListener('click', () => supertonicDownload(e));
+            }
+            row.appendChild(btn);
+            listEl.appendChild(row);
+            continue;
+        }
+        if (e.type === 'matcha') {   // [AGENT-EXP] 2026-10-24: Matcha 🌐 — osobna pamięć, nie lista „Własny głos”
+            const st = (LANG_STORE.matcha || {})[e.f32 ? e.id : e.mv] || '';   // [AGENT-EXP] 2026-10-24: F32 ma własny stan
+            if (st) {   // [AGENT-EXP] 2026-10-24: wariant dostępnego pliku: w użyciu albo „Włącz”
+                const on = (e.f32 ? 'cpu_fp32' : 'kombi') === LANG_STORE.matchaTryb;
+                const tb = document.createElement('button');
+                tb.className = 'mini' + (on ? ' ok' : '');
+                tb.style.cssText = 'width:auto;padding:0 6px;';
+                tb.textContent = on ? '✓ w użyciu' : 'Włącz';
+                tb.disabled = on;
+                tb.title = e.f32 ? 'Wariant F32 — wszystko na procesorze, naturalny rytm' : 'Wariant INT8 — koder i dekoder na procesorze, wokoder na karcie (najszybszy)';
+                if (on) label.classList.add('active');
+                else tb.addEventListener('click', async () => { await matchaSetTryb(e.f32 ? 'cpu_fp32' : 'kombi'); langRender(); });
+                row.appendChild(tb);
+            }
+            btn.className = 'mini' + (st === 'idb' ? ' danger' : '');
+            if (st === 'pkg') {
+                btn.textContent = '✓';
+                btn.disabled = true;
+                btn.title = 'Wbudowany w paczkę rozszerzenia — pobieranie niepotrzebne';
+            } else if (st === 'idb') {
+                btn.textContent = '🗑';
+                btn.title = 'Pobrany do pamięci rozszerzenia. Kliknij, aby wykasować.';
+                btn.addEventListener('click', () => matchaDelete(e));
+            } else {
+                btn.textContent = LANG_STORE.busy[e.id] ? '⏳' : '⬇';
+                btn.disabled = !!LANG_STORE.busy[e.id];
+                btn.title = 'Pobierz z HuggingFace (machinekind/Matcha-TTS-PL-Edge-v2), ok. ' + e.sizeMb + ' MB'
+                    + (e.f32 ? ' — wariant F32, wszystko na procesorze (działa też bez INT8)' : '') + '; po pobraniu włącza się sam';   // [AGENT-EXP] 2026-10-24
+                btn.addEventListener('click', () => matchaDownload(e));
+            }
+            row.appendChild(btn);
+            listEl.appendChild(row);
+            continue;
+        }
         const isVitsExtra = !e.dl;
         const downloaded = !isVitsExtra && (LANG_STORE.customList || []).some((v) => v.id === e.id);
         if (downloaded) {
@@ -1589,7 +1817,7 @@ function langRender() {
         empty.textContent = 'Brak wyników — zmień frazę lub filtry.';
         listEl.appendChild(empty);
     }
-    langStatus('Katalog: ' + LANG_STORE.catalog.length + ' głosów (~1100 języków MMS + Piper). Wpisz język i kliknij ⬇.');
+    langStatus('Katalog: ' + LANG_STORE.catalog.length + ' głosów (~1100 języków MMS + Piper + Matcha 🌐 + Supertonic 🌐). Wpisz język i kliknij ⬇.');
 }
 
 // fetch z paskiem postępu (onProg(pobrane, łącznie))
@@ -1704,8 +1932,8 @@ function initLangStore() {
     fetch(chrome.runtime.getURL(LANG_STORE.catalogPath))
         .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then((json) => {
-            LANG_STORE.catalog = langNormalizeCatalog(json);
-            loadVoiceState().then(({ list }) => {
+            LANG_STORE.catalog = MATCHA_STORE.concat(MATCHA_F32_STORE, SUPERTONIC_STORE, langNormalizeCatalog(json));   // [AGENT-EXP] 2026-10-24: + F32   // [AGENT-EXP] 2026-10-24: głosy 🌐 na górze
+            Promise.all([loadVoiceState(), matchaRefreshState().catch(() => {}), supertonicRefreshState().catch(() => {})]).then(([{ list }]) => {
                 LANG_STORE.customList = list || [];
                 langRender();
             });
@@ -1818,12 +2046,17 @@ try {
     if (!sel || !dot || !txt) return;
     const WS = { matcha: 'ws://127.0.0.1:9000', xtts: 'ws://127.0.0.1:8000', audio8: 'ws://127.0.0.1:9300', f5: 'ws://127.0.0.1:9400', pocket: 'ws://127.0.0.1:9200', omnivoice: 'ws://127.0.0.1:9100' };   // [AGENT-EXP] f5: lektor Marek
     let probeNo = 0;
+    // [AGENT-EXP] 2026-10-24: Matcha z głosem 🌐 'web:…' liczy w rozszerzeniu — nie sprawdzaj serwera :9000.
+    let matchaWeb = true;
+    chrome.storage.local.get('matchaVoice', (r) => { matchaWeb = !(r && typeof r.matchaVoice === 'string' && r.matchaVoice) || /^web:/.test(r.matchaVoice); probe(true); });
+    chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.matchaVoice) { matchaWeb = /^web:/.test(String(ch.matchaVoice.newValue || 'web:')); probe(); } });
     function show(color, label) { dot.style.background = color; txt.textContent = label; }
     function probe(quiet) {   // quiet: odświeżenie w tle — bez migania „sprawdzam…”
         const eng = sel.value;
         const my = ++probeNo;
         if (eng === 'supertonic') { if (!quiet) show('#9aa0c8', 'sprawdzam…'); return; }   // [VOX] kropkę ustawia blok Supertonic (na dole)
         if (eng === 'browser') { show('#34d399', 'bez serwera'); return; }   // [AGENT-EXP] 🗣
+        if (eng === 'matcha' && matchaWeb) { show('#34d399', 'w przeglądarce — bez serwera'); return; }   // [AGENT-EXP] 2026-10-24
         if (!WS[eng]) { show('#34d399', 'wbudowany'); return; }
         if (!quiet) show('#fcd34d', 'sprawdzam…');
         let ws = null, done = false;
@@ -1844,14 +2077,14 @@ try {
     }
     chrome.storage.local.get('ttsEngine', (r) => {
         const v = r && r.ttsEngine;
-        sel.value = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(v) >= 0 ? v : 'sherpa';
+        sel.value = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(v) >= 0 ? v : 'matcha';   // [AGENT-EXP] 2026-10-24
         probe();
     });
     sel.addEventListener('change', () => { chrome.storage.local.set({ ttsEngine: sel.value }); probe(); });
     chrome.storage.onChanged.addListener((ch, area) => {
         if (area === 'local' && ch.ttsEngine && ch.ttsEngine.newValue && ch.ttsEngine.newValue !== sel.value) { sel.value = ch.ttsEngine.newValue; probe(); }
     });
-    setInterval(() => { if (WS[sel.value]) probe(true); }, 4000);
+    setInterval(() => { if (WS[sel.value] && !(sel.value === 'matcha' && matchaWeb)) probe(true); }, 4000);   // [AGENT-EXP] 2026-10-24
 })();
 
 // [AGENT-EXP] 2026-10-17: Głos dla wybranego silnika — przeniesione ze strony Ustawienia (sekcja „🎙 Silnik lektora”
@@ -1868,9 +2101,11 @@ try {
     const POCKET = [["ref", "Głos referencyjny (z repozytorium)"], ["mojglos", "Mój własny głos"], ["brzustynski", "Jacek Brzostyński"], ["brzustynski4", "Jacek Brzostyński (próbka 4)"], ["brzustynski5", "Jacek Brzostyński (próbka 5)"], ["jacek2", "Jacek (próbka 2)"], ["alekpawlikowski", "Alek Pawlikowski"], ["marcin", "Marcin"], ["piotr", "Piotr"], ["lukasz", "Łukasz"], ["ferenc", "Ferenc"], ["luko", "Lektor LU.KO"], ["probka2026", "Próbka 2026"], ["probka202609", "Próbka 2026-09"]];
     const OMNI = [["glos:moj_glos", "Mój głos (klon z nagrania)"], ["male, young adult, moderate pitch", "Męski · młody · neutralny"], ["male, middle-aged, low pitch", "Męski · dojrzały · niski"], ["male, middle-aged, moderate pitch", "Męski · dojrzały · neutralny"], ["male, elderly, moderate pitch", "Męski · starszy · neutralny"], ["female, young adult, moderate pitch", "Żeński · młody · neutralny"], ["female, middle-aged, moderate pitch", "Żeński · dojrzały · neutralny"], ["female, middle-aged, low pitch", "Żeński · dojrzały · niski"], ["female, young adult, high pitch", "Żeński · młody · wysoki"], ["female, elderly, moderate pitch", "Żeński · starszy · neutralny"], ["child, moderate pitch", "Dziecko"], ["teenager, moderate pitch", "Nastolatek"], ["male, young adult, moderate pitch, whisper", "Męski · szept"], ["male, young adult, moderate pitch, british accent", "Męski · brytyjski akcent"], ["female, young adult, moderate pitch, american accent", "Żeński · amerykański akcent"], ["male, young adult, very high pitch", "Męski · bardzo wysoki (test)"], ["", "Losowy (dobiera model)"]];
     // [AGENT-EXP] 2026-10-17: głosy Matcha = VOICES w serwer_matcha.py (★ = nowe, naturalne; „Stary” = poprzedni, robotyczny model).
-    const MATCHA = [["v2:male_voxcpm_1:elegancki", "★ Elegancki męski (spokojnie)"], ["v2:male_voxcpm_2:elegancki", "★ Elegancki męski 2 (spokojnie)"], ["v2:female_voxcpm_2:elegancki", "★ Elegancka żeńska (spokojnie)"], ["v2:male_voxcpm_2", "★ Męski 2 — naturalny (żywy)"], ["v2:female_voxcpm_2", "★ Żeński 2 — naturalny (żywy)"], ["v2:male_voxcpm_1", "★ Męski 1 — naturalny (żywy)"], ["v2:female_voxcpm_1", "★ Żeński 1 — naturalny (żywy)"], ["synthetic", "Stary — Mieszanka 1"], ["synthetic2", "Stary — Mieszanka 2"], ["synthetic3", "Stary — Mieszanka 3"], ["synthetic4", "Stary — Mieszanka 4 (żeńska)"], ["synthetic5", "Stary — Mieszanka 5"], ["0", "Stary — Bartosz Bielenia (M)"], ["1", "Stary — Katarzyna Faszczewska (Ż)"], ["3", "Stary — Bartosz Głogowski (M)"], ["6", "Stary — Piotr Kopa (M)"], ["8", "Stary — Andrzej Seweryn (M)"], ["0.5*6+0.5*3", "Stary — Mieszanka własna (Kopa+Głogowski)"]];
+    // [AGENT-EXP] 2026-10-24: ⚡ Matcha-TTS-PL-Edge-v2 (glosy_edge_v2 w serwerze) — te same głosy, ~3× szybciej na CPU.
+    // [AGENT-EXP] 2026-10-24: 🌐 'web:…' = Matcha-TTS-PL-Edge-v2 w samym rozszerzeniu (matcha_web/), bez serwera.
+    const MATCHA = [["web:male_voxcpm_2:elegancki", "🌐 Elegancki męski — w przeglądarce"], ["web:female_voxcpm_2:elegancki", "🌐 Elegancka żeńska — w przeglądarce"], ["web:male_voxcpm_2", "🌐 Męski — naturalny, w przeglądarce"], ["web:female_voxcpm_2", "🌐 Żeński — naturalny, w przeglądarce"], ["edge:male_voxcpm_2:elegancki", "⚡ Elegancki męski 2 Edge (szybki)"], ["edge:female_voxcpm_2:elegancki", "⚡ Elegancka żeńska 2 Edge (szybka)"], ["edge:male_voxcpm_2", "⚡ Męski 2 Edge — naturalny (szybki)"], ["edge:female_voxcpm_2", "⚡ Żeński 2 Edge — naturalny (szybki)"], ["v2:male_voxcpm_1:elegancki", "★ Elegancki męski (spokojnie)"],["v2:male_voxcpm_2:elegancki", "★ Elegancki męski 2 (spokojnie)"], ["v2:female_voxcpm_2:elegancki", "★ Elegancka żeńska (spokojnie)"], ["v2:male_voxcpm_2", "★ Męski 2 — naturalny (żywy)"], ["v2:female_voxcpm_2", "★ Żeński 2 — naturalny (żywy)"], ["v2:male_voxcpm_1", "★ Męski 1 — naturalny (żywy)"], ["v2:female_voxcpm_1", "★ Żeński 1 — naturalny (żywy)"], ["synthetic", "Stary — Mieszanka 1"], ["synthetic2", "Stary — Mieszanka 2"], ["synthetic3", "Stary — Mieszanka 3"], ["synthetic4", "Stary — Mieszanka 4 (żeńska)"], ["synthetic5", "Stary — Mieszanka 5"], ["0", "Stary — Bartosz Bielenia (M)"], ["1", "Stary — Katarzyna Faszczewska (Ż)"], ["3", "Stary — Bartosz Głogowski (M)"], ["6", "Stary — Piotr Kopa (M)"], ["8", "Stary — Andrzej Seweryn (M)"], ["0.5*6+0.5*3", "Stary — Mieszanka własna (Kopa+Głogowski)"]];
     const CFG = {
-        matcha: { k: 'matchaVoice', def: 'v2:male_voxcpm_1:elegancki', label: 'Głos Matcha-TTS-PL', list: MATCHA },
+        matcha: { k: 'matchaVoice', def: 'web:male_voxcpm_2:elegancki', label: 'Głos Matcha-TTS-PL', list: MATCHA },
         xtts: { k: 'tts2Voice', def: '', label: 'Próbka głosu (folder tts2\\probki glosu)', list: TTS2 },
         f5: { k: 'tts2Voice', def: '', label: 'Próbka głosu (lektormarekf5tts\\probki)', list: TTS2 },
         pocket: { k: 'pocketVoice', def: 'ref', label: 'Głos Pocket-TTS-PL', list: POCKET },
@@ -1932,6 +2167,17 @@ try {
     });
 })();
 
+// [AGENT-EXP] 2026-10-26: checkbox „Auto-nadrabianie” (autoCatchup, domyślnie włączony — jak w Ustawieniach).
+(function () {
+    const chk = document.getElementById('autoCatchupCheck');
+    if (!chk) return;
+    chrome.storage.local.get('autoCatchup', (r) => { chk.checked = !(r && r.autoCatchup === false); });
+    chk.addEventListener('change', () => chrome.storage.local.set({ autoCatchup: chk.checked }));
+    chrome.storage.onChanged.addListener((ch, area) => {
+        if (area === 'local' && ch.autoCatchup) chk.checked = ch.autoCatchup.newValue !== false;
+    });
+})();
+
 // [AGENT-EXP] 2026-10-17: „💾 Zapisz bufor filmu” — kwestie z RAM aktywnej karty → ZIP w Pobranych.
 (function () {
     const btn = document.getElementById('saveBufferBtn');
@@ -1983,6 +2229,9 @@ try {
     if (!tabs.length || !panes.length) return;
     function show(name) {
         if (!panes.some((p) => p.dataset.pane === name)) name = 'lektor';
+        // [AGENT-EXP] 2026-10-26: 🧩 zakładka schowana przez układ modułów (pusta) → pierwsza widoczna
+        const want = tabs.find((t) => t.dataset.tab === name);
+        if (!want || want.hidden) { const first = tabs.find((t) => !t.hidden); if (first) name = first.dataset.tab; }
         tabs.forEach((t) => {
             const on = t.dataset.tab === name;
             t.classList.toggle('active', on);
@@ -1995,6 +2244,7 @@ try {
     let last = 'lektor';
     try { last = localStorage.getItem('lektorTab') || 'lektor'; } catch (e) { /* ignore */ }
     show(last);
+    window.__mlTabShow = show;   // [AGENT-EXP] 2026-10-26: popup_layout.js (zakładka zniknęła / przeciąganie nad zakładką)
     // dodatkowe przyciski „⚙️ Wszystkie opcje”
     document.querySelectorAll('[data-open-options]').forEach((b) => b.addEventListener('click', () => {
         try { chrome.runtime.openOptionsPage(); } catch (e) { chrome.tabs.create({ url: chrome.runtime.getURL('src/options/options.html') }); }
@@ -2098,4 +2348,20 @@ try {
         if (ch.ttsEngine) setTimeout(sync, 0);
     });
     chrome.storage.local.get('ttsEngine', () => setTimeout(sync, 0));   // po ustawieniu eng.value przez blok „Silnik mowy”
+})();
+
+// [AGENT-EXP] 2026-10-24: wariant Matcha w przeglądarce (klucz matchaWebTryb: 'kombi' | 'cpu_fp32'), widoczny przy silniku Matcha.
+(function () {
+    const eng = document.getElementById('ttsEngineSelect');
+    const rows = document.getElementById('mwRows');
+    const sel = document.getElementById('mwTryb');
+    if (!eng || !rows || !sel) return;
+    const show = () => { rows.style.display = eng.value === 'matcha' ? '' : 'none'; };
+    chrome.storage.local.get('matchaWebTryb', (r) => { sel.value = r && r.matchaWebTryb === 'cpu_fp32' ? 'cpu_fp32' : 'kombi'; show(); });
+    sel.addEventListener('change', () => chrome.storage.local.set({ matchaWebTryb: sel.value }, () => { if (LANG_STORE.catalog) matchaRefreshState().then(langRender); }));
+    chrome.storage.onChanged.addListener((ch, area) => {   // [AGENT-EXP] 2026-10-24: „Włącz” w Językach świata → lista się zgadza
+        if (area === 'local' && ch.matchaWebTryb) sel.value = ch.matchaWebTryb.newValue === 'cpu_fp32' ? 'cpu_fp32' : 'kombi';
+    });
+    eng.addEventListener('change', show);
+    setTimeout(show, 300);
 })();

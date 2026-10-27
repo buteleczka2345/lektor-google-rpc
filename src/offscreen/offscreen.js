@@ -1,8 +1,9 @@
 // Offscreen bootstrap: register the message listener before loading Sherpa.
 import BrowserTTSManager from './browser_tts.js';   // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki (Web Speech API)
+import { liczbySlownie } from './liczby_pl.js';      // [AGENT-EXP] 2026-10-26: cyfry → słowa dla głosów znakowych (Maja)
 
 const SHERPA_VOICE = 'pl_PL-meski_wg_glos-medium';
-const TTS_NORM_VER = 'kropka2'; // znacznik wersji normalizacji — widoczny w logu offscreen (popup)
+const TTS_NORM_VER = 'kropka2+liczby'; // znacznik wersji normalizacji — widoczny w logu offscreen (popup)
 // [AGENT-EXP] 2026-10-16 — dodatkowy lektor Matcha-TTS-PL z lokalnego serwera WebSocket.
 const MATCHA_WS_URL = 'ws://127.0.0.1:9000';
 // [AGENT-EXP] XTTS v2 w folderze tts2 udostępnia binarny WAV przez lokalny WebSocket.
@@ -23,12 +24,29 @@ const AUDIO8_TIMEOUT_MS = 15 * 60 * 1000;
 const REMOTE_PRELOAD_TIMEOUT_MS = 60 * 60 * 1000;
 
 let voiceId = SHERPA_VOICE;
-let ttsEngine = 'sherpa';
+let ttsEngine = 'matcha';   // [AGENT-EXP] 2026-10-24: wbudowany głos Sherpa usunięty — domyślnie Matcha 🌐
 let tts2Voice = '';
 let audio8Voice = 'default';
 let pocketVoice = 'ref';   // [AGENT-EXP] ID głosu z VOICES w serwer_pocket.py
 let omnivoiceVoice = 'male, young adult, moderate pitch';   // [AGENT-EXP] opis głosu z VOICES w serwer_omnivoice.py
-let matchaVoice = 'v2:male_voxcpm_1:elegancki';   // [AGENT-EXP] 2026-10-17: ID głosu z VOICES w serwer_matcha.py (★ = nowe, naturalne)
+let matchaVoice = 'web:male_voxcpm_2:elegancki';   // [AGENT-EXP] 2026-10-17: ID głosu z VOICES w serwer_matcha.py (★ = nowe, naturalne); 2026-10-24: 'web:…' = w przeglądarce (matcha_web)
+// [AGENT-EXP] 2026-10-24: Matcha-TTS-PL-Edge-v2 w przeglądarce (matcha_web/engine.js) — głosy 'web:<głos>[:elegancki]', bez serwera.
+let mwMod = null, mwModP = null;
+let matchaWebTryb = 'kombi';   // [AGENT-EXP] 2026-10-24: 'kombi' (wokoder na karcie) | 'cpu_fp32' (wszystko na procesorze) — popup
+function matchaWebEngine() {
+    if (!mwModP) {
+        mwModP = import('../../matcha_web/engine.js').then((m) => { m.setLogger(offLogPush); mwMod = m; return m; });
+        mwModP.catch((e) => { mwModP = null; offLogPush('matcha-web-load-fail', errMsg(e)); });
+    }
+    return mwModP;
+}
+// Ustawienia jak głosy w serwer_matcha.py: zwykły temp 0.8 / długość 0.8, ':elegancki' 0.6 / 0.92 (speed 1 — tempo ustawia odtwarzacz).
+function matchaWebSynthesize(text, pilne) {
+    const parts = matchaVoice.split(':');
+    const voice = parts[1] === 'female_voxcpm_2' ? 'female_voxcpm_2' : 'male_voxcpm_2';
+    const el = parts[2] === 'elegancki';
+    return matchaWebEngine().then((m) => m.synthesizeWav(text, { voice, steps: 4, temperature: el ? 0.6 : 0.8, lengthScale: el ? 0.92 : 0.8, pilne: !!pilne, tryb: matchaWebTryb }));
+}
 // [VOX] 2026-10-20: Supertonic — silnik przeniesiony z VoxNemesis (supertonic/engine.js). Liczy lokalnie,
 // na CPU (pula workerów) albo na karcie graficznej (WebGPU). Moduł ładowany dopiero przy pierwszym użyciu,
 // więc przy innych silnikach nie kosztuje nic. Zwraca WAV → ta sama kolejka/pamięć/nagrywanie co Pocket.
@@ -99,10 +117,9 @@ let builtinVoiceRemoved = false;
 // Wykrywamy HTTP 404 przy starcie workera, zapamiętujemy i od tej pory nie
 // próbujemy kolejnych spawnów (inaczej każda kwestia = nowy worker + nowy fetch 404).
 let builtinModelMissing = false;
-const BUILTIN_MISSING_MSG = 'Brak pliku wbudowanego modelu męskiego w folderze rozszerzenia '
-    + '(sherpa/vits-piper-pl_PL-meski_wg_glos-medium/pl_PL-meski_wg_glos-medium.onnx). '
-    + 'Lektor milczy do czasu wybrania innego głosu: kliknij ▶ przy głosie na liście „Własny głos”, '
-    + 'albo wgraj plik .onnx z powrotem do folderu i kliknij „Przywróć wbudowany głos męski”.';
+// [AGENT-EXP] 2026-10-24: wbudowanego głosu Sherpa nie ma już w paczce (domyślny silnik: Matcha 🌐).
+const BUILTIN_MISSING_MSG = 'Sherpa nie ma wbudowanego głosu. Pobierz głos Piper/Coqui w „Języki świata” '
+    + '(albo wskaż własny) i kliknij ▶ na liście „Własny głos” — albo wybierz silnik Matcha 🌐.';
 function poolSize() {
     return (customVoice && customVoice.enabled && (customVoice.sizeOnnx || 0) > CUSTOM_VOICE_BIG_ONNX_BYTES)
         ? CUSTOM_VOICE_POOL : SHERPA_POOL_SIZE;
@@ -127,6 +144,7 @@ function cancelRemotePreloads() {
         for (const socket of set) { try { socket.close(); } catch (e) {} }
         set.clear();
     }
+    if (mwMod) mwMod.cancelQueued('anulowano', 'normal');   // [AGENT-EXP] 2026-10-24: Matcha w przeglądarce — nagrywanie do przodu
 }
 const player = document.getElementById('tts-player');
 if (player) player.addEventListener('error', () => {
@@ -149,6 +167,7 @@ let lectorSpeed = 1;
 // OPTIONS-PAGE: opcje ze strony ustawień (tempo A/B/C, auto-nadrabianie, anty-trzask, TTL nagrań)
 let tempoMode = 'A';          // A: ×wideo, B: połowa przyspieszenia wideo, C: stałe tempo
 let autoCatchup = true;       // dociąganie tempa, gdy kwestia nie mieści się w oknie
+let readToEnd = false;        // [AGENT-EXP] 2026-10-22: „Czytaj zawsze do końca” — każda kwestia noSkip, pauza filmu dokańcza zdanie
 let lectorCompressor = false; // anty-trzask: kompresor na wyjściu
 function clamp01(v) {
     v = Number(v);
@@ -244,7 +263,7 @@ function resumeAudioCtx() {
 function applySettings(s) {
     if (!s || typeof s !== 'object') return;
     if (s.ttsEngine !== undefined) {
-        const nextEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(s.ttsEngine) >= 0 ? s.ttsEngine : 'sherpa';
+        const nextEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(s.ttsEngine) >= 0 ? s.ttsEngine : 'matcha';   // [AGENT-EXP] 2026-10-24
         if (nextEngine !== ttsEngine) {
             ttsEngine = nextEngine;
             cancelMatchaRequests();
@@ -306,7 +325,7 @@ function applySettings(s) {
     // [AGENT-EXP] 2026-10-17 Matcha-TTS-PL: zmiana głosu czyści bufor poprzedniego głosu.
     if (s.matchaVoice !== undefined) {
         const nextVoice = typeof s.matchaVoice === 'string' && s.matchaVoice.trim()
-            ? s.matchaVoice.trim() : 'v2:male_voxcpm_1:elegancki';
+            ? s.matchaVoice.trim() : 'web:male_voxcpm_2:elegancki';   // [AGENT-EXP] 2026-10-24: domyślnie w przeglądarce
         if (nextVoice !== matchaVoice) {
             matchaVoice = nextVoice;
             if (ttsEngine === 'matcha') {
@@ -377,6 +396,7 @@ function applySettings(s) {
     // OPTIONS-PAGE
     if (s.tempoMode !== undefined) tempoMode = ['A', 'B', 'C'].indexOf(s.tempoMode) >= 0 ? s.tempoMode : 'A';
     if (s.autoCatchup !== undefined) autoCatchup = !!s.autoCatchup;
+    if (s.readToEnd !== undefined) readToEnd = !!s.readToEnd;   // [AGENT-EXP] 2026-10-22
     if (s.compressor !== undefined) {
         lectorCompressor = !!s.compressor;
         if (lectorCompressor) ensureAudioGraph();
@@ -438,6 +458,7 @@ function applySettings(s) {
 // [AGENT-EXP] Matcha zwraca kompletny plik WAV binarnie; każde żądanie ma własne
 // połączenie, żeby odpowiedzi równoległych kwestii nie pomyliły się ze sobą.
 function matchaSynthesize(text, sockets = matchaSockets, pilne = false) {   // [AGENT-EXP] sockets: preload osobno; pilne: czytana TERAZ
+    if (/^web:/.test(matchaVoice)) return matchaWebSynthesize(text, pilne);   // [AGENT-EXP] 2026-10-24: w przeglądarce, bez WebSocketu
     return new Promise((resolve, reject) => {
         let socket;
         let settled = false;
@@ -619,6 +640,7 @@ function cancelMatchaRequests() {
         try { socket.close(); } catch (e) {}
     }
     matchaSockets.clear();
+    if (mwMod) mwMod.cancelQueued('anulowano', 'urgent');   // [AGENT-EXP] 2026-10-24: Matcha w przeglądarce
 }
 
 // [AGENT-EXP] Anulowanie żądań XTTS zatrzymuje oczekujące syntezy przy pauzie lub zmianie silnika.
@@ -706,7 +728,7 @@ function ttsPersistKey(msg) {
         : eng === 'audio8' ? (msg.audio8Voice || audio8Voice)
         : eng === 'pocket' ? (msg.pocketVoice || pocketVoice)
         : eng === 'omnivoice' ? (msg.omnivoiceVoice !== undefined ? msg.omnivoiceVoice : omnivoiceVoice)
-        : eng === 'matcha' ? (msg.matchaVoice || matchaVoice)   // [AGENT-EXP] 2026-10-17: osobne nagrania dla każdego głosu
+        : eng === 'matcha' ? ((msg.matchaVoice || matchaVoice) + (/^web:/.test(msg.matchaVoice || matchaVoice) && (msg.matchaWebTryb || matchaWebTryb) === 'cpu_fp32' ? '@fp32' : ''))   // [AGENT-EXP] 2026-10-17: osobne nagrania dla każdego głosu; 2026-10-24: i dla wariantu fp32
         : eng === 'sherpa' ? (msg.voiceId || voiceId) : '';
     if (eng === 'browser') return '';   // [AGENT-EXP] 🗣 głos przeglądarki nie ma nagrań (pamięć / dysk)
     const text = censoredText(msg.text || '');
@@ -845,11 +867,12 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 setInterval(() => {
     if (!lektorLastActivity) return;
-    if (queueActive || playQueue.length || sessionBusy || sherpaPool.some((w) => w.busy) || (stMod && stMod.isBusy()) || (browserTts && browserTts.isBusy())) { lektorLastActivity = Date.now(); return; }
+    if (queueActive || playQueue.length || sessionBusy || sherpaPool.some((w) => w.busy) || (stMod && stMod.isBusy()) || (mwMod && mwMod.isBusy()) || (browserTts && browserTts.isBusy())) { lektorLastActivity = Date.now(); return; }   // [AGENT-EXP] 2026-10-24: mwMod
     if (Date.now() - lektorLastActivity < LEKTOR_IDLE_MS) return;
     lektorLastActivity = 0;
     try { terminatePool(); session = null; } catch (e) {}
     try { if (stMod) stMod.resetEngine('Lektor bezczynny'); } catch (e) {}   // [VOX]
+    try { if (mwMod) mwMod.reset('Lektor bezczynny'); } catch (e) {}   // [AGENT-EXP] 2026-10-24: Matcha w przeglądarce
     const el = document.getElementById('keepAlive');
     if (el) { try { el.pause(); } catch (e) {} }
     console.info('[Offscreen] Lektor bezczynny ' + (LEKTOR_IDLE_MS / 60000) + ' min — model zwolniony, dokument się zamknie.');
@@ -881,13 +904,14 @@ function runQueue() {
         try { playingUrls.delete(next.url); } catch (e) {}
         next = playQueue.shift();
     }
-    if (!next) playingGroup = null;   // [AGENT-EXP]
+    if (!next) { playingGroup = null; playingNr = 0; }   // [AGENT-EXP] (+ playingNr 2026-10-22)
     if (!next) { // OPTIONS-PAGE: kolejka pusta → karty mogą wznowić film zapauzowany na czas lektora
         try { chrome.runtime.sendMessage({ action: 'TTS_QUEUE_IDLE' }).catch(() => {}); } catch (e) {}
         return;
     }
     queueActive = true;
     playingGroup = next.group || null;   // [AGENT-EXP] reszta tej kwestii nie wypada z kolejki
+    playingNr = next.nr || 0;            // [AGENT-EXP] 2026-10-22: nr kwestii (ord) — miękka pauza zostawia tylko ją
     playNext(next);
 }
 
@@ -926,7 +950,15 @@ function playNext(item) {
             if (need > baseRate) player.playbackRate = Math.min(2.5, need);
         };
     }
-    player.play().catch((err) => { console.error('[Offscreen] play:', err); try { offLogPush('play-error', errMsg(err)); } catch (e) {} done(); });
+    player.play().catch((err) => {
+        // [AGENT-EXP] 2026-10-24: czytelny błąd (wcześniej „[object DOMException]”). AbortError = play() przerwane nowym
+        // src / pauzą (zmiana ustawień, CLEAR, PAUSE) — to nie awaria, tylko informacja.
+        const what = (err && err.name ? err.name + ': ' : '') + errMsg(err);
+        if (err && err.name === 'AbortError') console.info('[Offscreen] play przerwane:', what);
+        else console.error('[Offscreen] play: ' + what);
+        try { offLogPush(err && err.name === 'AbortError' ? 'play-abort' : 'play-error', what); } catch (e) {}
+        done();
+    });
 }
 
 // noSkip (Dyktowanie / „Głos i napisy”): lektor czyta WSZYSTKO do końca — bez pomijania spóźnionych
@@ -935,8 +967,9 @@ function playNext(item) {
 // teraz KWESTIE, nie paczki, a pomijana jest zawsze CAŁA najstarsza kwestia (nigdy ta, która właśnie gra).
 // Wcześniej przy 5+ paczkach wypadały środkowe paczki → lektor urywał dłuższe zdanie w połowie.
 let playingGroup = null;
+let playingNr = 0, flushNr = 0;   // [AGENT-EXP] 2026-10-22: nr kwestii (ord) grającej / właśnie wkładanej przez ordFlush
 function enqueuePlay(url, durationMs, piperSpeed, rate, slotMs, noSkip, group) {
-    const item = { url, durationMs, rate: Number(rate) || 1, slotMs: Number(slotMs) || 0, noSkip: !!noSkip, group: group || url };
+    const item = { url, durationMs, rate: Number(rate) || 1, slotMs: Number(slotMs) || 0, noSkip: !!noSkip, group: group || url, nr: flushNr };
     if (item.slotMs > 0 && !item.noSkip) item.expireAt = Date.now() + item.slotMs + 2500;
     playQueue.push(item);
     for (;;) {
@@ -958,7 +991,8 @@ function enqueuePlay(url, durationMs, piperSpeed, rate, slotMs, noSkip, group) {
 
 // noSkip (Dyktowanie): synteza idzie równolegle w puli, ale kwestie grają w KOLEJNOŚCI PRZYJŚCIA —
 // krótkie zdanie, które zsyntezuje się szybciej, nie wyprzedzi dłuższego, wysłanego wcześniej.
-const ord = { last: 0, head: 1, wait: new Map() }; // nr kwestii → { parts: [argumenty enqueuePlay], done }
+const ord = { last: 0, head: 1, wait: new Map(), dropUpTo: 0 }; // nr kwestii → { parts: [argumenty enqueuePlay], done }
+// [AGENT-EXP] 2026-10-22: dropUpTo — numery porzucone przez miękką pauzę (softStop); ich paczki przepadają
 function ordSlot(nr) {
     let s = ord.wait.get(nr);
     if (!s) ord.wait.set(nr, (s = { parts: [], done: false }));
@@ -966,17 +1000,39 @@ function ordSlot(nr) {
 }
 function ordFlush() {
     for (;;) {
+        if (ord.head <= ord.dropUpTo && !ord.wait.has(ord.head)) ord.head = ord.dropUpTo + 1;   // [AGENT-EXP] 2026-10-22: porzucone numery
         const s = ord.wait.get(ord.head);
         if (!s) return;
+        flushNr = ord.head;   // [AGENT-EXP] 2026-10-22
         while (s.parts.length) enqueuePlay(...s.parts.shift()); // bieżąca kwestia gra od razu, paczka po paczce
+        flushNr = 0;
         if (!s.done) return;
         ord.wait.delete(ord.head);
         ord.head++;
     }
 }
-function ordPart(nr, args) { if (nr >= ord.head) { ordSlot(nr).parts.push(args); ordFlush(); } }
-function ordEnd(nr) { if (nr >= ord.head) { ordSlot(nr).done = true; ordFlush(); } }
-function ordReset() { ord.head = ord.last + 1; ord.wait.clear(); }
+const ordDropped = (nr) => nr > ord.head && nr <= ord.dropUpTo;   // [AGENT-EXP] 2026-10-22
+function ordPart(nr, args) { if (nr >= ord.head && !ordDropped(nr)) { ordSlot(nr).parts.push(args); ordFlush(); } }
+function ordEnd(nr) { if (nr >= ord.head && !ordDropped(nr)) { ordSlot(nr).done = true; ordFlush(); } }
+function ordReset() { ord.head = ord.last + 1; ord.wait.clear(); ord.dropUpTo = 0; }
+
+// [AGENT-EXP] 2026-10-22: miękka pauza („Czytaj zawsze do końca” + pauza filmu): bieżące zdanie gra do końca
+// (także paczki, które jeszcze się syntezują), reszta kolejki przepada. false = nic nie gra → zwykłe czyszczenie.
+function softStop() {
+    if (browserTts && browserTts.isBusy()) { browserTts.dropQueued(); return true; }   // 🗣
+    if (!queueActive) return false;
+    const keep = (q) => (playingNr ? q.nr === playingNr : q.group === playingGroup);
+    for (let i = playQueue.length - 1; i >= 0; i--) {
+        if (keep(playQueue[i])) continue;
+        const dropped = playQueue.splice(i, 1)[0];
+        try { playingUrls.delete(dropped.url); } catch (e) {}
+    }
+    if (playingNr && playingNr === ord.head) {   // bieżące zdanie jeszcze się syntezuje — zostaje tylko jego slot
+        for (const nr of [...ord.wait.keys()]) if (nr > ord.head) ord.wait.delete(nr);
+        ord.dropUpTo = ord.last;
+    } else ordReset();
+    return true;
+}
 
 function resetVoice(nextId) {
     if (!nextId || nextId === voiceId || nextId !== SHERPA_VOICE) return;
@@ -1038,7 +1094,7 @@ function spawnPoolWorker() {
         // Wbudowany głos "usunięty" (🗑), a nie ma aktywnego własnego → nie ma
         // czym mówić. Zamiast cichej awarii dajemy jasny komunikat w logu silnika.
         if (builtinVoiceRemoved && !(customVoice && customVoice.enabled)) {
-            reject(new Error('Wbudowany głos męski jest WYŁĄCZONY. Wybierz inny głos na liście "Własny głos" albo kliknij "Przywróć wbudowany głos męski" w ustawieniach lektora.'));
+            reject(new Error(BUILTIN_MISSING_MSG));   // [AGENT-EXP] 2026-10-24
             return;
         }
         // Plik modelu zniknął z dysku (404 wykryte przy poprzedniej próbie) — nie
@@ -1111,9 +1167,18 @@ function spawnPoolWorker() {
 // wielokropki/„…”) na przecinki — pauza zostaje, wypowiadane słowo znika.
 // Cyfry dziesiętne („3.14”) są bezpieczne: łapiemy tylko kropkę przed
 // spacją/końcem tekstu.
+// [AGENT-EXP] 2026-10-26: własny głos polski (np. Maja, Coqui VITS) nie ma cyfr w tokens.txt
+// i je pomija — zamieniamy liczby na słowa. Wbudowany Piper czyta cyfry sam (espeak-ng).
+function ttsSpellNumbers() {
+    if (!(customVoice && customVoice.enabled)) return false;
+    const lang = String(customVoice.lang || '').toLowerCase();
+    return !lang || lang.startsWith('pl');
+}
+
 function ttsNormalizeText(text) {
     let t = String(text || '').replace(/\s+/g, ' ').trim();
     if (!t) return t;
+    if (ttsSpellNumbers()) t = liczbySlownie(t);
     t = t.replace(/\u2026/g, ',');             // „…” → pauza
     // Kropki (też przed cudzysłowem/nawiasem/wielokropki), ale NIE w liczbach („3.14”, „2.5.1”):
     t = t.replace(/(?<!\d)\.+(?!\d)/g, ',');
@@ -1308,6 +1373,77 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // Live-ustawienia lektora — zmiany przychodziły tu przez chrome.storage.onChanged,
 // ale to API nie istnieje w offscreen; zastąpiono je listenerem SETTINGS_PATCH powyżej.
 
+// ===== [AGENT-EXP] 2026-10-25 Bramka zapasu do przodu (wszyscy lektorzy) =====
+// Suwak „Nagrywanie / zapas do przodu” (lookaheadMin) obowiązuje KAŻDY silnik (Matcha, sherpa/Piper, Supertonic,
+// serwery XTTS/F5/Audio8/Pocket/OmniVoice). Wcześniej każde TTS_PRELOAD od razu szło do kolejki silnika i było
+// liczone, nawet gdy po przewinięciu / zmniejszeniu suwaka kwestia leżała już dalej niż zapas (albo minęła).
+// Teraz zlecenia czekają tutaj (najbliższe pierwsze, w toku najwyżej kilka) i przed syntezą są sprawdzane
+// z aktualnym miejscem filmu tej karty (nowMs ze skryptu strony) i aktualnym suwakiem.
+const AHEAD_MIN_MS = 8000;   // suwak 0 = „na bieżąco”: najwyżej kilka sekund (jak full_subs_ondemand)
+const AHEAD_PAST_MS = 1000;  // kwestia skończyła się dawniej niż 1 s temu — nie liczymy
+const AHEAD_ENGINE_KEYS = ['ttsEngine', 'voiceId', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice',
+    'matchaWebTryb', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'];
+const aheadGate = { limitMs: 3 * 60000, tabs: new Map(), pending: new Map(), running: new Set(), max: 4, fields: {} };
+let aheadJob = null;   // obietnica syntezy ustawiana przez gałąź TTS_PRELOAD (koniec = wolne miejsce w bramce)
+function aheadLimitMs(min) {
+    const m = Number(min);
+    return Number.isFinite(m) && m > 0 ? Math.max(AHEAD_MIN_MS, m * 60000) : AHEAD_MIN_MS;
+}
+function aheadTab(id) {   // id z background: 'karta|id|hash' (ttsCacheId)
+    const s = String(id == null ? '' : id);
+    const i = s.indexOf('|');
+    return i > 0 ? s.slice(0, i) : 'x';
+}
+// Każde TTS_PRELOAD / TTS_PLAY: aktualny suwak, miejsce filmu karty i ustawienia silnika.
+function aheadNote(msg) {
+    if (msg.lookaheadMin !== undefined) aheadGate.limitMs = aheadLimitMs(msg.lookaheadMin);
+    let now = Number(msg.nowMs);
+    if (!Number.isFinite(now) && msg.action === 'TTS_PLAY' && msg.startMs != null) now = Number(msg.startMs);
+    if (Number.isFinite(now)) aheadGate.tabs.set(aheadTab(msg.id), now);
+    for (const k of AHEAD_ENGINE_KEYS) if (msg[k] !== undefined) aheadGate.fields[k] = msg[k];
+    if (msg.action === 'TTS_PLAY') aheadGate.pending.delete(msg.id);   // czytana TERAZ — liczy ją TTS_PLAY
+}
+function aheadWanted(msg) {   // 'ok' | 'daleko' (za zapasem) | 'minela'
+    const start = Number(msg.startMs);
+    const now = aheadGate.tabs.get(aheadTab(msg.id));
+    if (msg.startMs == null || !Number.isFinite(start) || now === undefined) return 'ok';
+    const end = msg.endMs != null && Number.isFinite(Number(msg.endMs)) ? Number(msg.endMs) : start;
+    if (end < now - AHEAD_PAST_MS) return 'minela';
+    if (start > now + aheadGate.limitMs) return 'daleko';
+    return 'ok';
+}
+function aheadEnqueue(msg, sender, sendResponse) {
+    const w = aheadWanted(msg);
+    if (w !== 'ok') { sendResponse({ status: 'ahead_' + w }); return true; }
+    if (!aheadGate.running.has(msg.id)) aheadGate.pending.set(msg.id, { msg, sender });
+    sendResponse({ status: 'queued_ahead' });
+    aheadPump();
+    return true;
+}
+function aheadPump() {
+    const max = ttsEngine === 'sherpa' ? poolSize() : aheadGate.max;
+    while (aheadGate.running.size < max && aheadGate.pending.size) {
+        let best = null;
+        for (const j of aheadGate.pending.values()) {
+            if (!best || (Number(j.msg.startMs) || 0) < (Number(best.msg.startMs) || 0)) best = j;
+        }
+        const msg = best.msg;
+        aheadGate.pending.delete(msg.id);
+        const w = aheadWanted(msg);
+        if (w !== 'ok') { offLogPush('ahead-skip', String(msg.id || '').slice(0, 40) + ' (' + w + ')'); continue; }
+        if (audioCache.has(msg.id)) continue;   // w międzyczasie policzone przez TTS_PLAY
+        aheadGate.running.add(msg.id);
+        aheadJob = null;
+        try {
+            ttsMainHandler(Object.assign({}, msg, aheadGate.fields, { __disk: true, __gated: true }), best.sender, () => {});
+        } catch (e) { offLogPush('ahead-fail', errMsg(e)); }
+        const job = aheadJob;
+        aheadJob = null;
+        Promise.resolve(job).catch(() => {}).then(() => { aheadGate.running.delete(msg.id); aheadPump(); });
+    }
+}
+// ===== koniec bramki zapasu =====
+
 function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany — ponowne wejście po sprawdzeniu dysku
     if (!msg || msg.target !== 'offscreen') return;
 
@@ -1319,6 +1455,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (pk) ttsIdKey.set(msg.id, pk);
         if (ttsIdKey.size > 20000) ttsIdKey.clear();
         ttsMeta.set(msg.id, { text: String(msg.text || ''), startMs: msg.startMs, endMs: msg.endMs });   // [AGENT-EXP] do zapisu
+        aheadNote(msg);   // [AGENT-EXP] 2026-10-25: bramka zapasu do przodu
         if (ttsMeta.size > 20000) ttsMeta.clear();
         if (msg.action === 'TTS_PLAY') playedKeys.add(msg.id);
         if (msg.action === 'TTS_PRELOAD' && audioCache.has(msg.id)) { sendResponse({ status: 'cached' }); return true; }
@@ -1343,6 +1480,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
+        if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
         // [VOX] Supertonic: pobiera model (pierwszy raz) i startuje pierwszy silnik — bez Sherpy.
         if (ttsEngine === 'supertonic') {
@@ -1356,6 +1494,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             return true;
         }
         if (ttsEngine === 'matcha') {
+            if (/^web:/.test(matchaVoice)) matchaWebEngine().then((m) => m.warmUp({ voice: matchaVoice.split(':')[1] === 'female_voxcpm_2' ? 'female_voxcpm_2' : 'male_voxcpm_2', tryb: matchaWebTryb })).catch(() => {});   // [AGENT-EXP] 2026-10-24: model wczytany zawczasu
             sendResponse({ status: 'initialized', engine: 'matcha' });
             return true;
         }
@@ -1400,6 +1539,9 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         return true;
     }
 
+    // [AGENT-EXP] 2026-10-25: nagrywanie do przodu przez bramkę zapasu (limit suwaka dla wszystkich silników)
+    if (msg.action === 'TTS_PRELOAD' && !msg.__gated) return aheadEnqueue(msg, _sender, sendResponse);
+
     if (msg.action === 'TTS_PRELOAD') {
         if (msg.ttsEngine) applySettings({ ttsEngine: msg.ttsEngine });
         if (msg.tts2Voice !== undefined) applySettings({ tts2Voice: msg.tts2Voice });
@@ -1407,6 +1549,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
+        if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
         if (msg.browserVoice !== undefined) applySettings({ browserVoice: msg.browserVoice });   // [AGENT-EXP] 🗣
         // [AGENT-EXP] 2026-10-21: 🗣 głosu przeglądarki nie da się nagrać do przodu — czyta dopiero przy TTS_PLAY
@@ -1422,7 +1565,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 return true;
             }
             sendResponse({ status: 'preloading_supertonic' });
-            if (!supertonicInflight.has(msg.id)) supertonicPreload(msg, text);
+            if (!supertonicInflight.has(msg.id)) aheadJob = supertonicPreload(msg, text);   // [AGENT-EXP] 2026-10-25 bramka
             return true;
         }
         if (ttsEngine === 'matcha') {
@@ -1432,13 +1575,13 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 sendResponse({ status: 'muted' });
                 return true;
             }
-            if (text.length > 2000) {
+            if (text.length > 2000 && !/^web:/.test(matchaVoice)) {   // [AGENT-EXP] 2026-10-24: limit tylko serwera
                 offLogPush('matcha-preload-skip', 'Kwestia dłuższa niż limit serwera; będzie syntezowana partiami przy odtwarzaniu.');
                 sendResponse({ status: 'preload_skipped_long' });
                 return true;
             }
             sendResponse({ status: 'preloading_matcha' });
-            matchaSynthesize(text, matchaPreloadSockets)   // [AGENT-EXP] preload: pauza go nie przerywa
+            aheadJob = matchaSynthesize(text, matchaPreloadSockets)   // [AGENT-EXP] preload: pauza go nie przerywa; aheadJob: bramka 2026-10-25
                 .then((blob) => {
                     cacheRemoteTtsBlob(id, blob);
                     recCapture(msg, blob).catch(() => {});
@@ -1459,7 +1602,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 return true;
             }
             sendResponse({ status: 'preloading_' + ttsEngine });
-            (ttsEngine === 'f5' ? f5Synthesize(text, tts2Voice, xttsPreloadSockets) : xttsSynthesize(text, tts2Voice, xttsPreloadSockets))   // [AGENT-EXP] preload: pauza go nie przerywa
+            aheadJob = (ttsEngine === 'f5' ? f5Synthesize(text, tts2Voice, xttsPreloadSockets) : xttsSynthesize(text, tts2Voice, xttsPreloadSockets))   // [AGENT-EXP] preload: pauza go nie przerywa
                 .then((blob) => {
                     cacheRemoteTtsBlob(id, blob);
                     recCapture(msg, blob).catch(() => {});
@@ -1484,7 +1627,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 return true;
             }
             sendResponse({ status: 'preloading_omnivoice' });
-            omnivoiceSynthesize(text, omnivoiceVoice, omnivoicePreloadSockets, false, omnivoiceCzasMs(msg))   // preload: pauza go nie przerywa
+            aheadJob = omnivoiceSynthesize(text, omnivoiceVoice, omnivoicePreloadSockets, false, omnivoiceCzasMs(msg))   // [AGENT-EXP] aheadJob: bramka; preload: pauza go nie przerywa
                 .then((blob) => {
                     cacheRemoteTtsBlob(msg.id, blob);
                     recCapture(msg, blob).catch(() => {});
@@ -1509,7 +1652,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 return true;
             }
             sendResponse({ status: 'preloading_pocket' });
-            pocketSynthesize(text, pocketVoice, pocketPreloadSockets)   // preload: pauza go nie przerywa
+            aheadJob = pocketSynthesize(text, pocketVoice, pocketPreloadSockets)   // [AGENT-EXP] aheadJob: bramka; preload: pauza go nie przerywa
                 .then((blob) => {
                     cacheRemoteTtsBlob(msg.id, blob);
                     recCapture(msg, blob).catch(() => {});
@@ -1534,7 +1677,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 return true;
             }
             sendResponse({ status: 'preloading_audio8' });
-            audio8Synthesize(text, audio8Voice, audio8PreloadSockets)   // [AGENT-EXP] preload: pauza go nie przerywa
+            aheadJob = audio8Synthesize(text, audio8Voice, audio8PreloadSockets)   // [AGENT-EXP] aheadJob: bramka; preload: pauza go nie przerywa
                 .then((blob) => {
                     cacheRemoteTtsBlob(msg.id, blob);
                     recCapture(msg, blob).catch(() => {});
@@ -1555,7 +1698,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             return true;
         }
         sendResponse({ status: 'preloading' });
-        getSession()
+        aheadJob = getSession()   // [AGENT-EXP] 2026-10-25 bramka zapasu
             .then((s) => predictPreload(s, text))
             .then((blob) => {
                 cacheRemoteTtsBlob(id, blob);   // [AGENT-EXP] pamięć (najpierw wypadają przeczytane) + dysk
@@ -1567,12 +1710,14 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
     }
 
     if (msg.action === 'TTS_PLAY') {
+        if (readToEnd) msg.noSkip = true;   // [AGENT-EXP] 2026-10-22: „Czytaj zawsze do końca” — bez pomijania spóźnionych / nadmiarowych
         if (msg.ttsEngine) applySettings({ ttsEngine: msg.ttsEngine });
         if (msg.tts2Voice !== undefined) applySettings({ tts2Voice: msg.tts2Voice });
         if (msg.audio8Voice !== undefined) applySettings({ audio8Voice: msg.audio8Voice });
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
+        if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
         if (msg.browserVoice !== undefined) applySettings({ browserVoice: msg.browserVoice });   // [AGENT-EXP] 🗣
         // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki — własna kolejka speechSynthesis (max MAX_QUEUE czekających,
@@ -1719,6 +1864,8 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
     }
 
     if (msg.action === 'TTS_PAUSE') {
+        // [AGENT-EXP] 2026-10-22: pauza filmu przy „Czytaj zawsze do końca” — lektor dokańcza bieżące zdanie
+        if (readToEnd && msg.reason === 'pause' && softStop()) { sendResponse({ status: 'finishing' }); return true; }
         stLiveGen++;   // [VOX] Supertonic: kwestie liczone „na teraz” już nie wejdą do kolejki
         if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
         cancelMatchaRequests();
@@ -1735,6 +1882,8 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
     }
 
     if (msg.action === 'TTS_CLEAR_BUFFER') {
+        // [AGENT-EXP] 2026-10-22: pauza filmu przy „Czytaj zawsze do końca” — lektor dokańcza bieżące zdanie
+        if (readToEnd && msg.reason === 'pause' && softStop()) { sendResponse({ status: 'finishing' }); return true; }
         stLiveGen++;   // [VOX] Supertonic: kwestie liczone „na teraz” już nie wejdą do kolejki
         if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
         cancelMatchaRequests();
@@ -2107,7 +2256,7 @@ function supertonicPreload(msg, text) {
         return job.promise;
     });
     supertonicInflight.set(id, entry);
-    entry.promise
+    return entry.promise   // [AGENT-EXP] 2026-10-25: koniec = wolne miejsce w bramce zapasu
         .then((blob) => {
             if (gen !== stGen) return;   // w międzyczasie zmieniono głos / silnik
             cacheRemoteTtsBlob(id, blob);

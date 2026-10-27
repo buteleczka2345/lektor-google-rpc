@@ -8,6 +8,15 @@ const OFFSCREEN_PATH = chrome.runtime.getURL('src/offscreen/offscreen.html');
 // (pl_PL-gosia-medium, pl_PL-jarvis… ) nie istnieją — każde ustawienie sprowadzamy
 // do oryginalnego głosu, żeby popup i silnik nie rozjeżdżały się nazwami.
 const SHERPA_VOICE = 'pl_PL-meski_wg_glos-medium';
+// [AGENT-EXP] 2026-10-24: wbudowany głos Sherpa usunięty z paczki (plik .onnx; espeak-ng-data zostaje dla pobranych
+// głosów Piper). Kto miał Sherpę bez aktywnego własnego głosu — przechodzi na Matchę 🌐 (głos domyślny matchaVoice).
+chrome.storage.local.get(['ttsEngine', 'customVoice', 'builtinVoiceRemoved'], (it) => {
+    const own = !!(it && it.customVoice && it.customVoice.enabled);
+    const patch = {};
+    if ((!it || !it.ttsEngine || it.ttsEngine === 'sherpa') && !own) patch.ttsEngine = 'matcha';
+    if (!(it && it.builtinVoiceRemoved)) patch.builtinVoiceRemoved = true;
+    if (Object.keys(patch).length) chrome.storage.local.set(patch);
+});
 
 // ===== Blokowane frazy — lektor NIGDY ich nie czyta =====
 // Centralny filtr: ostateczna kontrola odbywa się tutaj, przed TTS_PLAY → callOffscreen.
@@ -239,21 +248,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.action === 'GET_TTS_SETTINGS') {
         // [AGENT-EXP] 2026-10-16 — przekazuje wybór Sherpa/Matcha do dokumentu offscreen.
         // [AGENT-EXP] Przekaż wybór silnika i lokalnych głosów także przy starcie dokumentu offscreen.
-        chrome.storage.local.get(['tempoMode', 'autoCatchup', 'compressor', 'liveBufTTLDays', 'ttsVolume', 'piperSpeed', 'offlineVoice', 'customVoice', 'builtinVoiceRemoved', 'censorEnabled', 'censorMode', 'censorCustomWords', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'], (items) => {
+        chrome.storage.local.get(['tempoMode', 'autoCatchup', 'readToEnd', 'compressor', 'liveBufTTLDays', 'ttsVolume', 'piperSpeed', 'offlineVoice', 'customVoice', 'builtinVoiceRemoved', 'censorEnabled', 'censorMode', 'censorCustomWords', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'], (items) => {
             sendResponse({
                 settings: {
                     tempoMode: ['A', 'B', 'C'].indexOf(items.tempoMode) >= 0 ? items.tempoMode : 'A', // OPTIONS-PAGE
                     autoCatchup: items.autoCatchup === undefined ? true : !!items.autoCatchup,
+                    readToEnd: !!items.readToEnd,   // [AGENT-EXP] 2026-10-22: czytaj zawsze do końca
                     compressor: !!items.compressor,
                     liveBufTTLDays: Number(items.liveBufTTLDays) || 0,
                     ttsVolume: items.ttsVolume === undefined ? 100 : items.ttsVolume,
                     piperSpeed: Number(items.piperSpeed) || 1,
-                    ttsEngine: ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(items.ttsEngine) >= 0 ? items.ttsEngine : 'sherpa',
+                    ttsEngine: ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(items.ttsEngine) >= 0 ? items.ttsEngine : 'matcha',   // [AGENT-EXP] 2026-10-24: domyślnie Matcha 🌐
                     tts2Voice: typeof items.tts2Voice === 'string' ? items.tts2Voice : '',
                     audio8Voice: typeof items.audio8Voice === 'string' ? items.audio8Voice : 'default',
                     pocketVoice: typeof items.pocketVoice === 'string' && items.pocketVoice ? items.pocketVoice : 'ref',   // [AGENT-EXP]
                     omnivoiceVoice: typeof items.omnivoiceVoice === 'string' ? items.omnivoiceVoice : 'male, young adult, moderate pitch',   // [AGENT-EXP] OmniVoice ('' = losowy)
-                    matchaVoice: typeof items.matchaVoice === 'string' && items.matchaVoice ? items.matchaVoice : 'v2:male_voxcpm_1:elegancki',   // [AGENT-EXP] 2026-10-17 Matcha: głos z VOICES serwer_matcha.py
+                    matchaVoice: typeof items.matchaVoice === 'string' && items.matchaVoice ? items.matchaVoice : 'web:male_voxcpm_2:elegancki',   // [AGENT-EXP] 2026-10-17 Matcha: głos z VOICES serwer_matcha.py; 2026-10-24: domyślnie w przeglądarce (matcha_web)
                     ...supertonicSettings(items),   // [VOX] Supertonic: głos, jakość, CPU/GPU
                     browserVoice: typeof items.browserVoice === 'string' ? items.browserVoice : '',   // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki
                     offlineVoice: SHERPA_VOICE,
@@ -277,6 +287,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     const patch = {};
     if (changes.tempoMode) patch.tempoMode = changes.tempoMode.newValue; // OPTIONS-PAGE
     if (changes.autoCatchup) patch.autoCatchup = changes.autoCatchup.newValue;
+    if (changes.readToEnd) patch.readToEnd = changes.readToEnd.newValue;   // [AGENT-EXP] 2026-10-22
     if (changes.compressor) patch.compressor = changes.compressor.newValue;
     if (changes.liveBufTTLDays) patch.liveBufTTLDays = changes.liveBufTTLDays.newValue;
     if (changes.ttsVolume) patch.ttsVolume = changes.ttsVolume.newValue;
@@ -289,6 +300,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.pocketVoice) patch.pocketVoice = changes.pocketVoice.newValue;   // [AGENT-EXP] Pocket-TTS-PL
     if (changes.omnivoiceVoice) patch.omnivoiceVoice = changes.omnivoiceVoice.newValue;   // [AGENT-EXP] OmniVoice
     if (changes.matchaVoice) patch.matchaVoice = changes.matchaVoice.newValue;   // [AGENT-EXP] Matcha-TTS-PL
+    if (changes.matchaWebTryb) patch.matchaWebTryb = changes.matchaWebTryb.newValue;   // [AGENT-EXP] 2026-10-24: wariant Matcha 🌐
     if (changes.supertonicVoice) patch.supertonicVoice = changes.supertonicVoice.newValue;   // [VOX] Supertonic
     if (changes.supertonicSteps) patch.supertonicSteps = changes.supertonicSteps.newValue;
     if (changes.engineBackend) patch.engineBackend = changes.engineBackend.newValue;
@@ -451,21 +463,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // [AGENT-EXP] 2026-10-21: router mowy napisany od nowa (Multilektor). Każde zlecenie dla dokumentu lektora dostaje
 // aktualny silnik i głosy ze storage — pierwsza kwestia po zmianie ustawienia trafia od razu do właściwego silnika.
 const TTS_KEYS = ['engine', 'piperSpeed', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice',
-    'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'];
+    'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice', 'matchaWebTryb', 'lookaheadMin'];   // [AGENT-EXP] 2026-10-25: lookaheadMin → bramka zapasu   // [AGENT-EXP] 2026-10-24: matchaWebTryb
 const TTS_ENGINES = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'];
 const str = (v, dflt, allowEmpty) => (typeof v === 'string' && (allowEmpty || v) ? v : dflt);
 async function ttsEngineFields(withSpeed) {
     const s = await chrome.storage.local.get(TTS_KEYS);
     const f = {
         voiceId: SHERPA_VOICE,
-        ttsEngine: TTS_ENGINES.includes(s.ttsEngine) ? s.ttsEngine : 'sherpa',
+        ttsEngine: TTS_ENGINES.includes(s.ttsEngine) ? s.ttsEngine : 'matcha',   // [AGENT-EXP] 2026-10-24
         tts2Voice: str(s.tts2Voice, '', true),
         audio8Voice: str(s.audio8Voice, 'default', true),
         pocketVoice: str(s.pocketVoice, 'ref'),
         omnivoiceVoice: str(s.omnivoiceVoice, 'male, young adult, moderate pitch', true),   // '' = losowy
-        matchaVoice: str(s.matchaVoice, 'v2:male_voxcpm_1:elegancki'),
+        matchaVoice: str(s.matchaVoice, 'web:male_voxcpm_2:elegancki'),   // [AGENT-EXP] 2026-10-24
         ...supertonicSettings(s),   // [VOX] Supertonic: głos, jakość, CPU/GPU
-        browserVoice: str(s.browserVoice, '', true)   // 🗣 głos przeglądarki ('' = automatycznie)
+        browserVoice: str(s.browserVoice, '', true),   // 🗣 głos przeglądarki ('' = automatycznie)
+        matchaWebTryb: s.matchaWebTryb === 'cpu_fp32' ? 'cpu_fp32' : 'kombi',   // [AGENT-EXP] 2026-10-24: wariant Matcha 🌐
+        lookaheadMin: Number.isFinite(Number(s.lookaheadMin)) && s.lookaheadMin !== undefined ? Number(s.lookaheadMin) : 3   // [AGENT-EXP] 2026-10-25: suwak zapasu dla bramki w offscreen
     };
     if (withSpeed) f.piperSpeed = Number(s.piperSpeed) || 1;
     return f;
@@ -762,7 +776,7 @@ const LOWCA_LEKTOR_FRAMES = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/opti
 const LOWCA_LEKTOR_TOP = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lektor-controls.js', 'assets/lektor-settings.js'];   // [AGENT-EXP] 2026-10-21
 // Serwisy z wbudowanym lektorem (manifest) — tam nic nie dokładamy.
 const LOWCA_BUILTIN = /(^|\.)(netflix\.com|youtube\.com|youtube-nocookie\.com|primevideo\.com|amazon\.com|iq\.com|iqiyi\.com|dailymotion\.com|dai\.ly|rumble\.com|viki\.com|wetv\.vip|bilibili\.com|bilibili\.tv)$/;
-const LOWCA_SCRIPT_IDS = ['lowca-auto-isolated', 'lowca-auto-main', 'lowca-auto-lektor', 'lowca-auto-top'];
+const LOWCA_SCRIPT_IDS = ['lowca-auto-isolated', 'lowca-auto-main', 'lowca-auto-lektor', 'lowca-auto-top', 'lowca-auto-cenzor-main', 'lowca-auto-cenzor-bridge'];   // [AGENT-EXP] 2026-10-25: + 🤐 cenzor
 
 function lowcaHostOf(url) {
     try {
@@ -817,7 +831,10 @@ async function lowcaSyncScriptsNow() {
         const scripts = [
             { id: 'lowca-auto-isolated', js: LOWCA_ISOLATED, matches: allM, allFrames: true, runAt: 'document_start' },
             { id: 'lowca-auto-main', js: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_napisow.js'], world: 'MAIN', matches: allM, allFrames: true, runAt: 'document_start' },
-            { id: 'lowca-auto-lektor', js: LOWCA_LEKTOR_FRAMES, matches: allM, allFrames: true, runAt: 'document_idle' }
+            { id: 'lowca-auto-lektor', js: LOWCA_LEKTOR_FRAMES, matches: allM, allFrames: true, runAt: 'document_idle' },
+            // [AGENT-EXP] 2026-10-25: 🤐 cenzor na stronach Łowcy — wycisza z napisów lektora (dom_content.js → cenzor_main.js)
+            { id: 'lowca-auto-cenzor-main', js: ['assets/cenzor_main.js'], world: 'MAIN', matches: allM, allFrames: true, runAt: 'document_start' },
+            { id: 'lowca-auto-cenzor-bridge', js: ['assets/cenzor_bridge.js'], matches: allM, allFrames: true, runAt: 'document_start' }
         ];
         if (topM.length) scripts.push({ id: 'lowca-auto-top', js: LOWCA_LEKTOR_TOP, matches: topM, allFrames: false, runAt: 'document_idle' });
         await chrome.scripting.registerContentScripts(scripts);
@@ -841,6 +858,9 @@ async function lowcaEnsureLektor(tabId, tabUrl) {
     const need = res.filter((r) => r && r.result && !r.result.lek && /^https?:/.test(r.result.url) && (r.frameId === 0 || r.result.video)).map((r) => r.frameId);
     if (need.length) {
         await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: LOWCA_LEKTOR_FRAMES }).catch(() => {});
+        // [AGENT-EXP] 2026-10-25: 🤐 cenzor od razu, bez odświeżania (cenzor_main.js musi być przed mostem — most wysyła ustawienia)
+        await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: ['assets/cenzor_main.js'], world: 'MAIN' }).catch(() => {});
+        await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: ['assets/cenzor_bridge.js'] }).catch(() => {});
     }
     const top = res.find((r) => r && r.frameId === 0);
     if (top && top.result && !top.result.lek) {
@@ -943,7 +963,9 @@ async function lowcaAutoCues(msg, sender, sendResponse) {
     if (!tab || tab.id == null || !Array.isArray(msg.cues) || msg.cues.length < 5) { sendResponse({ ok: false }); return; }
     const saved = await lowcaRemember(tab.url, sender.url);
     await lowcaEnsureLektor(tab.id, tab.url);
-    chrome.tabs.sendMessage(tab.id, { action: 'LOWCA_AUTO_APPLY', cues: msg.cues, lang: msg.lang || '' }, () => { void chrome.runtime.lastError; });
+    // [AGENT-EXP] 2026-10-25: cały plik HBO (z cenzora) — odbiorca LOWCA_AUTO_APPLY (lowca_auto.js, idempotentny) może jeszcze nie być w karcie
+    if (msg.full) await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['assets/lowca_auto.js'] }).catch(() => {});
+    chrome.tabs.sendMessage(tab.id, { action: 'LOWCA_AUTO_APPLY', cues: msg.cues, lang: msg.lang || '', full: !!msg.full }, () => { void chrome.runtime.lastError; });   // [AGENT-EXP] 2026-10-25 full: cały plik (HBO) ma pierwszeństwo przed kawałkami
     const patch = { auto: { n: msg.cues.length, lang: msg.lang || '', host: lowcaHostOf(tab.url) } };
     if (saved) patch.saved = saved;
     const st = await lowcaStateSet(patch);

@@ -323,8 +323,8 @@ if (!('__lektorBufPauza' in window)) {
         if (video && video.isConnected) return video;
         video = document.querySelector('video.html5-main-video') || document.querySelector('video');
         if (video) {
-            video.addEventListener('seeked', function () { ttResync = true; playingIds.clear(); try { filePlayed.clear(); } catch (e) {} stopSpeechSilently(); });   // [AGENT-EXP] cofnięcie → plik czytany jeszcze raz
-            video.addEventListener('pause', function () { if (lektorPausedVideo) return; stopSpeechSilently(); }); // OPTIONS-PAGE: pauza od lektora nie kasuje bufora
+            video.addEventListener('seeked', function () { ttResync = true; ttSpoken.length = 0; playingIds.clear(); try { filePlayed.clear(); } catch (e) {} stopSpeechSilently(); });   // [AGENT-EXP] cofnięcie → plik czytany jeszcze raz
+            video.addEventListener('pause', function () { if (lektorPausedVideo) return; if (!opt('readToEnd', false)) ttSpoken.length = 0; stopSpeechSilently('pause'); });   // [AGENT-EXP] 2026-10-26: przerwane zdanie po wznowieniu czytane od nowa // OPTIONS-PAGE: pauza od lektora nie kasuje bufora; [AGENT-EXP] 2026-10-22 'pause' → przy „Czytaj zawsze do końca” lektor dokańcza zdanie
             video.addEventListener('play', function () { if (lektorSelfPlay) { lektorSelfPlay = false; return; } ttResync = true; });
             video.addEventListener('volumechange', function () {
                 // Nie walczymy z suwakiem usera: dokrecanie max raz na 2 s.
@@ -413,6 +413,7 @@ if (!('__lektorBufPauza' in window)) {
         var vRec = null;
         try { vRec = (source === 'hover') ? document.querySelector(HOVER_VIDEO_SEL) : getVideo(); } catch (e) {}
         var id = (source === 'hover' ? 'imt_h_' : (IS_EMBED ? 'em_' : 'imt_')) + Date.now() + '_' + text.length;
+        if (source !== 'hover' && vRec) { var vMs = vRec.currentTime * 1000 - getOff(); ttSpokenAdd(vMs - 1500, vMs); }   // [AGENT-EXP] 2026-10-26: potem oś czasu nie czyta tego drugi raz
         optPauseForLektor(); // OPTIONS-PAGE
         chrome.runtime.sendMessage({
             action: 'TTS_PLAY', id: id, text: text, durationMs: 0,
@@ -433,9 +434,9 @@ if (!('__lektorBufPauza' in window)) {
         if (window.__LivedubPanel) window.__LivedubPanel.log(text, 'spoken');
     }
     // UWAGA GLOBALNA: TTS_CLEAR_BUFFER nie niesie tabId — czyści bufor dla WSZYSTKICH kart.
-    function stopSpeechSilently() {
+    function stopSpeechSilently(reason) {   // [AGENT-EXP] 2026-10-22: reason 'pause' = pauza filmu (offscreen może dokończyć zdanie)
         // [AGENT-EXP] 2026-10-18: try/catch + .catch — po przeładowaniu rozszerzenia (stara karta) błąd szedł do chrome://extensions
-        if (engine === 'offline') { try { chrome.runtime.sendMessage({ action: 'TTS_CLEAR_BUFFER' }).catch(() => {}); } catch (e) {} }
+        if (engine === 'offline') { try { chrome.runtime.sendMessage({ action: 'TTS_CLEAR_BUFFER', reason: reason || '' }).catch(() => {}); } catch (e) {} }
         // [AGENT-EXP] 2026-10-17: po pauzie / przewinięciu zleć preload jeszcze raz (gotowe nagrania lektor odda
         // od razu z pamięci / dysku) — wcześniej kwestie zostawały „zleconymi”, a ich dźwięk przepadał
         try { ttPreloaded.clear(); filePreloaded.clear(); } catch (e) {}
@@ -544,8 +545,37 @@ if (!('__lektorBufPauza' in window)) {
         return !!(l.box && l.box.isConnected);
     }
     function imtLockAlive() { return imtLockAliveFor(imtLock); }
+    // [AGENT-EXP] 2026-10-24: wspólna pamięć miejsca napisów Immersive Translate (ta sama co w dom_content.js:
+    // chrome.storage.local 'imtKnownPlaces' = znaczniki elementów IT z Shadow DOM, znalezione na dowolnej stronie).
+    var IMT_KNOWN_KEY = 'imtKnownPlaces', imtKnownHosts = [];
+    try { chrome.storage.local.get(IMT_KNOWN_KEY, function (r) { var k = r && r[IMT_KNOWN_KEY]; if (k && Array.isArray(k.hosts)) imtKnownHosts = k.hosts.slice(0, 8); }); } catch (e) {}
+    function imtRememberHost(host) {
+        if (!host || imtKnownHosts.indexOf(host) === 0) return;
+        imtKnownHosts = [host].concat(imtKnownHosts.filter(function (h) { return h !== host; })).slice(0, 8);
+        try { var o = {}; o[IMT_KNOWN_KEY] = { hosts: imtKnownHosts }; chrome.storage.local.set(o); } catch (e) {}
+    }
+    function imtTryKnown() { // znane miejsca IT (wspólna pamięć + klasy IT w odtwarzaczu) — celowane zapytania
+        var roots = [];
+        for (var i = 0; i < imtKnownHosts.length; i++) {
+            var hs; try { hs = document.getElementsByTagName(imtKnownHosts[i]); } catch (e) { continue; }
+            for (var j = 0; j < hs.length; j++) if (hs[j].shadowRoot) roots.push(hs[j].shadowRoot);
+        }
+        roots.push(document.querySelector(PLAYER_SEL) || document);
+        for (var r = 0; r < roots.length; r++) {
+            for (var t = 0; t < TARGET_SELECTORS.length; t++) {
+                var node = null;
+                try { node = roots[r].querySelector(TARGET_SELECTORS[t]); } catch (e) {}
+                if (imtNodeOk(node)) {
+                    imtHint = { sel: TARGET_SELECTORS[t], host: roots[r].host ? roots[r].host.tagName.toLowerCase() : '' };
+                    try { localStorage.setItem(IMT_HINT_KEY, JSON.stringify(imtHint)); } catch (e) {}
+                    return imtMakeLock(roots[r].nodeType === 1 ? document : roots[r], node, TARGET_SELECTORS[t]);
+                }
+            }
+        }
+        return null;
+    }
     function imtTryHint() { // szybkie: getElementsByTagName + querySelector, bez przeszukiwania strony
-        if (!imtHint || !imtHint.sel) return null;
+        if (!imtHint || !imtHint.sel) return imtTryKnown();   // [AGENT-EXP] 2026-10-24: brak zapisu tej strony → wspólna pamięć
         var roots = [];
         if (imtHint.host) {
             var hs = document.getElementsByTagName(imtHint.host);
@@ -560,7 +590,7 @@ if (!('__lektorBufPauza' in window)) {
             try { node = roots[r].querySelector(imtHint.sel); } catch (e) {}
             if (imtNodeOk(node)) return imtMakeLock(roots[r].nodeType === 1 ? document : roots[r], node, imtHint.sel);
         }
-        return null;
+        return imtTryKnown();   // [AGENT-EXP] 2026-10-24: zapis tej strony nie trafił → wspólna pamięć
     }
     function imtFullSearch() { // drogie — rzadko
         var roots = [document].concat(getShadowRoots());
@@ -576,6 +606,7 @@ if (!('__lektorBufPauza' in window)) {
                     if (pass === 0 && roots[r].nodeType !== 11 && !nodes[j].closest(PLAYER_SEL)) continue;
                     imtHint = { sel: TARGET_SELECTORS[i], host: roots[r].host ? roots[r].host.tagName.toLowerCase() : '' };
                     try { localStorage.setItem(IMT_HINT_KEY, JSON.stringify(imtHint)); } catch (e) {}
+                    imtRememberHost(imtHint.host);   // [AGENT-EXP] 2026-10-24: do wspólnej pamięci
                     return imtMakeLock(roots[r], nodes[j], TARGET_SELECTORS[i]);
                 }
             }
@@ -591,7 +622,22 @@ if (!('__lektorBufPauza' in window)) {
         var prev = imtLock;
         imtLock = imtTryHint(); // tylko zapamiętane miejsce (celowane, bez przeszukiwania strony)
         if (imtLock !== prev) { imtLockEmptySince = 0; imtObserveLock(); }
+        // [AGENT-EXP] 2026-10-23: ramka Hover (/embed/ pod blank.org) ma osobny localStorage (bez zapisanego miejsca),
+        // a 🔍 z popupu do niej nie trafia — bez tego ramka nigdy nie znajdowała napisów i lektor milczał (każdy silnik).
+        // Dokument ramki jest mały, więc szukamy w nim sami (najwyżej raz na sekundę, póki nie ma kontenera).
+        if (!imtLock && IS_EMBED) imtSearchOnDemand();
+        // [AGENT-EXP] 2026-10-24: też na zwykłym YouTube — Immersive Translate bez przycisku 🔍. Film gra, brak miejsca
+        // napisów → szukamy sami co 2 s (po 2 min bez skutku co 10 s, energia). Działa dla każdego silnika lektora.
+        else if (!imtLock) {
+            var v = document.querySelector('video');
+            if (v && !v.paused && now - imtAutoLast >= (imtAutoTries < 60 ? 2000 : 10000)) {
+                imtAutoLast = now;
+                imtAutoTries++;
+                if (imtSearchOnDemand()) imtAutoTries = 0;
+            }
+        }
     }
+    var imtAutoLast = 0, imtAutoTries = 0;   // [AGENT-EXP] 2026-10-24
     // NA ŻĄDANIE: jednorazowe globalne szukanie (cała strona + Shadow DOM) → zapis w pamięci.
     // Zapis ZASTĘPUJE poprzedni (imtHint to jedno miejsce) — nigdy stare + nowe.
     // Nic nie znaleziono → dotychczasowy zapis zostaje bez zmian.
@@ -1116,7 +1162,7 @@ if (!('__lektorBufPauza' in window)) {
                 if (!filePreloaded.has(sub.id) && startT >= nowMs && startT <= nowMs + fileLookahead && preBudget > 0) {
                     preBudget--;
                     filePreloaded.add(sub.id);
-                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: sub.id, text: sub.text, startMs: startT, endMs: endT });
+                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: sub.id, text: sub.text, startMs: startT, endMs: endT, nowMs: nowMs });   // [AGENT-EXP] 2026-10-25: nowMs = miejsce filmu (bramka zapasu w offscreen)
                 }
                 if (!wTle && !filePlayed.has(sub.id) && nowMs >= startT && nowMs < endT) {
                     filePlayed.add(sub.id);
@@ -1149,7 +1195,7 @@ if (!('__lektorBufPauza' in window)) {
             if (ch.fileSubs !== undefined || ch.fileSubsMem !== undefined) fileForMe(fileApply);   // [AGENT-EXP]
             if (ch.lookaheadMin !== undefined) {
                 var m2 = Number(ch.lookaheadMin.newValue);
-                if (!isNaN(m2)) fileLookahead = m2 > 0 ? m2 * 60000 : 0;
+                if (!isNaN(m2)) { fileLookahead = m2 > 0 ? m2 * 60000 : 0; try { filePreloaded.clear(); ttPreloaded.clear(); } catch (e) {} }   // [AGENT-EXP] 2026-10-25: nowy zapas → wyślij okno jeszcze raz (gotowe idą z pamięci)
             }
         });
     } catch (e) {}
@@ -1162,6 +1208,27 @@ if (!('__lektorBufPauza' in window)) {
     // =========================================================================
     var ttSubs = [], ttTimer = null, ttVideoId = '', ttTried = 0, ttWatchTried = false;
     var ttPlayed = new Set(), ttPreloaded = new Set();
+    // [AGENT-EXP] 2026-10-26: co lektor już przeczytał (czas kwestii w filmie, bez przesunięcia). Start filmu („play”),
+    // podmiana listy (pamięć → YouTube → tłumaczenie) i LIVE przed wczytaniem napisów czyściły ttPlayed — bieżące
+    // zdanie szło drugi raz. Kasowane tylko przy przewinięciu i pauzie, która przerwała mowę.
+    var ttSpoken = [], ttLastList = null;
+    function ttSpokenAdd(a, b) {
+        ttSpoken.push({ a: a, b: b, at: Date.now() });
+        if (ttSpoken.length > 20) ttSpoken.shift();
+    }
+    function ttRestorePlayed(nowMs, off) {
+        var old = Date.now() - 120000;
+        ttSpoken = ttSpoken.filter(function (r) { return r.at > old; });
+        if (!ttSpoken.length) return;
+        for (var i = 0; i < ttSubs.length; i++) {
+            var c = ttSubs[i];
+            if (c.startMs + off > nowMs) break;
+            if (nowMs >= c.endMs + off) continue;
+            for (var j = 0; j < ttSpoken.length; j++) {
+                if (ttSpoken[j].a <= c.endMs && ttSpoken[j].b >= c.startMs - 500) { ttPlayed.add(c); break; }
+            }
+        }
+    }
 
     function ttGetVideoId() {
         try {
@@ -1676,7 +1743,8 @@ if (!('__lektorBufPauza' in window)) {
             if (ttPauza && window.__lektorBufPauza === false) return;
             var nowMs = v.currentTime * 1000;
             // Przewinięcie / wznowienie po pauzie / skok >1.5 s → czytamy od nowa od bieżącej pozycji.
-            if (ttResync || (lastTtTime >= 0 && Math.abs(nowMs - lastTtTime) > 1500)) { ttPlayed.clear(); ttPreloaded.clear(); ttResync = false; }
+            if (ttResync || (lastTtTime >= 0 && Math.abs(nowMs - lastTtTime) > 1500)) { ttPlayed.clear(); ttPreloaded.clear(); ttResync = false; ttLastList = null; }
+            if (ttLastList !== ttSubs) { ttLastList = ttSubs; ttRestorePlayed(nowMs, getOff()); }   // [AGENT-EXP] 2026-10-26: bez dubla bieżącego zdania
             lastTtTime = nowMs;
             var off = getOff();
             var rate = v.playbackRate || 1; // prędkość filmu (np. 1.5×) — czas kwestii w realnych ms = /rate
@@ -1691,10 +1759,11 @@ if (!('__lektorBufPauza' in window)) {
                 if (!ttPreloaded.has(sub) && startT >= nowMs && startT <= nowMs + fileLookahead && preBudget > 0) {
                     preBudget--;
                     ttPreloaded.add(sub);
-                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: (IS_EMBED ? 'em_tt_' : 'tt_') + i, text: sub.text, startMs: startT, endMs: endT });
+                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: (IS_EMBED ? 'em_tt_' : 'tt_') + i, text: sub.text, startMs: startT, endMs: endT, nowMs: nowMs });
                 }
                 if (!ttPauza && !wTle && !ttPlayed.has(sub) && nowMs >= startT && nowMs < endT) {
                     ttPlayed.add(sub);
+                    ttSpokenAdd(sub.startMs, sub.endMs);   // [AGENT-EXP] 2026-10-26
                     pushSpoken(sub.text);
                     var w = String(sub.text || '').trim().split(/\s+/).filter(Boolean).length;
                     spokenWords += w;

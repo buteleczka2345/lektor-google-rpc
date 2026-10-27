@@ -106,7 +106,6 @@ function voiceStyleUrl(voiceName) {
 let backend = 'cpu';
 let gpuFellBack = false;   // wybrano GPU, ale nie dało się go użyć → pula CPU
 let gpuError = null;
-let ortAllPromise = null;  // ort.all (WebGPU + WASM) — ładowany tylko przy GPU
 let slots = [];            // { ready, busy, lastUsed, provider, threads, run(job), dispose() }
 let slotGen = 0;           // rośnie przy zmianie sprzętu: stara praca jest odrzucana
 let initPromise = null;
@@ -149,12 +148,18 @@ function removeSlot(slot, reason) {
     try { slot.dispose(reason || new Error('Silnik zatrzymany')); } catch (e) { /* ignore */ }
 }
 
-function loadOrtAll() {
-    if (!ortAllPromise) {
-        ortAllPromise = import(runtimeUrl('supertonic/lib/ort.all.min.mjs'));
-        ortAllPromise.catch(() => { ortAllPromise = null; });
+// [AGENT-EXP] 2026-10-24: ONNX Runtime ustawia kartę (env.webgpu.adapter) tylko RAZ — potem pole jest tylko do odczytu
+// („Cannot assign to read only property 'adapter'”, a dedykowana ↔ zintegrowana spadała na CPU). Dlatego osobna kopia
+// ort.all na każdą kartę (adres z ?karta=…) i karta wpisywana tylko przy pierwszym użyciu tej kopii.
+const ortAllByPref = new Map();   // powerPreference → { promise, adapterSet, gpuName }
+function loadOrtAll(pref) {
+    let e = ortAllByPref.get(pref);
+    if (!e) {
+        e = { promise: import(runtimeUrl('supertonic/lib/ort.all.min.mjs') + '?karta=' + pref), adapterSet: false, gpuName: null };
+        e.promise.catch(() => ortAllByPref.delete(pref));
+        ortAllByPref.set(pref, e);
     }
-    return ortAllPromise;
+    return e;
 }
 
 // „nvidia · ampere” z GPUAdapter.info (starszy Chrome: brak info → null).
@@ -172,17 +177,22 @@ async function createGpuSlot() {
     const powerPreference = backend === 'igpu' ? 'low-power' : 'high-performance';
     const adapter = await navigator.gpu.requestAdapter({ powerPreference });
     if (!adapter) throw new Error('WebGPU nie znalazło karty graficznej');
-    const gpuName = describeAdapter(adapter);
-    const ns = await loadOrtAll();
+    const ortEntry = loadOrtAll(powerPreference);   // [AGENT-EXP] 2026-10-24: kopia ONNX Runtime tej karty
+    const ns = await ortEntry.promise;
     const ortNs = ns.default && ns.default.InferenceSession ? ns.default : ns;
-    ortNs.env.wasm.wasmPaths = runtimeUrl('supertonic/lib/');
-    ortNs.env.wasm.numThreads = Math.max(1, Math.min(4, hwThreads()));
-    ortNs.env.wasm.simd = true;
-    // Inaczej ONNX Runtime poprosiłby o własną kartę, bez preferencji.
-    ortNs.env.webgpu = ortNs.env.webgpu || {};
-    ortNs.env.webgpu.powerPreference = powerPreference;
-    ortNs.env.webgpu.adapter = adapter;
-    ortNs.env.logLevel = 'error';
+    if (!ortEntry.adapterSet) {
+        ortNs.env.wasm.wasmPaths = runtimeUrl('supertonic/lib/');
+        ortNs.env.wasm.numThreads = Math.max(1, Math.min(4, hwThreads()));
+        ortNs.env.wasm.simd = true;
+        // Inaczej ONNX Runtime poprosiłby o własną kartę, bez preferencji.
+        ortNs.env.webgpu = ortNs.env.webgpu || {};
+        ortNs.env.webgpu.powerPreference = powerPreference;
+        ortNs.env.webgpu.adapter = adapter;
+        ortNs.env.logLevel = 'error';
+        ortEntry.adapterSet = true;
+        ortEntry.gpuName = describeAdapter(adapter);
+    }
+    const gpuName = ortEntry.gpuName;   // karta, którą ta kopia naprawdę liczy
     setOrt(ortNs);
     const engine = await loadTextToSpeechFromUrls(await modelUrlMap(), { executionProviders: ['webgpu', 'wasm'], logSeverityLevel: 3 });
     const styles = new Map();
@@ -213,7 +223,11 @@ async function createGpuSlot() {
                 throw e;
             }
         },
-        dispose() { styles.clear(); }
+        dispose() {
+            styles.clear();
+            // [AGENT-EXP] 2026-10-24: zwolnij sesje (pamięć karty) — inaczej po zmianie karty stary model zostawał w VRAM
+            for (const s of [engine.dpOrt, engine.textEncOrt, engine.vectorEstOrt, engine.vocoderOrt]) try { s && s.release && s.release(); } catch (e) { /* ignore */ }
+        }
     };
     return slot;
 }

@@ -428,7 +428,7 @@ if (!('__lektorBufPauza' in window)) {
         if (v && savedVolume !== null) { v.volume = savedVolume; savedVolume = null; }
     }
     function pauseSpeech() {
-        try { chrome.runtime.sendMessage({ action: 'TTS_PAUSE' }); } catch (e) {}
+        try { chrome.runtime.sendMessage({ action: 'TTS_PAUSE', reason: 'pause' }); } catch (e) {}   // [AGENT-EXP] 2026-10-22: woła ją tylko pauza filmu — „Czytaj zawsze do końca” dokańcza zdanie
         try { filePreloaded.clear(); } catch (e) {}   // [AGENT-EXP] preload jeszcze raz (gotowe — z pamięci / dysku)
     }
     function stopSpeech() {
@@ -611,7 +611,19 @@ if (!('__lektorBufPauza' in window)) {
     }
 
     // Zbieranie napisów z Immersive Translate (tylko liście / tłumaczenie docelowe).
+    // [AGENT-EXP] 2026-10-24: iQIYI jak stary „Lektor Multilanguage YT” (który tam czyta): przy każdym sprawdzeniu cała
+    // strona + każdy Shadow DOM, bez zapamiętanego miejsca (ENERGIA). Zapamiętane miejsce na iq.com nie trafiało w napisy IT.
+    function collectITDeep(root, results) {
+        collectITIn(root, results);
+        var all = [];
+        try { all = root.querySelectorAll('*'); } catch (e) { all = []; }
+        for (var k = 0; k < all.length; k++) {
+            try { if (all[k].shadowRoot) collectITDeep(all[k].shadowRoot, results); } catch (e) {}
+        }
+        return results;
+    }
     function collectIT(root, results) {
+        if (root === document && isIqiyi) return collectITDeep(document, results);   // [AGENT-EXP] 2026-10-24
         if (root === document) { var rs = subRoots(); for (var r = 0; r < rs.length; r++) collectITIn(rs[r], results); return results; }
         return collectITIn(root, results);
     }
@@ -703,10 +715,47 @@ if (!('__lektorBufPauza' in window)) {
         return parts.join(' > ');
     }
     // Odnajdź zapamiętane miejsce (celowane zapytania — nie przeszukiwanie strony), max raz na sekundę.
+    // [AGENT-EXP] 2026-10-24: WSPÓLNA pamięć miejsca napisów Immersive Translate (chrome.storage.local, wszystkie strony).
+    // Immersive Translate wszędzie rysuje napisy tak samo: albo własnymi klasami w zwykłym DOM (IT_SELECTORS, np.
+    // .imt-captions-text, #immersive-translate-caption-window), albo w Shadow DOM swojego elementu (znacznik zapamiętany
+    // raz — na dowolnej stronie — w IMT_KNOWN_KEY). Lektor sprawdza te znane miejsca celowanymi zapytaniami, zamiast
+    // przeszukiwać stronę; pełne szukanie (subAutoSearchIT) zostaje tylko na wypadek, gdyby IT zmienił budowę.
+    var IMT_KNOWN_KEY = 'imtKnownPlaces';
+    var imtKnownHosts = [];
+    try { chrome.storage.local.get(IMT_KNOWN_KEY, function (r) { var k = r && r[IMT_KNOWN_KEY]; if (k && Array.isArray(k.hosts)) imtKnownHosts = k.hosts.slice(0, 8); }); } catch (e) {}
+    try { chrome.storage.onChanged.addListener(function (ch, area) { if (area === 'local' && ch[IMT_KNOWN_KEY] && ch[IMT_KNOWN_KEY].newValue && Array.isArray(ch[IMT_KNOWN_KEY].newValue.hosts)) imtKnownHosts = ch[IMT_KNOWN_KEY].newValue.hosts.slice(0, 8); }); } catch (e) {}
+    function imtRememberHost(host) {
+        if (!host || imtKnownHosts.indexOf(host) === 0) return;
+        imtKnownHosts = [host].concat(imtKnownHosts.filter(function (h) { return h !== host; })).slice(0, 8);
+        try { var o = {}; o[IMT_KNOWN_KEY] = { hosts: imtKnownHosts }; chrome.storage.local.set(o); } catch (e) {}
+    }
+    function subTryKnownIT() {   // znane miejsca IT: Shadow DOM zapamiętanych znaczników + klasy IT w zwykłym DOM
+        if (!getVideo()) return null;   // bez filmu w tej ramce nie ma napisów do czytania (energia)
+        for (var i = 0; i < imtKnownHosts.length; i++) {
+            var hs;
+            try { hs = document.getElementsByTagName(imtKnownHosts[i]); } catch (e) { continue; }
+            for (var j = 0; j < hs.length; j++) {
+                if (!hs[j].shadowRoot) continue;
+                subFoundNode = null; collectITIn(hs[j].shadowRoot, []);
+                if (subFoundNode) { subFoundNode = null; return hs[j].shadowRoot; }
+            }
+        }
+        subFoundNode = null; collectITIn(document, []);
+        var n = subFoundNode; subFoundNode = null;
+        return n ? subBoxFor(n) : null;
+    }
     function subRelock() {
         var now = Date.now();
         if (now - subLastRelock < 1000) return;
         subLastRelock = now;
+        var known = subTryKnownIT();   // [AGENT-EXP] 2026-10-24: najpierw wspólna pamięć IT
+        if (known) {
+            var kh = known.nodeType === 11 && known.host ? known.host.tagName.toLowerCase() : '';
+            subHint = kh ? { hosts: [kh], box: '' } : { hosts: [], box: subCssPath(known) };
+            try { localStorage.setItem(SUB_HINT_KEY, JSON.stringify(subHint)); } catch (e) {}
+            subSetLock(known);
+            return;
+        }
         var hosts = subHint.hosts || [];
         for (var i = 0; i < hosts.length; i++) {
             var hs;
@@ -730,13 +779,13 @@ if (!('__lektorBufPauza' in window)) {
     function subAfterScan() { subFoundNode = null; } // miejsce zmienia tylko przycisk 🔍 (na żądanie)
     // NA ŻĄDANIE: jednorazowe globalne szukanie (cała strona + Shadow DOM) → zapis w pamięci.
     // Zapis ZASTĘPUJE poprzedni — w pamięci jest zawsze JEDNO miejsce (najnowsze), nigdy stare + nowe.
-    function subSearchOnDemand() {
+    function subSearchOnDemand(itOnly) {   // [AGENT-EXP] 2026-10-24: itOnly — samo-szukanie tylko napisów Immersive Translate
         var found = null;
         function walk(root) {
             if (found) return; // pierwsze trafienie wystarcza — dalej nie szukamy
             subFoundNode = null;
             var it = collectITIn(root, []);
-            collectNativeIn(root, [], it);
+            if (!itOnly) collectNativeIn(root, [], it);
             if (subFoundNode) { found = subFoundNode; return; }
             var all;
             try { all = root.querySelectorAll('*'); } catch (e) { return; }
@@ -747,10 +796,26 @@ if (!('__lektorBufPauza' in window)) {
         if (!found) return null; // nic nie znaleziono — dotychczasowy zapis zostaje bez zmian
         var box = subBoxFor(found);
         var host = box.nodeType === 11 && box.host ? box.host.tagName.toLowerCase() : '';
+        try { if (host && found.matches && found.matches(IT_GROUP)) imtRememberHost(host); } catch (e) {}   // [AGENT-EXP] 2026-10-24: do wspólnej pamięci
         subHint = host ? { hosts: [host], box: '' } : { hosts: [], box: subCssPath(box) };
         try { localStorage.setItem(SUB_HINT_KEY, JSON.stringify(subHint)); } catch (e) {}
         subSetLock(box);
         return { hosts: host ? [host] : [] };
+    }
+
+    // [AGENT-EXP] 2026-10-24: Immersive Translate SAM — bez przycisku 🔍. Gdy nie ma zapamiętanego miejsca, a film
+    // w tej ramce gra, co 2 s szukamy napisów Immersive Translate (cała strona + Shadow DOM); po 2 min bez skutku
+    // co 10 s (energia). Znalezione miejsce trafia do pamięci strony jak po 🔍, więc dalej działa zwykły tryb.
+    // Szukanie jest przed wyborem silnika — działa dla każdego lektora (Sherpa, Matcha, Supertonic, głos przeglądarki…).
+    var subAutoLast = 0, subAutoTries = 0;
+    function subAutoSearchIT() {
+        var v = getVideo();
+        if (!v || v.paused) return;
+        var now = Date.now();
+        if (now - subAutoLast < (subAutoTries < 60 ? 2000 : 10000)) return;
+        subAutoLast = now;
+        subAutoTries++;
+        if (subSearchOnDemand(true)) subAutoTries = 0;
     }
 
     // Bieżący napis — zależnie od serwisu i opcji źródła.
@@ -948,7 +1013,7 @@ if (!('__lektorBufPauza' in window)) {
         if (!enabled) return;
         if (document.visibilityState !== 'visible') return;
         // ENERGIA: czytamy TYLKO z zapamiętanego miejsca; brak → nic nie szukamy (przycisk 🔍)
-        if (!subLockAlive()) { subRelock(); if (!subLockAlive()) return; }
+        if (!isIqiyi && !subLockAlive()) { subRelock(); if (!subLockAlive()) subAutoSearchIT(); if (!subLockAlive()) return; }   // [AGENT-EXP] 2026-10-24: IT samo; iQIYI — cała strona (collectITDeep)
         if (netTr && !fileSubs.length) {
             var c = getNetCaption();
             subAfterScan(!!c);
@@ -987,6 +1052,7 @@ if (!('__lektorBufPauza' in window)) {
             if (enabled) scheduleScan();
         });
         // ENERGIA: obserwujemy TYLKO zapamiętany kontener napisów; bez niego wystarczy poll
+        if (isIqiyi) { try { observer.observe(document.body || document.documentElement, { childList: true, subtree: true, characterData: true }); } catch (e) {} return; }   // [AGENT-EXP] 2026-10-24: jak stary lektor
         if (subLockAlive()) { try { observer.observe(subLock, { childList: true, subtree: true, characterData: true }); } catch (e) {} }
     }
 
@@ -1219,19 +1285,21 @@ if (!('__lektorBufPauza' in window)) {
         } catch (e) {}
     }
     try { chrome.runtime.onMessage.addListener(function (m) { if (m && m.action === 'LEKTOR_FILE_RECHECK') fileForMe(fileApply); }); } catch (e) {}
-    function autoApplyNow() {
+    function autoApplyNow(keep) {
         fileSubs = autoSubs.slice();
-        filePreloaded.clear();
-        filePlayed.clear();
+        if (!keep) {   // [AGENT-EXP] 2026-10-25: keep = ta sama lista urosła (dobrane części napisów) — przeczytane zostają przeczytane
+            filePreloaded.clear();
+            filePlayed.clear();
+        }
         restoreVolume();
         startFileLoop();
     }
     try {
-        window.__LIVEDUB_AUTO_APPLY__ = function (cues) {
+        window.__LIVEDUB_AUTO_APPLY__ = function (cues, keep) {   // [AGENT-EXP] 2026-10-25: keep
             autoSubs = Array.isArray(cues) && cues.length ? cues : null;
             // [AGENT-EXP] 2026-10-17: wygrywają NAJNOWSZE napisy — Łowca / „Pobierz całe napisy” przykrywają
             // wcześniej wczytany plik (wcześniej plik blokował je na zawsze); ich koniec → wraca plik tej karty
-            if (autoSubs) { manualFile = false; autoApplyNow(); }
+            if (autoSubs) { manualFile = false; autoApplyNow(!!keep); }
             else if (lastFile) fileApply(lastFile);
             else { fileSubs = []; if (fileTimer) { clearInterval(fileTimer); fileTimer = null; } }
         };
@@ -1259,6 +1327,24 @@ if (!('__lektorBufPauza' in window)) {
             if (fileTimer) { clearInterval(fileTimer); fileTimer = null; }
         }
     }
+    // [AGENT-EXP] 2026-10-25: 🤐 Cenzor dostaje te same napisy co lektor (plik, bazy, Łowca, ⬇ całe napisy, auto_subs):
+    // kwestie z czasami → cenzor_main.js (świat MAIN) przez postMessage. Wysyłane, gdy lista się zmieni (dochodzą
+    // tłumaczenia) i co 15 s (cenzor mógł wystartować później albo zmienić się film). `orig` = tekst oryginału.
+    var czSig = '', czAt = 0;
+    setInterval(function () {
+        var n = 0;
+        for (var i = 0; i < fileSubs.length; i++) if (fileSubs[i] && fileSubs[i].text) n++;
+        var sig = fileSubs.length + '|' + n + '|' + (fileSubs[0] ? fileSubs[0].id : '');
+        if (sig === czSig && Date.now() - czAt < 15000) return;
+        if (!fileSubs.length && !czSig) return;
+        czSig = fileSubs.length ? sig : ''; czAt = Date.now();
+        try {
+            window.postMessage({ __lektorCenzor: 'cues', key: 'lektor', cues: fileSubs.map(function (c) {
+                return { startMs: c.startMs, endMs: c.endMs, text: c.text || '', orig: typeof c.src === 'string' ? c.src : '' };
+            }) }, location.origin);
+        } catch (e) {}
+    }, 2000);
+
     function startFileLoop() {
         if (fileTimer) return;
         fileTimer = setInterval(function () {
@@ -1280,7 +1366,7 @@ if (!('__lektorBufPauza' in window)) {
                 if (!filePreloaded.has(sub.id) && startT >= nowMs && startT <= nowMs + fileLookahead && preBudget > 0) {
                     preBudget--;
                     filePreloaded.add(sub.id);
-                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: sub.id, text: sub.text, startMs: startT, endMs: endT });
+                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: sub.id, text: sub.text, startMs: startT, endMs: endT, nowMs: nowMs });   // [AGENT-EXP] 2026-10-25: nowMs = miejsce filmu (bramka zapasu w offscreen)
                 }
                 if (!filePauza && !filePlayed.has(sub.id) && nowMs >= startT && nowMs < endT) {
                     filePlayed.add(sub.id);
@@ -1315,7 +1401,7 @@ if (!('__lektorBufPauza' in window)) {
             if (ch.subtitleOffsetMs !== undefined) storageOffsetMs = Number(ch.subtitleOffsetMs.newValue) || 0;
             if (ch.lookaheadMin !== undefined) {
                 var m2 = Number(ch.lookaheadMin.newValue);
-                if (!isNaN(m2)) fileLookahead = m2 > 0 ? m2 * 60000 : 0;
+                if (!isNaN(m2)) { fileLookahead = m2 > 0 ? m2 * 60000 : 0; filePreloaded.clear(); }   // [AGENT-EXP] 2026-10-25: nowy zapas → wyślij okno jeszcze raz (gotowe idą z pamięci)
             }
         });
     } catch (e) {}

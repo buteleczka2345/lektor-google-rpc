@@ -298,6 +298,13 @@ export default class BrowserTTSManager {
         for (const it of q) this._end(it, 'stopped');
     }
 
+    // [AGENT-EXP] 2026-10-22: miękka pauza — bieżąca kwestia czyta się do końca, czekające przepadają
+    dropQueued() {
+        const q = this.queue;
+        this.queue = [];
+        for (const it of q) this._end(it, 'stopped');
+    }
+
     pause() {
         if (!this.synth) return;
         this.paused = true;

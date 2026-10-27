@@ -1415,6 +1415,7 @@
     if (url && !/^(https?|blob|data|file|chrome-extension|moz-extension|safari-web-extension):/i.test(url)) url = '';
     if (info.kindAttr && RX.badKind.test(info.kindAttr)) return null;
     if (url && RX.thumbs.test(url)) return null;
+    if (url && ytOtherVideo(url)) return null;   // [AGENT-EXP] 2026-10-22: napisy YouTube innego filmu (miniatury, podglądy) — pomijamy
     if (url && !info.key) { const owner = store.hlsSeg.get(noHash(url)); if (owner) { owner.layers.add(info.layer); return owner; } } // segment znanej playlisty HLS
 
     if (typeof info.text === 'string' && !info.cues && !info.key && info.text.length >= 64) { // ta sama treść już jest — bez ponownego parsowania i porządkowania
@@ -1489,6 +1490,7 @@
     if (idx >= 0) s += 50 - idx * 8;
     if (it.active) s += 30;
     if (it.auto) s -= 15;
+    if (it.url && ytThisVideo(it.url)) s += 40;   // [AGENT-EXP] 2026-10-22: ścieżka bieżącego filmu YouTube przed resztą
     if (it.forced) s -= 25;
     return s;
   }
@@ -3220,6 +3222,12 @@
   let baseKeys = null, lastWinScan = 0;
 
   function ytVideoId() { try { const q = new URL(W.location.href).searchParams.get('v'); if (q) return q; const m = /\/(?:embed|shorts|live)\/([\w-]{6,})/.exec(W.location.pathname); return m ? m[1] : ''; } catch (e) { return ''; } }
+  // [AGENT-EXP] 2026-10-22: YouTube podsuwa w danych strony adresy /api/timedtext innych filmów (v= inny niż bieżący,
+  // dziwne nazwy i języki). Wygrywały punktami z prawdziwą ścieżką (zwłaszcza polską automatyczną), a „najlepsze → lektor”
+  // próbuje tylko 4 pierwszych — prawdziwa nie dochodziła do kolejki, a potem 🔋 usypiał Łowcę.
+  function ytTimedVid(url) { try { return RX.ytTimed.test(url) ? (new URL(url, W.location.href).searchParams.get('v') || '') : ''; } catch (e) { return ''; } }
+  function ytOtherVideo(url) { const v = ytTimedVid(url); if (!v) return false; const cur = ytVideoId(); return !!cur && v !== cur; }
+  function ytThisVideo(url) { const v = ytTimedVid(url); return !!v && v === ytVideoId(); }
   function scanPlayers() {
     // YouTube: aktualna odpowiedź odtwarzacza (nie przeterminowane ytInitialPlayerResponse po przejściu do innego filmu)
     guard(function () {

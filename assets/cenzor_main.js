@@ -13,6 +13,7 @@
 //     segmentowym, kiedy padnie słowo. [AGENT-EXP] 2026-10-20: osobno czyta też polskie tłumaczenie
 //     Immersive Translate (TR_SELECTORS). Działa na wszystkich stronach lektora. Przy włączonym 1)
 //     jest tylko zapasem, gdy napisów z sieci brak.
+// [AGENT-EXP] 2026-10-25: 1) działa też na HBO Max — całe napisy z manifestu DASH (sekcja 1c, hboFetchAll).
 // Zawsze wycisza TYLKO samo słowo (nie całą kwestię). Nie słucha dźwięku — wyłącznie tekst napisów.
 // Działa niezależnie od tego, czy lektor jest włączony (własne skrypty, własne opcje).
 // Ustawienia przychodzą z cenzor_bridge.js (świat ISOLATED, chrome.storage) przez postMessage.
@@ -231,8 +232,39 @@
         if (vid === currentVid()) useCuesFor(vid);
     }
 
+    // [AGENT-EXP] 2026-10-25: napisy LEKTORA z dowolnego źródła (dom_content.js: plik z dysku, bazy napisów, Łowca,
+    // ⬇ Pobierz całe napisy, auto_subs) — „są napisy z czasami, to cenzor działa”. Używane, gdy strona nie dała
+    // własnego pliku (YouTube / Netflix / HBO Max mają pierwszeństwo). Każda kwestia w obu wersjach: przetłumaczona
+    // (to czyta lektor) i oryginał, jeśli jest — przekleństwo w którejkolwiek wycisza.
+    var extCues = null;   // { vid, list, info }
+    function onExtCues(d) {
+        var list = [];
+        (Array.isArray(d.cues) ? d.cues : []).forEach(function (c) {
+            if (!c) return;
+            var st = +c.startMs / 1000, en = +c.endMs / 1000;
+            if (!isFinite(st) || !(en > st)) return;
+            var seen = {};
+            [c.text, c.orig].forEach(function (t) {
+                t = String(t || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                if (!t || seen[t]) return;
+                seen[t] = 1;
+                list.push({ start: st, end: Math.max(en, st + 0.1), text: t, segs: null });
+            });
+        });
+        list.sort(function (a, b) { return a.start - b.start; });
+        var vid = currentVid();
+        extCues = list.length ? { vid: vid, list: list, info: 'napisy lektora (' + String(d.key || 'plik') + '), ' + list.length + ' kwestii' } : null;
+        if (vid === curVid || curVid === null) useCuesFor(vid);
+    }
+    window.addEventListener('message', function (ev) {
+        if (ev.source !== window || ev.origin !== location.origin) return;
+        if (ev.data && ev.data[TAG] === 'cues') { try { onExtCues(ev.data); } catch (e) {} }
+    });
+
     function useCuesFor(vid) {
         cues = cuesByVid.get(vid) || [];
+        // [AGENT-EXP] 2026-10-25: brak własnego pliku strony → napisy lektora
+        if (!cues.length && extCues && extCues.vid === vid) { cues = extCues.list; lastTrackInfo = extCues.info; }
         cueMode = cues.length > 0;
         windows = []; plannedFor = -1;
         if (cueMode) planFromCues();
@@ -457,6 +489,209 @@
             nfRebuild(vid);
             nfSendToLektor(vid);
         });
+    }
+
+    /* ---------------- 1c) HBO MAX: całe napisy z manifestu DASH ---------------- */
+    // [AGENT-EXP] 2026-10-25: HBO Max (play.hbomax.com, dawniej play.max.com) podaje napisy w manifeście DASH
+    // (…_fallback.mpd, pobierany przez XHR). Film jest podzielony na kilka <Period>, a każda ścieżka tekstowa ma
+    // w każdej części JEDEN plik WebVTT: SegmentTemplate media="t/<id>/t4/$Number$.vtt", startNumber = numer części.
+    // Czasy w plikach są liczone od początku filmu (sprawdzone 2026-10-25: część 2 zaczyna się od 00:13:56,
+    // presentationTimeOffset = start części), więc wystarczy ściągnąć wszystkie części i skleić.
+    // Łapiemy manifest, wybieramy polskie napisy (pl subtitle → pl caption → en), od razu ściągamy CAŁOŚĆ —
+    // nie trzeba nic włączać w odtwarzaczu, a słowa są znane z góry (cisza wchodzi PRZED słowem).
+    var IS_HBO = /(^|\.)(hbomax|max)\.com$/.test(location.hostname);
+    var hboMpd = null;            // { url, text } — ostatni manifest
+    var hboDone = new Set();      // adresy manifestów już obsłużonych (albo w trakcie)
+
+    function hboIsMpdUrl(u) { return typeof u === 'string' && /\.mpd(?=$|[?#])/i.test(u); }
+    function hboSec(s) {   // PT1H2M3.5S → sekundy
+        var m = String(s || '').match(/^P(?:\d+D)?T?(?:([\d.]+)H)?(?:([\d.]+)M)?(?:([\d.]+)S)?$/);
+        return m ? (+(m[1] || 0)) * 3600 + (+(m[2] || 0)) * 60 + (+(m[3] || 0)) : 0;
+    }
+    function hboAttr(a, n) { var r = String(a || '').match(new RegExp('\\b' + n + '="([^"]*)"')); return r ? decodeEntities(r[1]) : null; }
+    function hboAbs(u, base) { try { return new URL(u, base).toString(); } catch (e) { return ''; } }
+    function hboBase(xml, base) {   // <BaseURL> przed pierwszym dzieckiem (MPD/Period)
+        var m = xml.match(/^[\s\S]*?(?=<(?:Period|AdaptationSet)\b)/), b = m ? m[0] : '';
+        var r = b.match(/<BaseURL[^>]*>([^<]+)<\/BaseURL>/);
+        return r ? hboAbs(r[1].trim(), base) || base : base;
+    }
+
+    // Ścieżki tekstowe manifestu: [{ lang, role, segs: [{ url, pStart, pto }] }] (części po kolei).
+    function hboParseMpd(xml, mpdUrl) {
+        var tracks = new Map();
+        var base = hboBase(xml, mpdUrl);
+        var periods = xml.split(/<Period\b/).slice(1);
+        if (!periods.length) periods = [xml];
+        periods.forEach(function (p) {
+            var pHead = p.slice(0, p.indexOf('>'));
+            var pStart = hboSec(hboAttr(pHead, 'start'));
+            var pBase = hboBase(p.slice(p.indexOf('>') + 1), base);
+            (p.match(/<AdaptationSet\b[\s\S]*?<\/AdaptationSet>/g) || []).forEach(function (s) {
+                var head = (s.match(/<AdaptationSet\b([^>]*)>/) || [])[1] || '';
+                if (!/contentType="text"|mimeType="text\/vtt"/i.test(s)) return;
+                if (/mimeType="application\/(?:ttml|mp4)/i.test(s) && !/text\/vtt/i.test(s)) return;   // tylko WebVTT
+                var lang = String(hboAttr(head, 'lang') || '').toLowerCase();
+                var role = ((s.match(/<Role\b[^>]*value="([^"]*)"/) || [])[1] || 'subtitle').toLowerCase();
+                var rep = (s.match(/<Representation\b([^>]*)>/) || [])[1] || '';
+                var tpl = (s.match(/<SegmentTemplate\b([^>]*?)\/?>/) || [])[1];
+                var urls = [], pto = 0;
+                if (tpl != null) {
+                    var media = hboAttr(tpl, 'media') || '', num = +(hboAttr(tpl, 'startNumber') || 1);
+                    var ts = +(hboAttr(tpl, 'timescale') || 1) || 1;
+                    pto = (+(hboAttr(tpl, 'presentationTimeOffset') || 0)) / ts;
+                    media = media.replace(/\$RepresentationID\$/g, hboAttr(rep, 'id') || '').replace(/\$Bandwidth\$/g, hboAttr(rep, 'bandwidth') || '');
+                    var fill = function (n, t) {
+                        return media.replace(/\$Number(?:%0(\d+)d)?\$/g, function (m, w) { var x = String(n); while (w && x.length < +w) x = '0' + x; return x; })
+                            .replace(/\$Time\$/g, String(t));
+                    };
+                    var S = s.match(/<S\b[^>]*>/g);
+                    if (S) {
+                        var t = 0;
+                        S.forEach(function (e) {
+                            var a = e.slice(2), st = hboAttr(a, 't'), d = +(hboAttr(a, 'd') || 0), r = +(hboAttr(a, 'r') || 0);
+                            if (st != null) t = +st;
+                            for (var k = 0; k <= Math.max(0, r) && urls.length < 2000; k++) { urls.push(fill(num++, t)); t += d; }
+                        });
+                    } else {
+                        var dur = (+(hboAttr(tpl, 'duration') || 0)) / ts, pd = hboSec(hboAttr(pHead, 'duration'));
+                        var cnt = dur > 0 && pd > 0 ? Math.ceil(pd / dur) : 1;
+                        for (var i = 0; i < Math.min(cnt, 2000); i++) urls.push(fill(num + i, Math.round(i * dur * ts)));
+                    }
+                } else {
+                    var bu = s.match(/<BaseURL[^>]*>([^<]+)<\/BaseURL>/);
+                    if (bu) urls.push(bu[1].trim());
+                }
+                if (!urls.length) return;
+                var key = lang + '|' + role;
+                var tr = tracks.get(key);
+                if (!tr) { tr = { lang: lang, role: role, segs: [] }; tracks.set(key, tr); }
+                urls.forEach(function (u) { var a = hboAbs(decodeEntities(u), pBase); if (a) tr.segs.push({ url: a, pStart: pStart, pto: pto }); });
+            });
+        });
+        return Array.from(tracks.values());
+    }
+
+    function hboPickTrack(tracks) {
+        var l2 = function (t) { return t.lang.split('-')[0]; };
+        var order = [['pl', 'subtitle'], ['pl', 'caption'], ['pl', ''], ['en', 'subtitle'], ['en', 'caption'], ['en', '']];
+        for (var i = 0; i < order.length; i++) {
+            var hit = tracks.filter(function (t) {
+                return l2(t) === order[i][0] && t.role.indexOf('forced') < 0 && (!order[i][1] || t.role === order[i][1]);
+            })[0];
+            if (hit) return hit;
+        }
+        return null;
+    }
+
+    // Sklejanie części: gdyby czasy w pliku były liczone od początku części (a nie filmu), przesuwamy o jej start.
+    function hboMerge(parts) {
+        var all = [], seen = new Set();
+        parts.forEach(function (pt) {
+            if (!pt || !pt.cues.length) return;
+            var shift = (pt.pStart > 1 && pt.cues[0].start < pt.pStart - 2) ? pt.pStart - pt.pto : 0;
+            pt.cues.forEach(function (c) {
+                var st = c.start + shift, k = Math.round(st * 10) + '|' + c.text;
+                if (seen.has(k)) return;
+                seen.add(k);
+                all.push({ start: st, end: c.end + shift, text: c.text, segs: null });
+            });
+        });
+        return all.sort(function (a, b) { return a.start - b.start; });
+    }
+
+    async function hboFetchAll(mpd) {
+        var track = hboPickTrack(hboParseMpd(mpd.text, mpd.url));
+        if (!track) { lastTrackInfo = 'HBO Max: brak napisów pl/en w manifeście'; return; }
+        var segs = track.segs, parts = new Array(segs.length), next = 0, bad = 0;
+        async function worker() {
+            while (next < segs.length) {
+                var i = next++;
+                try {
+                    var txt = await (await origFetch.call(window, segs[i].url)).text();
+                    parts[i] = { cues: parseVtt(String(txt || '')), pStart: segs[i].pStart, pto: segs[i].pto };
+                } catch (e) { bad++; }
+            }
+        }
+        await Promise.all([worker(), worker(), worker(), worker()]);
+        var list = hboMerge(parts);
+        if (!list.length) { hboDone.delete(mpd.url); return; }
+        var vid = currentVid();
+        cuesByVid.delete(vid);
+        cuesByVid.set(vid, list);
+        while (cuesByVid.size > 20) cuesByVid.delete(cuesByVid.keys().next().value);
+        lastTrackInfo = 'HBO Max: cały plik ' + track.lang + (track.role !== 'subtitle' ? ' (' + track.role + ')' : '')
+            + ', ' + list.length + ' kwestii z ' + segs.length + ' części' + (bad ? ', błędy: ' + bad : '');
+        useCuesFor(vid);
+        hboSendToLektor(list, track.lang, vid);
+    }
+
+    // [AGENT-EXP] 2026-10-25: całe napisy HBO idą też do LEKTORA (cenzor_bridge.js → LOWCA_AUTO_CUES z full: true).
+    // Łowca łapie tylko części, które odtwarzacz już pobrał (bufor ~15 min), i potem lektor stał. Pełny plik ma
+    // pierwszeństwo przed kawałkami Łowcy; polskie napisy lektor czyta bez tłumaczenia, inne tłumaczy od razu w całości.
+    // Wysyłamy 3× (od razu, po 5 s i po 20 s) — lektor mógł jeszcze nie słuchać; powtórka bez zmian nic nie robi.
+    function hboSendToLektor(list, lang, vid) {
+        var payload = {
+            __lektorCenzor: 'hboFull', lang: lang || '', label: 'HBO Max — cały plik',
+            cues: list.map(function (c) { return [Math.round(c.start * 1000), Math.round(c.end * 1000), c.text]; })
+        };
+        try { console.log('[Lektor Cenzor] HBO: cały plik do lektora — ' + list.length + ' kwestii [' + (lang || '?') + ']'); } catch (e) {}
+        [0, 5000, 20000].forEach(function (ms) {
+            setTimeout(function () {
+                if (vid !== currentVid()) return;
+                try { window.postMessage(payload, location.origin); } catch (e) {}
+            }, ms);
+        });
+    }
+
+    function hboMaybeFetch() {
+        if (!IS_HBO || !hboMpd || hboDone.has(hboMpd.url)) return;   // [AGENT-EXP] 2026-10-25: także bez cenzora — dla lektora
+        hboDone.add(hboMpd.url);
+        hboFetchAll(hboMpd).catch(function () { hboDone.delete(hboMpd.url); });
+    }
+
+    function hboOnMpd(url, text) {
+        if (typeof text !== 'string' || text.indexOf('<MPD') < 0 || text.indexOf('contentType="text"') < 0 && text.indexOf('text/vtt') < 0) return;
+        hboMpd = { url: String(url || location.href), text: text };
+        setTimeout(hboMaybeFetch, 0);
+    }
+
+    if (IS_HBO) {
+        try {
+            window.fetch = function (input) {
+                var p = origFetch.apply(this, arguments);
+                try {
+                    var url = (input && typeof input === 'object' && 'url' in input) ? input.url : String(input);
+                    if (hboIsMpdUrl(url)) {
+                        p.then(function (res) {
+                            try { res.clone().text().then(function (t) { hboOnMpd(res.url || url, t); }).catch(function () {}); } catch (e) {}
+                        }).catch(function () {});
+                    }
+                } catch (e) {}
+                return p;
+            };
+        } catch (e) {}
+        try {
+            var HXP = XMLHttpRequest.prototype, hOpen = HXP.open, hSend = HXP.send;
+            HXP.open = function (m, url) { try { this.__czUrl = String(url); } catch (e) {} return hOpen.apply(this, arguments); };
+            HXP.send = function () {
+                try {
+                    if (hboIsMpdUrl(this.__czUrl)) {
+                        var x = this;
+                        x.addEventListener('load', function () {
+                            try {
+                                var rt = x.responseType, body;
+                                if (!rt || rt === 'text') body = x.responseText;
+                                else if (rt === 'arraybuffer') body = new TextDecoder().decode(x.response);
+                                else if (rt === 'document' && x.response) body = new XMLSerializer().serializeToString(x.response);
+                                else return;
+                                hboOnMpd(x.responseURL || x.__czUrl, body);
+                            } catch (e) {}
+                        });
+                    }
+                } catch (e) {}
+                return hSend.apply(this, arguments);
+            };
+        } catch (e) {}
     }
 
     // Samodzielne pobranie (metoda z yt_subs_bridge.js → getRaw), gdy ani odtwarzacz, ani lektor
@@ -708,7 +943,8 @@
         '.ytp-caption-segment',
         '.player-timedtext-text-container',
         '.atvwebplayersdk-captions-text',
-        '.dmp_SubtitleText', '.vjs-text-track-display', '.jw-text-track-cue', '.shaka-text-container'
+        '.dmp_SubtitleText', '.vjs-text-track-display', '.jw-text-track-cue', '.shaka-text-container',
+        '[data-testid="cueBoxRowTextCue"]'   // [AGENT-EXP] 2026-10-25: HBO Max (każda linia napisu osobno)
     ];
     // [AGENT-EXP] 2026-10-20: polskie tłumaczenie Immersive Translate (to samo co czyta lektor — dom_content.js,
     // youtube_content.js). Czytane OSOBNO od napisów strony: wcześniej brana była tylko pierwsza znaleziona grupa
@@ -921,7 +1157,8 @@
         status: function () {
             return { on: opt.cenzorOn, live: opt.cenzorLive, vid: curVid, cueMode: cueMode, cues: cues.length,
                 windows: windows.length, track: lastTrackInfo, muting: muting,
-                nfTracks: IS_NF ? (nfTracks.get(curVid) || []).length : undefined };
+                nfTracks: IS_NF ? (nfTracks.get(curVid) || []).length : undefined,
+                hboMpd: IS_HBO ? !!hboMpd : undefined };   // [AGENT-EXP] 2026-10-25
         },
         __test: { parseTimedtext: parseTimedtext, parseTtml: parseTtml, nfPickTrack: nfPickTrack, nfTrackUrl: nfTrackUrl,
             nfMerge: function (vid, file, sel) { var e = nfEntry(vid); e.file = file; e.sel = Object.create(null); if (sel) e.sel.x = sel; nfRebuild(vid); return (cuesByVid.get(vid) || []).length; },
@@ -930,7 +1167,9 @@
             nfTrackCount: function (v) { return (nfTracks.get(String(v)) || []).length; }, applyOpts: applyOpts, wordTimesInCue: wordTimesInCue,
             plan: function (list) { cues = list; cueMode = true; planFromCues(); return windows.slice(); },
             live: function (text, t, tr) { liveSources = function () { return { nat: text, tr: tr || '' }; }; checkLive(t); return { liveWins: liveWins.slice() }; },
-            findMatches: function (s) { return findMatches(s); } }
+            findMatches: function (s) { return findMatches(s); },
+            hboParseMpd: hboParseMpd, hboPickTrack: hboPickTrack, hboMerge: hboMerge, hboOnMpd: hboOnMpd,   // [AGENT-EXP] 2026-10-25
+            cuesOf: function (v) { return cuesByVid.get(String(v)) || []; }, status: function () { return window.lektorCenzor.status(); } }
     };
 
     ready(function () {
@@ -940,6 +1179,7 @@
             if (opt.cenzorLive && !(opt.cenzorOn && cueMode) && v && !isAd()) checkLive(v.currentTime);
             maybeAutoLoad();
             if (IS_NF && ++nfTicks % 5 === 0) nfMaybeFetch();
+            if (IS_HBO) hboMaybeFetch();   // [AGENT-EXP] 2026-10-25: manifest mógł przyjść przed ustawieniami
         }, 200);
         try { window.postMessage({ __lektorCenzor: 'hello' }, location.origin); } catch (e) {}
         loop();

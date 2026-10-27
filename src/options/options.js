@@ -8,8 +8,8 @@ const SCHEMA = [
   // [VOX] 2026-10-20: 🗣 Silnik mowy — ten sam klucz ttsEngine co w popupie, plus Supertonic (silnik z VoxNemesis).
   // Głos dla serwerów (Matcha, XTTS, Pocket…) dalej wybiera się w popupie.
   { sec: '🗣 Silnik mowy', id: 'engineSec', sub: 'Którym głosem czyta lektor. Supertonic (z VoxNemesis) liczy na tym komputerze — procesorem albo kartą graficzną. Głos dla serwerów (Matcha, XTTS, Pocket…) wybierasz w popupie.', items: [
-    { k: 'ttsEngine', t: 'select', def: 'sherpa', label: 'Silnik', hint: 'Ten sam wybór co „🗣 Silnik mowy” w popupie. Głos przeglądarki (Web Speech API) gra prosto z systemu: bez wzmocnienia ponad 100%, kompresora, nagrywania i zapisu bufora', options: [ /* [AGENT-EXP] 2026-10-21 */
-      ['sherpa', 'Sherpa VITS — wbudowany'], ['browser', 'Głos przeglądarki (Google / Microsoft) — darmowy'], ['supertonic', 'Supertonic 3 (VoxNemesis) — CPU / GPU'], ['matcha', 'Matcha-TTS-PL — serwer :9000'], ['xtts', 'XTTS v2 (TTS2) — serwer :8000'],
+    { k: 'ttsEngine', t: 'select', def: 'matcha',   /* [AGENT-EXP] 2026-10-24: domyślnie Matcha 🌐 */ label: 'Silnik', hint: 'Ten sam wybór co „🗣 Silnik mowy” w popupie. Głos przeglądarki (Web Speech API) gra prosto z systemu: bez wzmocnienia ponad 100%, kompresora, nagrywania i zapisu bufora', options: [ /* [AGENT-EXP] 2026-10-21 */
+      ['matcha', 'Matcha-TTS-PL 🌐 — w przeglądarce (domyślny) lub serwer :9000'], ['sherpa', 'Sherpa / Piper — pobrane głosy (Języki świata)'], ['browser', 'Głos przeglądarki (Google / Microsoft) — darmowy'], ['supertonic', 'Supertonic 3 (VoxNemesis) — CPU / GPU'], ['xtts', 'XTTS v2 (TTS2) — serwer :8000'],
       ['audio8', 'Audio8 ONNX INT8 — serwer :9300'], ['f5', 'Lektor Marek (F5-TTS) — serwer :9400'], ['pocket', 'Pocket-TTS-PL — serwer :9200'], ['omnivoice', 'OmniVoice — serwer :9100']] },
     { k: 'supertonicVoice', t: 'select', def: 'Supertonic M1', label: 'Supertonic — głos', hint: '4 głosy wbudowane w model', st: true, options: [
       ['Supertonic M1', 'Męski 1'], ['Supertonic M2', 'Męski 2'], ['Supertonic F1', 'Żeński 1'], ['Supertonic F2', 'Żeński 2']] },
@@ -29,7 +29,9 @@ const SCHEMA = [
   { sec: '🗂️ Karty i pauza', sub: 'Zachowanie przy wielu kartach i pauzie.', items: [
     { k: 'singleTabMode', t: 'bool', def: true, label: 'Tylko jedna karta naraz', hint: 'Audio Focus — druga karta uciszana' },
     { k: 'autoMuteHidden', t: 'bool', def: true, label: 'Wyciszaj kartę w tle', hint: 'Gdy przełączysz okno lub kartę' },
-    { k: 'pauseVideoWithLektor', t: 'bool', def: false, label: 'Pauzuj film razem z lektorem', hint: 'Film czeka, aż lektor skończy kwestię' }
+    { k: 'pauseVideoWithLektor', t: 'bool', def: false, label: 'Pauzuj film razem z lektorem', hint: 'Film czeka, aż lektor skończy kwestię' },
+    // [AGENT-EXP] 2026-10-22: lektor nie pomija i nie ucina zdań; pauza filmu → dokończ bieżące zdanie
+    { k: 'readToEnd', t: 'bool', def: false, label: 'Czytaj zawsze do końca', hint: 'Lektor nie pomija ani nie ucina zdań; po pauzie filmu kończy bieżące zdanie' }
   ]},
   { sec: '📺 YouTube i filtry', sub: 'Wykrywanie polskiego dubbingu i filtrowanie wstawek.', items: [
     { k: 'detectYTPolish', t: 'bool', def: true, label: 'Wyłącz przy polskim dubbingu', hint: 'Gdy wybrana jest polska ścieżka audio' },
@@ -64,7 +66,7 @@ const SCHEMA = [
   // [AGENT-EXP] 2026-10-19 — 🤐 Cenzor przekleństw (assets/cenzor_main.js + cenzor_bridge.js). Wycisza oryginalny
   // dźwięk filmu (video.muted), głos lektora gra dalej. Domyślnie WYŁ. = zachowanie jak przed zmianą.
   { sec: '🤐 Cenzor przekleństw', sub: 'Wycisza samo przekleństwo w oryginalnym dźwięku filmu. Pracuje tylko na tekście napisów (nie słucha dźwięku). Działa także przy wyłączonym lektorze; głos lektora, gdy jest włączony, gra dalej.', items: [
-    { k: 'cenzorOn', t: 'bool', def: false, label: 'Wyciszaj z pobranych napisów (YouTube, Netflix)', hint: 'Napisy filmu są pobierane z góry (tak jak robi to lektor; CC nie trzeba włączać), więc wiadomo, które słowa padną i kiedy — cisza wchodzi PRZED słowem. Auto-napisy YouTube mają czas każdego słowa — wtedy jest najdokładniej.' },
+    { k: 'cenzorOn', t: 'bool', def: false, label: 'Wyciszaj z pobranych napisów (YouTube, Netflix, HBO Max)', hint: 'Napisy filmu są pobierane z góry (tak jak robi to lektor; CC nie trzeba włączać), więc wiadomo, które słowa padną i kiedy — cisza wchodzi PRZED słowem. Auto-napisy YouTube mają czas każdego słowa — wtedy jest najdokładniej. HBO Max: cenzor sam ściąga całe polskie napisy filmu (gdy ich brak — angielskie), napisów w odtwarzaczu nie trzeba włączać.' },   // [AGENT-EXP] 2026-10-25: HBO Max
     { k: 'cenzorNfPl', t: 'bool', def: true, label: 'Netflix: zawsze pobieraj całe polskie napisy', hint: 'Cenzor sam ściąga CAŁY polski plik napisów odcinka (z listy ścieżek filmu), nawet gdy w odtwarzaczu wybrane są inne napisy albo żadne — wszystkie przekleństwa są znane od pierwszej minuty. Gdy polski plik jest pobrany, wystarcza — inne napisy nie są już potrzebne. Lektor też dostaje ten cały plik, więc ma komplet polskich napisów od pierwszej minuty. Działa razem z opcją „Wyciszaj z pobranych napisów”.' },
     { k: 'cenzorYtPl', t: 'bool', def: true, label: 'YouTube: zawsze polskie napisy', hint: 'Jak na Netfliksie: cenzor bierze polskie napisy — ręczne, potem automatyczne, a gdy filmu nie ma po polsku — ścieżkę filmu przetłumaczoną przez YouTube na polski. Wył. = napisy w języku filmu (dokładniejsze przy angielskich filmach: słychać „fuck”, w napisie też jest „fuck”).' },
     { k: 'cenzorLive', t: 'bool', def: false, label: 'Cenzor LIVE — na bieżąco, bez pobierania napisów', hint: 'Czyta napisy widoczne na ekranie (YouTube, Netflix, Prime, Kreator napisów, ścieżki odtwarzacza) i szacuje, kiedy padnie słowo. Działa na wszystkich stronach lektora; mniej dokładny, bo napis pojawia się razem z mową. Przy włączonej opcji wyżej jest tylko zapasem, gdy napisów z sieci brak.' },
@@ -1026,12 +1028,222 @@ function buildEngineTools() {
   setInterval(() => { if (!document.hidden) refreshEngine(); }, 2000);
 }
 
+// [AGENT-EXP] 2026-10-26: 🧩 Układ popupu — moduły (karty popupu) w kolumnach zakładek: przeciąganie ⠿, ↑ ↓,
+// widoczność (zawsze / tylko na stronach / poza stronami / schowany), zwinięty na start, zakładka na start.
+// Spis modułów i zapis: src/popup/layout_shared.js (MLLayout); popup widzi zmiany od razu (storage.onChanged).
+const LAY_VIS = [['always', 'Zawsze'], ['only', 'Tylko na stronach…'], ['except', 'Poza stronami…'], ['never', 'Nigdy (schowany)']];
+let layModel = null;
+const layOpen = new Set();   // moduły z rozwiniętymi szczegółami (zostają rozwinięte po przerysowaniu)
+let layDragId = '';
+
+function layCommit(rerender) {
+  layModel = MLLayout.save(layModel, () => {
+    if (chrome.runtime.lastError) setStatus('❌ ' + chrome.runtime.lastError.message, 'err');
+    else setStatus('✅ Zapisano', 'ok');
+  });
+  if (rerender !== false) layRender();
+}
+function layBadges(box, id) {
+  box.textContent = '';
+  const v = layModel.vis[id] || 'always';
+  if (v === 'never') box.appendChild(el('span', { class: 'lay-b off' }, 'schowany'));
+  if (v === 'only' || v === 'except') {
+    const b = el('span', { class: 'lay-b site', title: layModel.sites[id] || '' });
+    b.appendChild(el('span', null, v === 'only' ? '🌐 tylko' : '🌐 poza'));
+    box.appendChild(b);
+  }
+  if (layModel.fold[id]) box.appendChild(el('span', { class: 'lay-b fold' }, 'zwinięty'));
+}
+function layChip(id, tabId, list) {
+  const m = MLLayout.mod(id);
+  const chip = el('div', { class: 'lay-chip' });
+  chip.dataset.id = id;
+  const v = layModel.vis[id] || 'always';
+  if (v === 'never') chip.classList.add('off');
+
+  const top = el('div', { class: 'lay-top', draggable: 'true' });   // przeciąga się za pasek, nie za pola w szczegółach
+  top.appendChild(el('span', { class: 'lay-grip', title: 'Przeciągnij, aby przestawić' }, '⠿'));
+  top.appendChild(el('span', { class: 'lay-name' }, m.name));
+  const badges = el('span', { class: 'lay-badges' });
+  layBadges(badges, id);
+  top.appendChild(badges);
+  const more = el('button', { class: 'lay-more', type: 'button', title: 'Gdzie i kiedy się pokazuje', 'aria-expanded': layOpen.has(id) ? 'true' : 'false' }, layOpen.has(id) ? '▴' : '▾');
+  top.appendChild(more);
+  chip.appendChild(top);
+
+  const det = el('div', { class: 'lay-det' });
+  det.hidden = !layOpen.has(id);
+  const r1 = el('label', { class: 'lay-f' });
+  r1.appendChild(el('span', null, 'Pokazuj'));
+  const visSel = el('select');
+  LAY_VIS.forEach(([val, txt]) => visSel.appendChild(el('option', { value: val }, txt)));
+  visSel.value = v;
+  r1.appendChild(visSel);
+  det.appendChild(r1);
+  const sites = el('input', { type: 'text', class: 'lay-sites', placeholder: 'np. youtube.com, netflix.com', spellcheck: 'false' });
+  sites.value = layModel.sites[id] || '';
+  sites.hidden = !(v === 'only' || v === 'except');
+  det.appendChild(sites);
+  const sitesHint = el('div', { class: 'lay-hint' }, 'Domeny po przecinku lub spacji — subdomeny też pasują (youtube.com = m.youtube.com).');
+  sitesHint.hidden = sites.hidden;
+  det.appendChild(sitesHint);
+  if (!m.noFold) {
+    const r2 = el('label', { class: 'lay-f check' });
+    const fold = el('input', { type: 'checkbox' });
+    fold.checked = !!layModel.fold[id];
+    r2.appendChild(fold);
+    r2.appendChild(el('span', null, 'Zwinięty (sam tytuł — rozwijasz kliknięciem)'));
+    det.appendChild(r2);
+    fold.addEventListener('change', () => { if (fold.checked) layModel.fold[id] = true; else delete layModel.fold[id]; layCommit(); });
+  }
+  const r3 = el('div', { class: 'lay-f' });
+  r3.appendChild(el('span', null, 'Zakładka'));
+  const tabSel = el('select');
+  MLLayout.TABS.forEach((t) => tabSel.appendChild(el('option', { value: t.id }, t.name)));
+  tabSel.value = tabId;
+  r3.appendChild(tabSel);
+  det.appendChild(r3);
+  const r4 = el('div', { class: 'lay-move' });
+  const i = list.indexOf(id);
+  const up = el('button', { class: 'btn lay-ic', type: 'button' }, '↑ W górę');
+  const down = el('button', { class: 'btn lay-ic', type: 'button' }, '↓ W dół');
+  up.disabled = i <= 0;
+  down.disabled = i >= list.length - 1;
+  r4.appendChild(up);
+  r4.appendChild(down);
+  det.appendChild(r4);
+  chip.appendChild(det);
+
+  more.addEventListener('click', () => {
+    if (layOpen.has(id)) layOpen.delete(id); else layOpen.add(id);
+    det.hidden = !layOpen.has(id);
+    more.setAttribute('aria-expanded', det.hidden ? 'false' : 'true');
+    more.textContent = det.hidden ? '▾' : '▴';
+  });
+  visSel.addEventListener('change', () => {
+    if (visSel.value === 'always') delete layModel.vis[id]; else layModel.vis[id] = visSel.value;
+    layCommit();
+    if (visSel.value === 'only' || visSel.value === 'except') {
+      const again = document.querySelector('.lay-chip[data-id="' + id + '"] .lay-sites');
+      if (again && !again.value) again.focus();
+    }
+  });
+  let sitesTimer = 0;
+  sites.addEventListener('input', () => {   // zapis bez przerysowania — kursor zostaje w polu
+    if (sites.value.trim()) layModel.sites[id] = sites.value; else delete layModel.sites[id];
+    clearTimeout(sitesTimer);
+    sitesTimer = setTimeout(() => { layCommit(false); layBadges(badges, id); }, 500);
+  });
+  sites.addEventListener('change', () => { clearTimeout(sitesTimer); layCommit(false); layBadges(badges, id); });
+  tabSel.addEventListener('change', () => { MLLayout.move(layModel, id, tabSel.value); layCommit(); });
+  up.addEventListener('click', () => { MLLayout.shift(layModel, id, -1); layCommit(); });
+  down.addEventListener('click', () => { MLLayout.shift(layModel, id, 1); layCommit(); });
+
+  top.addEventListener('dragstart', (e) => {
+    layDragId = id;
+    chip.classList.add('dragging');
+    try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id); e.dataTransfer.setDragImage(chip, 12, 12); } catch (x) { /* ignore */ }
+  });
+  top.addEventListener('dragend', () => { layDragId = ''; chip.classList.remove('dragging'); layClearMarks(); });
+  return chip;
+}
+function layClearMarks() {
+  document.querySelectorAll('#layBoard .drop-before, #layBoard .drop-after, #layBoard .drop-end').forEach((e) => e.classList.remove('drop-before', 'drop-after', 'drop-end'));
+}
+function layDropAt(e, listEl) {
+  const chips = Array.from(listEl.querySelectorAll(':scope > .lay-chip')).filter((c) => c.dataset.id !== layDragId);
+  for (const c of chips) {
+    const r = c.getBoundingClientRect();
+    if (e.clientY < r.top + r.height / 2) return { chip: c, before: c.dataset.id };
+  }
+  return { chip: null, before: '' };
+}
+function layRender() {
+  const board = $('layBoard');
+  if (!board || !layModel) return;
+  board.textContent = '';
+  MLLayout.TABS.forEach((t) => {
+    const list = layModel.tabs[t.id];
+    const col = el('div', { class: 'lay-col' });
+    const head = el('div', { class: 'lay-col-h' });
+    head.appendChild(el('b', null, t.name));
+    const shown = list.filter((id) => (layModel.vis[id] || 'always') !== 'never').length;
+    head.appendChild(el('span', { class: 'lay-count', title: 'widoczne / wszystkie' }, shown + ' / ' + list.length));
+    col.appendChild(head);
+    const listEl = el('div', { class: 'lay-list' });
+    listEl.dataset.tab = t.id;
+    list.forEach((id) => listEl.appendChild(layChip(id, t.id, list)));
+    if (!list.length) listEl.appendChild(el('div', { class: 'lay-empty' }, t.id === 'moje' ? 'Twoja zakładka — przeciągnij tu moduły. Pusta jest schowana.' : 'Pusta — w popupie schowana.'));
+    listEl.addEventListener('dragover', (e) => {
+      if (!layDragId) return;
+      e.preventDefault();
+      layClearMarks();
+      const d = layDropAt(e, listEl);
+      if (d.chip) d.chip.classList.add('drop-before'); else listEl.classList.add('drop-end');
+    });
+    listEl.addEventListener('dragleave', (e) => { if (!listEl.contains(e.relatedTarget)) layClearMarks(); });
+    listEl.addEventListener('drop', (e) => {
+      if (!layDragId) return;
+      e.preventDefault();
+      const d = layDropAt(e, listEl);
+      MLLayout.move(layModel, layDragId, t.id, d.before);
+      layDragId = '';
+      layClearMarks();
+      layCommit();
+    });
+    col.appendChild(listEl);
+    board.appendChild(col);
+  });
+  const start = $('layStart');
+  if (start) start.value = layModel.start;
+}
+function buildPopupLayout() {
+  if (!self.MLLayout) return;
+  const s = section('🧩 Układ popupu', 'Każda karta popupu to moduł. Przeciągnij ⠿ do innej zakładki albo w inne miejsce, a w ▾ ustaw, kiedy ma się pokazywać (np. tylko na YouTube) i czy startuje zwinięty. Pusta zakładka znika z popupu. To samo (bez reguł stron) zrobisz w popupie przyciskiem ✏️.', true, 'uklad');
+  const bar = el('div', { class: 'row first lay-toolbar' });
+  const lbl = el('div', { class: 'lbl' });
+  lbl.appendChild(el('b', null, 'Zakładka na start'));
+  lbl.appendChild(el('span', null, 'Która zakładka otwiera się po kliknięciu ikony lektora'));
+  bar.appendChild(lbl);
+  const start = el('select', { id: 'layStart' });
+  start.appendChild(el('option', { value: 'last' }, 'Ostatnio otwarta'));
+  MLLayout.TABS.forEach((t) => start.appendChild(el('option', { value: t.id }, t.name)));
+  bar.appendChild(start);
+  const reset = el('button', { class: 'btn danger', type: 'button' }, '↺ Przywróć domyślny układ');
+  bar.appendChild(reset);
+  s.appendChild(bar);
+  s.appendChild(el('div', { class: 'lay-board', id: 'layBoard' }));
+  s.appendChild(el('div', { class: 'note' }, 'Zmiany widać w popupie od razu (otwórz go jeszcze raz). Układ jest też w eksporcie ustawień.'));
+  start.addEventListener('change', () => { layModel.start = start.value; layCommit(false); });
+  reset.addEventListener('click', () => {
+    const q = 'Przywrócić domyślny układ popupu? Wszystkie moduły wrócą na swoje miejsca, reguły stron i zwinięcia znikną.';
+    if (!confirm(self.MLi18n ? MLi18n.t(q) : q)) return;
+    layModel = MLLayout.defaults();
+    layOpen.clear();
+    layCommit();
+  });
+  layModel = MLLayout.readMirror() || MLLayout.defaults();
+  layRender();
+  MLLayout.load((l) => { if (!MLLayout.same(l, layModel)) { layModel = l; layRender(); } });
+  chrome.storage.onChanged.addListener((ch, area) => {   // zmiana z popupu (✏️) — przerysuj, chyba że ktoś pisze w polu
+    if (area !== 'local' || !ch[MLLayout.KEY]) return;
+    const l = MLLayout.normalize(ch[MLLayout.KEY].newValue);
+    if (MLLayout.same(l, layModel)) return;
+    layModel = l;
+    MLLayout.writeMirror(l);
+    const a = document.activeElement;
+    if (a && a.closest && a.closest('#layBoard') && a.tagName === 'INPUT') return;
+    layRender();
+  });
+}
+
 function build() {
   SCHEMA.forEach((group) => {
     const s = section(group.sec, group.sub, false, group.id);
     group.items.forEach((def) => s.appendChild(buildRow(def)));
   });
   buildEngineTools();   // [VOX]
+  buildPopupLayout();   // [AGENT-EXP] 2026-10-26
   buildSubTranslator();
   buildSubsMemory();
   buildAiMemory();
@@ -1043,6 +1255,7 @@ function build() {
 
 build();
 if (location.hash === '#ait') { const a = $('ait'); if (a) a.scrollIntoView(); }
+if (location.hash === '#uklad') { const a = $('uklad'); if (a) a.scrollIntoView(); }   // [AGENT-EXP] 2026-10-26: z popupu „⚙ Więcej”
 chrome.storage.local.get(null, (all) => {
   all = all || {};
   applyValues(all);

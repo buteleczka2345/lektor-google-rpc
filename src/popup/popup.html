@@ -24,6 +24,8 @@
             </div>
             <!-- OPTIONS-PAGE: ikona otwierająca stronę ustawień -->
             <select class="ui-lang" data-ui-lang data-noi18n title="Język interfejsu / Interface language" aria-label="Język interfejsu / Interface language"><option value="auto">Auto</option><option value="pl">PL</option><option value="en">EN</option></select><!-- [AGENT-EXP] 2026-10-21 -->
+            <!-- [AGENT-EXP] 2026-10-26: 🧩 edycja układu modułów popupu -->
+            <button id="layoutEditBtn" class="icon-btn edit" type="button" title="Edytuj układ popupu (przestaw, schowaj, przenieś moduły)" aria-pressed="false">✏️</button>
             <button id="openOptionsBtn" class="icon-btn" type="button" title="Wszystkie ustawienia (strona HTML)">⚙️</button>
         </header>
         <nav class="tabs" role="tablist">
@@ -31,12 +33,22 @@
             <button class="tab" type="button" role="tab" data-tab="napisy">Napisy</button>
             <button class="tab" type="button" role="tab" data-tab="glosy">Głosy</button>
             <button class="tab" type="button" role="tab" data-tab="narzedzia">Narzędzia</button>
+            <button class="tab" type="button" role="tab" data-tab="moje" hidden>★ Moje</button><!-- [AGENT-EXP] 2026-10-26: własna zakładka (pusta = schowana) -->
         </nav>
+        <!-- [AGENT-EXP] 2026-10-26: pasek trybu edycji układu (widoczny tylko w trybie ✏️) -->
+        <div id="layoutEditBar" class="mod-editbar" hidden>
+            <div class="mod-editbar-txt"><b>✏️ Edycja układu</b><span>Przeciągnij ⠿ albo użyj ↑ ↓. Moduł upuszczony na zakładkę przechodzi do niej.</span></div>
+            <div class="mod-editbar-btns">
+                <button id="layoutResetBtn" class="btn small" type="button" title="Wszystkie moduły wracają na swoje miejsca">↺ Domyślny</button>
+                <button id="layoutMoreBtn" class="btn small" type="button" title="Strony, na których moduł się pokazuje, i zakładka na start — w Ustawieniach">⚙ Więcej</button>
+                <button id="layoutDoneBtn" class="btn primary small" type="button">✓ Gotowe</button>
+            </div>
+        </div>
     </div>
 
     <!-- ================= LEKTOR ================= -->
     <section class="pane" data-pane="lektor" role="tabpanel">
-        <div class="card hero switch-row">
+        <div class="card hero switch-row" data-mod="lektor">
             <div class="lbl">
                 <b>Lektor</b>
                 <span>Włącz / wyłącz czytanie napisów</span>
@@ -48,17 +60,18 @@
         </div>
 
         <!-- [AGENT-EXP] 2026-10-17: wybór silnika mowy (ten sam klucz ttsEngine co w Ustawieniach) + kropka serwera -->
-        <div class="card">
+        <div class="card" data-mod="silnik">
             <div class="card-head">
                 <b>🗣 Silnik mowy</b>
                 <span class="pill" id="ttsEngineState"><span id="ttsEngineDot" class="dot"></span><span id="ttsEngineText">…</span></span>
             </div>
             <select id="ttsEngineSelect">
-                <option value="sherpa">Sherpa VITS — wbudowany</option>
+                <!-- [AGENT-EXP] 2026-10-24: Matcha 🌐 domyślna (na górze); Sherpa bez wbudowanego głosu — tylko pobrane/własne -->
+                <option value="matcha">Matcha-TTS-PL 🌐 — w przeglądarce (domyślny) lub serwer :9000</option>
+                <option value="sherpa">Sherpa / Piper — pobrane głosy (Języki świata)</option>
                 <!-- [AGENT-EXP] 2026-10-21: 🗣 Web Speech API (jak DubMog Standard) -->
                 <option value="browser">Głos przeglądarki (Google / Microsoft) — darmowy, bez serwera</option>
                 <option value="supertonic">Supertonic 3 (VoxNemesis) — wbudowany, CPU / GPU</option>
-                <option value="matcha">Matcha-TTS-PL — serwer :9000</option>
                 <option value="xtts">XTTS v2 (TTS2) — serwer :8000</option>
                 <option value="audio8">Audio8 ONNX INT8 — serwer :9300 (wolny)</option>
                 <option value="f5">Lektor Marek (F5-TTS) — serwer :9400</option>
@@ -67,6 +80,10 @@
             </select>
             <div class="footnote" id="ttsEngineHint">Zielona kropka = serwer odpowiada. Najpierw uruchom serwer (np. start_xtts_auto.bat w folderze tts2).</div>
             <!-- [AGENT-EXP] 2026-10-17: głos dla wybranego silnika (przeniesione ze strony Ustawienia) -->
+            <!-- [AGENT-EXP] 2026-10-24: wariant Matcha w przeglądarce (głosy 🌐) — tylko 2 (test: reszta wolniejsza) -->
+            <div id="mwRows" class="field" style="display:none;">
+                <label class="field-label" for="mwTryb">Matcha 🌐 — wariant</label><select id="mwTryb"><option value="kombi">Kombinacja — koder i dekoder procesor INT8, wokoder karta (najszybszy)</option><option value="cpu_fp32">Wszystko na procesorze — FP32, naturalny rytm (sdp + t4 + fp32)</option></select>
+            </div>
             <div id="ttsVoiceRow" class="field" style="display:none;">
                 <label class="field-label" id="ttsVoiceLabel" for="ttsVoiceSelect">Głos</label>
                 <select id="ttsVoiceSelect"></select>
@@ -98,34 +115,47 @@
                 </div>
                 <div class="st-status" id="stStatus">Silnik: —</div>
             </div>
-            <label class="check"><input type="checkbox" id="bufPauzaCheck" checked> Buforuj przy zatrzymanym filmie (po starcie czyta od razu z bufora)</label>
+        </div>
+
+        <!-- [AGENT-EXP] 2026-10-26: buforowanie jako osobny moduł (wcześniej na dole karty silnika) -->
+        <div class="card" data-mod="bufor">
+            <div class="card-head"><b>💾 Buforowanie</b></div>
+            <label class="check" style="margin-top:0;"><input type="checkbox" id="bufPauzaCheck" checked> Buforuj przy zatrzymanym filmie (po starcie czyta od razu z bufora)</label>
             <label class="check" title="Gdy przejdziesz na inną kartę, lektor dalej nagrywa kwestie do bufora (nie czyta na głos). Karta z filmem nie zostanie uśpiona przez Chrome."><input type="checkbox" id="bufTloCheck" checked> Buforuj w tle (inna karta) — karta nie jest usypiana</label>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="predkosc">
             <div class="card-head"><b>Prędkość lektora</b><span class="pill" id="speedVal">1.0x</span></div>
             <input type="range" id="speedRange" min="0.5" max="3.0" step="0.1" value="1.0">
+            <!-- [AGENT-EXP] 2026-10-26: auto-nadrabianie (klucz autoCatchup, ten sam co w Ustawieniach) -->
+            <label class="check" title="Przyspiesza, gdy kwestia nie mieści się w czasie"><input type="checkbox" id="autoCatchupCheck" checked> Auto-nadrabianie (przyspiesza, gdy kwestia nie mieści się w czasie)</label>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="ducking">
             <div class="card-head"><b>Ducking (wyciszanie filmu)</b><span class="pill" id="duckVal">20%</span></div>
             <input type="range" id="duckRange" min="0" max="100" step="5" value="20">
             <div class="footnote">0 = całkowite wyciszenie · 100 = bez zmian</div>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="glosnosc">
             <div class="card-head"><b>Głośność lektora</b><span class="pill" id="volumeVal">100%</span></div>
             <input type="range" id="volumeRange" min="0" max="400" step="5" value="100">
             <div class="footnote">Głośność samego lektora (niezależna od filmu). Powyżej 100% — wzmocnienie do 400% bez zniekształceń (limiter).</div>
         </div>
 
-        <div class="card">
-            <div class="card-head"><b>Przesunięcie lektora wzgl. wideo</b><span class="pill" id="offsetVal">0 s</span></div>
-            <input type="range" id="offsetRange" min="-10000" max="10000" step="100" value="0">
-            <div class="footnote">Ujemne = lektor mówi WCZEŚNIEJ (np. gdy Netflix buforuje) · dodatnie = później · 0 = bez przesunięcia. Krok: 100 ms.</div>
+        <div class="card" data-mod="zapas"><!-- [AGENT-EXP] 2026-10-25: zapas do przodu na głównej stronie (zamiana z przesunięciem) -->
+            <div class="card-head"><b>Nagrywanie / zapas do przodu</b><span class="pill" id="lookaheadVal">na bieżąco</span></div>
+            <input type="range" id="lookaheadRange" min="0" max="120" step="1" value="3">
+            <div class="footnote" id="recDetail">0 = na bieżąco (bez nagrywania) · przesuń w prawo, aby nagrywać czysty lektor z zapasem N minut do przodu. Powrót na 0 kończy nagrywanie — nagranie zostaje w buforze, zapiszesz je przyciskiem ⬇ na stronie.</div>
+            <div class="footnote ok" id="recTelemetry">—</div>
+            <div class="footnote scroll" id="recLog">—</div>
+            <div class="btn-row">
+                <button id="saveBufferBtn" class="btn ok small" type="button" style="flex:0 0 auto;" title="Zapisuje nagrane kwestie tego filmu z pamięci RAM do jednego pliku .zip w Pobranych (każda kwestia osobno + spis czasów + napisy .srt)">💾 Zapisz bufor filmu</button>
+                <span class="footnote" id="saveBufferInfo" style="margin:0;align-self:center;"></span>
+            </div>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="test">
             <div class="card-head"><b>Test lektora</b><span class="pill" id="testStatus">—</span></div>
             <div class="btn-row">
                 <button id="testBtn" class="btn primary" type="button" title="Odtwarza „To jest test lektora” wybranym silnikiem">▶ Test lektora</button>
@@ -137,7 +167,7 @@
 
     <!-- ================= NAPISY ================= -->
     <section class="pane" data-pane="napisy" role="tabpanel" hidden>
-        <div class="card">
+        <div class="card" data-mod="calenapisy">
             <div class="card-head"><b>Całe napisy — na żądanie</b></div>
             <button id="fullSubsBtn" class="btn primary" type="button">⬇ Pobierz całe napisy (ten film)</button>
             <div class="footnote warn" id="fullSubsStatus">Działa na każdej stronie z filmem. Bez kliknięcia lektor czyta w locie i nic nie pobiera.</div>
@@ -145,7 +175,7 @@
             <div class="footnote info" id="findSubsStatus">Gdy lektor nie widzi napisów w locie: włącz film z napisami na ekranie i kliknij. Potem lektor patrzy tylko w to miejsce.</div>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="youtube">
             <div class="card-head"><b>Napisy na YouTube</b></div>
             <label class="check" style="margin-top:0;"><input type="checkbox" id="ytAutoCheck"> Zawsze pobieraj całe napisy automatycznie</label>
             <div class="field">
@@ -157,7 +187,7 @@
             </div>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="prime">
             <div class="card-head"><b>Napisy na Prime Video</b></div>
             <select id="primeSourceSelect">
                 <option value="both">Wbudowane + Immersive Translate</option>
@@ -167,7 +197,7 @@
             <div class="footnote">iQIYI: zawsze czyta napisy przez Immersive Translate (PL).</div>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="plik">
             <div class="card-head"><b>Napisy z pliku</b><span class="pill" id="fileSubsStatus">brak</span></div>
             <input type="file" id="fileSubsInput" accept=".srt,.vtt,.sbv,.ass,.ssa,.txt,.sub,.smi,.lrc,.dfxp,.ttml" style="display:none;">
             <input type="file" id="fileSubsFolderInput" webkitdirectory directory multiple style="display:none;">
@@ -180,7 +210,7 @@
             <div class="footnote" id="fileSubsDetail">Napisy z pliku należą do filmu w tej karcie (inne strony ich nie czytają; po powrocie do filmu wracają). Odtwórz film — lektor czyta wg czasu z pliku, suwak nagrywa jak zawsze.</div>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="bazy">
             <div class="card-head"><b>🌐 Szukaj w bazach napisów</b><span class="pill" id="dbStatus"></span></div>
             <div class="inline-fields">
                 <input type="text" id="dbQuery" class="text-input" placeholder="tytuł filmu / serialu">
@@ -199,44 +229,31 @@
             <div class="footnote" id="dbDetail">OpenSubtitles.org działa od razu. OpenSubtitles.com i SubDL — po wpisaniu darmowego klucza w Ustawieniach (⚙️). Klik w wynik = wczytaj do lektora.</div>
         </div>
 
-        <div class="card">
-            <div class="card-head"><b>Nagrywanie / zapas do przodu</b><span class="pill" id="lookaheadVal">na bieżąco</span></div>
-            <input type="range" id="lookaheadRange" min="0" max="120" step="1" value="3">
-            <div class="footnote" id="recDetail">0 = na bieżąco (bez nagrywania) · przesuń w prawo, aby nagrywać czysty lektor z zapasem N minut do przodu. Powrót na 0 kończy nagrywanie — nagranie zostaje w buforze, zapiszesz je przyciskiem ⬇ na stronie.</div>
-            <div class="footnote ok" id="recTelemetry">—</div>
-            <div class="footnote scroll" id="recLog">—</div>
-            <div class="btn-row">
-                <button id="saveBufferBtn" class="btn ok small" type="button" style="flex:0 0 auto;" title="Zapisuje nagrane kwestie tego filmu z pamięci RAM do jednego pliku .zip w Pobranych (każda kwestia osobno + spis czasów + napisy .srt)">💾 Zapisz bufor filmu</button>
-                <span class="footnote" id="saveBufferInfo" style="margin:0;align-self:center;"></span>
-            </div>
+        <div class="card" data-mod="przesuniecie"><!-- [AGENT-EXP] 2026-10-25: przesunięcie lektora tu (zamiana z zapasem do przodu) -->
+            <div class="card-head"><b>Przesunięcie lektora wzgl. wideo</b><span class="pill" id="offsetVal">0 s</span></div>
+            <input type="range" id="offsetRange" min="-10000" max="10000" step="100" value="0">
+            <div class="footnote">Ujemne = lektor mówi WCZEŚNIEJ (np. gdy Netflix buforuje) · dodatnie = później · 0 = bez przesunięcia. Krok: 100 ms.</div>
         </div>
     </section>
 
     <!-- ================= GŁOSY ================= -->
     <section class="pane" data-pane="glosy" role="tabpanel" hidden>
-        <div class="card">
-            <div class="card-head"><b>Głos lektora (Sherpa VITS)</b></div>
-            <div class="voice-line">
-                <select id="offlineVoiceSelect">
-                    <option value="pl_PL-meski_wg_glos-medium">Męski — Sherpa VITS (PL)</option>
-                </select>
-                <button id="builtinVoiceDeleteBtn" class="mini danger" type="button" title="Wyłącz wbudowany głos męski (bez kopiowania)">🗑</button>
-            </div>
-            <button id="builtinVoiceRestoreBtn" class="btn ok small mt" type="button" style="display:none;">↺ Przywróć wbudowany głos męski</button>
-            <button id="builtinVoiceMigrateBtn" class="btn small mt" type="button">⤵ Przenieś wbudowany głos męski na listę głosów (bez pobierania)</button>
-            <div class="footnote info" id="builtinVoiceHint" style="display:none;">🛈 Głos męski przeniesiony na listę „Własne głosy” (poniżej): tam masz ▶ aktywuj i 🗑 skasuj. Skasowanie usuwa kopię z pamięci rozszerzenia, a wróci jednym kliknięciem. Plik 60 MB w paczce (awaryjny) zwolnisz tylko ręcznie — skasuj na dysku:<br><code id="builtinVoicePath">—</code><br><button id="builtinVoicePathBtn" class="btn small inline mt" type="button">📋 Kopiuj ścieżkę</button></div>
+        <div class="card" data-mod="glos">
+            <!-- [AGENT-EXP] 2026-10-24: wbudowany głos Sherpa usunięty z paczki — w jego miejscu Matcha 🌐 -->
+            <div class="card-head"><b>Głos lektora</b></div>
+            <div class="footnote info">🌐 Domyślny lektor: Matcha-TTS-PL w przeglądarce (bez serwera). Głos Matchy wybierzesz w zakładce z silnikiem mowy. Sherpa / Piper czyta głosami pobranymi w „Języki świata” albo wskazanymi z plików (poniżej).</div>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="wlasnyglos">
             <div class="card-head"><b>Własny głos (Sherpa/Piper z plików)</b></div>
             <input type="file" id="customVoiceInput" accept=".onnx,.txt,.json" multiple webkitdirectory style="display:none;">
             <div id="customVoiceList"></div>
             <button id="customVoiceBtn" class="btn mt" type="button">📂 Wskaż pliki własnego głosu (onnx + txt + json)</button>
-            <button id="customVoiceDisable" class="btn danger small mt" type="button" style="display:none;">✕ Wróć do wbudowanego głosu</button>
+            <button id="customVoiceDisable" class="btn danger small mt" type="button" style="display:none;">✕ Wyłącz własny głos</button><!-- [AGENT-EXP] 2026-10-24 -->
             <div class="footnote warn" id="customVoiceStatus">—</div>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="jezyki">
             <div class="card-head"><b>🌐 Języki świata — pobieranie głosów</b></div>
             <input type="text" id="langSearch" class="text-input" placeholder="Szukaj języka (np. niemiecki, arabski, EN)…">
             <div class="btn-row">
@@ -248,6 +265,8 @@
                     <option value="mms">Tylko MMS (~1100 jęz.)</option>
                     <option value="piper">Tylko Piper</option>
                     <option value="coqui">Tylko Coqui (jakość!)</option>
+                    <option value="matcha">Tylko Matcha 🌐 (w przeglądarce)</option><!-- [AGENT-EXP] 2026-10-24 -->
+                    <option value="supertonic">Tylko Supertonic 🌐 (w przeglądarce)</option><!-- [AGENT-EXP] 2026-10-24 -->
                 </select>
             </div>
             <div class="footnote warn" id="langStoreStatus">Ładuję katalog modeli…</div>
@@ -255,7 +274,7 @@
             <div class="footnote">Model MMS ≈ 114 MB na język. Pobrany głos trafia na listę „Własny głos” i staje się aktywny. Źródło: HuggingFace (MMS: Meta, lic. CC-BY-NC; Piper: lic. MIT).</div>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="cenzura">
             <div class="card-head"><b>🤬 Cenzura przekleństw</b><span class="pill">wszystkie języki</span></div>
             <button id="censorToggleBtn" class="btn ok" type="button">🤬 Cenzura: WŁĄCZONA</button>
             <select id="censorModeSelect" class="mt">
@@ -272,7 +291,7 @@
     <!-- ================= NARZĘDZIA ================= -->
     <section class="pane" data-pane="narzedzia" role="tabpanel" hidden>
         <!-- 🎙 Głos i napisy (glos/*): mój głos → tekst, film w karcie → napisy + czytanie -->
-        <div class="card" id="gnBox">
+        <div class="card" id="gnBox" data-mod="glosnapisy">
             <div class="card-head"><b>🎙 Głos i napisy</b></div>
             <p class="desc">Mów do mikrofonu → tekst w polu z kursorem; albo dźwięk filmu z karty → polskie napisy + czytanie.</p>
             <button id="gnGlosBtn" class="gn-big c1" type="button">🎤 Mój głos → tekst (Alt+Shift+1)</button>
@@ -328,7 +347,7 @@
             </details>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="lowca">
             <div class="card-head"><b>🔍 Łowca napisów</b></div>
             <p class="desc">Na żądanie: przeszuka stronę i zapisze kontenery do Kreatora napisów.</p>
             <div class="btn-row" style="margin-top:0;">
@@ -340,14 +359,21 @@
             <div id="lowcaItems" class="mini-list" style="display:none;"></div>
         </div>
 
-        <div class="card">
+        <div class="card" data-mod="ait">
             <div class="card-head"><b>🤖 AI Subtitle Translator</b></div>
             <p class="desc">Wgraj plik z napisami, ustaw prompt i przetłumacz wbudowanym AI Chrome — potem pobierz .srt lub wczytaj do lektora.</p>
             <button id="aitOpenBtn" class="btn" type="button">🤖 Otwórz AI Subtitle Translator (ustawienia)</button>
         </div>
     </section>
 
+    <!-- [AGENT-EXP] 2026-10-26: ★ Moje — zakładka na moduły przeniesione przez użytkownika -->
+    <section class="pane" data-pane="moje" role="tabpanel" hidden></section>
+
     <div class="footnote app-foot">Ustawienia zapisują się automatycznie.</div>
+
+    <!-- [AGENT-EXP] 2026-10-26: 🧩 układ modułów — zwykłe skrypty, działają przed modułem popup.js -->
+    <script src="./layout_shared.js"></script>
+    <script src="./popup_layout.js"></script>
 
     <script type="module" src="./popup.js"></script>
     <script type="module" src="../../glos/popup_glos.js"></script>

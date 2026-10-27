@@ -48,7 +48,7 @@ if (!('__lektorBufPauza' in window)) {
         chrome.storage.onChanged.addListener(function (ch, area) {
             if (area === 'local' && ch.lookaheadMin !== undefined) {
                 var m2 = Number(ch.lookaheadMin.newValue);
-                if (!isNaN(m2)) LOOKAHEAD = m2 > 0 ? m2 * 60000 : 0; // 0 = na bieżąco
+                if (!isNaN(m2)) { LOOKAHEAD = m2 > 0 ? m2 * 60000 : 0; preloaded.clear(); } // 0 = na bieżąco   // [AGENT-EXP] 2026-10-25: nowy zapas → wyślij okno jeszcze raz (gotowe idą z pamięci)
             }
         });
     } catch (e) {}
@@ -170,7 +170,7 @@ if (!('__lektorBufPauza' in window)) {
                 }, 300);
             });
             video.addEventListener('pause', function () {
-                if (enabled) chrome.runtime.sendMessage({ action: 'TTS_PAUSE' });
+                if (enabled) chrome.runtime.sendMessage({ action: 'TTS_PAUSE', reason: 'pause' });   // [AGENT-EXP] 2026-10-22: „Czytaj zawsze do końca” → dokończ zdanie
                 preloaded.clear();   // [AGENT-EXP] 2026-10-17: preload jeszcze raz po wznowieniu (gotowe — z pamięci / dysku)
             });
             video.addEventListener('volumechange', function () {
@@ -500,7 +500,7 @@ if (!('__lektorBufPauza' in window)) {
                     if (far && farPaced) { farOk = false; lastFarPreloadAt = Date.now(); }   // [AGENT-EXP]
                     preloaded.add(sub.id);
                     if (startT > recAheadMs) recAheadMs = startT;
-                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: sub.id, text: sub.text, startMs: startT, endMs: endT, platform: 'netflix' });
+                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: sub.id, text: sub.text, startMs: startT, endMs: endT, nowMs: nowMs, platform: 'netflix' });   // [AGENT-EXP] 2026-10-25: nowMs = miejsce filmu (bramka zapasu w offscreen)
                 }
                 var pre = 0;
                 if (engine === 'online' && remoteVoice) pre = REMOTE_PREROLL;

@@ -11,6 +11,7 @@
         singleTabMode: true,          // tylko jedna karta naraz (audio focus)
         autoMuteHidden: true,         // wyciszaj kartę w tle
         pauseVideoWithLektor: false,  // pauzuj film razem z lektorem
+        readToEnd: false,             // [AGENT-EXP] 2026-10-22: lektor czyta zawsze do końca (bez pomijania, pauza dokańcza zdanie)
         detectYTPolish: true,         // wyłącz przy polskim dubbingu
         detectYTPolishChannel: true,  // wyłącz na polskich kanałach/filmach
         soundCuesFilter: true,        // pomijaj (wiatr), [muzyka], ♪

@@ -28,6 +28,13 @@
     window.addEventListener('message', function (ev) {
         if (ev.source !== window || ev.origin !== location.origin) return;
         if (ev.data && ev.data.__lektorCenzor === 'hello') send();
+        // [AGENT-EXP] 2026-10-25: HBO Max — cały plik napisów z manifestu (cenzor_main.js) → lektor (jak Łowca, ale full: pierwszeństwo)
+        if (ev.data && ev.data.__lektorCenzor === 'hboFull' && Array.isArray(ev.data.cues) && ev.data.cues.length >= 5) {
+            try {
+                chrome.runtime.sendMessage({ action: 'LOWCA_AUTO_CUES', full: true, lang: ev.data.lang || '', label: ev.data.label || '',
+                    url: '', page: location.href, cues: ev.data.cues }, function () { void chrome.runtime.lastError; });
+            } catch (e) {}
+        }
     });
     try {
         chrome.storage.onChanged.addListener(function (ch, area) {

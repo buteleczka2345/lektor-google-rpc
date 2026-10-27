@@ -115,8 +115,14 @@
 
   // ---------- 3) kwestie → lektor (tylko w ramce, w której jest film) ----------
   var runToken = 0, curApplied = '';
+  // [AGENT-EXP] 2026-10-25: napisy W CZĘŚCIACH (HBO Max i inne DASH/HLS) — odtwarzacz pobiera je razem z buforem,
+  // więc Łowca miał na starcie tylko początek (np. 130 kwestii ≈ 15 min) i lektor potem stał. Teraz:
+  //  • fullPath — cały plik (full: true, HBO z manifestu) ma pierwszeństwo: kawałki Łowcy na tej stronie są pomijane;
+  //  • gdy Łowca sam poda dłuższą listę, tłumaczymy TYLKO nowe kwestie
+  //    (curItems: gotowe tłumaczenia przechodzą na nową listę; stałe id = lektor nie czyta drugi raz).
+  var fullPath = '', curItems = null;
   function hasVideo() { try { return !!document.querySelector('video'); } catch (e) { return false; } }
-  function apply(items) { try { if (window.__LIVEDUB_AUTO_APPLY__) window.__LIVEDUB_AUTO_APPLY__(items); } catch (e) {} }
+  function apply(items, keep) { try { if (window.__LIVEDUB_AUTO_APPLY__) window.__LIVEDUB_AUTO_APPLY__(items, keep); } catch (e) {} }   // [AGENT-EXP] keep: bez czyszczenia przeczytanych
   function looksPl(cues) {
     var n = 0, m = Math.min(cues.length, 60);
     for (var i = 0; i < m; i++) if (/[ąćęłńśźżĄĆĘŁŃŚŹŻ]/.test(cues[i][2])) n++;
@@ -169,8 +175,9 @@
   }
   async function run(cues, lang) {
     var token = ++runToken;
-    apply(null);
-    if (!cues) return;
+    if (!cues) { curItems = null; apply(null); return; }   // [AGENT-EXP] 2026-10-25: przy nowych kwestiach stara lista gra, aż nowa gotowa
+    var old = new Map();   // [AGENT-EXP] 2026-10-25: tłumaczenia z poprzedniej (krótszej) listy
+    (curItems || []).forEach(function (c) { if (c.text) old.set(c.startMs + '|' + c.src, c.text); });
     // [AGENT-EXP] obce napisy: całe zdania do tłumaczenia (klucz pamięci liczony już z listy zdań)
     if (zdOn && !(/^pl/i.test(lang || '') || (!lang && looksPl(cues)))) {
       cues = zdMerge(cues.map(function (c) { return { startMs: c[0], endMs: c[1], text: c[2] }; }), 'text')
@@ -182,12 +189,13 @@
     var pl = /^pl/i.test(lang || '') || (!lang && looksPl(cues));
     var items;
     if (mem && mem.ok && mem.data && Array.isArray(mem.data.cues) && mem.data.cues.length === cues.length) {
-      items = mem.data.cues.map(function (c, i) { return { id: 'lowca_' + token + '_' + i, startMs: c[0], endMs: c[1], src: c[2], text: c[3] || '' }; });
+      items = mem.data.cues.map(function (c) { return { id: 'lowca_' + c[0] + '_' + hashStr(c[2]), startMs: c[0], endMs: c[1], src: c[2], text: c[3] || old.get(c[0] + '|' + c[2]) || '' }; });   // [AGENT-EXP] stałe id
       LOG('z pamięci: ' + items.length + ' kwestii');
     } else {
-      items = cues.map(function (c, i) { return { id: 'lowca_' + token + '_' + i, startMs: c[0], endMs: c[1], src: c[2], text: pl ? c[2] : '' }; });
+      items = cues.map(function (c) { return { id: 'lowca_' + c[0] + '_' + hashStr(c[2]), startMs: c[0], endMs: c[1], src: c[2], text: pl ? c[2] : (old.get(c[0] + '|' + c[2]) || '') }; });   // [AGENT-EXP] stałe id + gotowe tłumaczenia
     }
-    apply(items);
+    apply(items, !!curItems);
+    curItems = items;
     if (!pl && items.some(function (c) { return !c.text; })) {
       LOG('tłumaczę ' + items.length + ' kwestii na polski');
       cacheSave(key, lang, items);
@@ -200,6 +208,10 @@
       if (!window.__LIVEDUB_AUTO_APPLY__) return;
       if (m.cues && !hasVideo()) return; // kwestie czyta tylko ramka z filmem
       var cues = Array.isArray(m.cues) && m.cues.length ? m.cues : null;
+      // [AGENT-EXP] 2026-10-25: cały plik (HBO) wygrywa z kawałkami Łowcy i z jego „wyczyść” na tej samej stronie
+      var path = location.pathname;
+      if (m.full && cues) { fullPath = path; LOG('cały plik napisów (HBO): ' + cues.length + ' kwestii' + (m.lang ? ' [' + m.lang + ']' : '')); }
+      else if (fullPath && fullPath === path) return;
       var k = cues ? cacheKey(cues) : '';
       if (k === curApplied) return; // te same napisy z innej ramki/warstwy — bez ponownego tłumaczenia
       curApplied = k;
@@ -209,4 +221,5 @@
 
   // Start na zapamiętanej domenie: hunter mógł coś złapać, zanim ten skrypt dostał zdarzenie.
   askBest(4000);
+  // [AGENT-EXP] 2026-10-25: BEZ dopytywania co 20 s (decyzja użytkownika) — Łowca szuka tylko na starcie, potem nie.
 })();

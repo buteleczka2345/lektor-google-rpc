@@ -112,7 +112,7 @@ if (!('__lektorBufPauza' in window)) {
             if (area !== 'local') return;
             if (ch.enabled) { enabled = !!ch.enabled.newValue; if (!enabled) { clearBuffer(); restoreVolume(); } }
             if (ch.duckLevel) duckLevel = Number(ch.duckLevel.newValue) || 0;
-            if (ch.lookaheadMin) { var m2 = Number(ch.lookaheadMin.newValue); LOOKAHEAD = m2 > 0 ? Math.max(8000, m2 * 60000) : 8000; }   // [AGENT-EXP]
+            if (ch.lookaheadMin) { var m2 = Number(ch.lookaheadMin.newValue); LOOKAHEAD = m2 > 0 ? Math.max(8000, m2 * 60000) : 8000; preloaded.clear(); }   // [AGENT-EXP]; 2026-10-25: okno jeszcze raz
         });
     } catch (e) {}
 
@@ -265,7 +265,7 @@ if (!('__lektorBufPauza' in window)) {
                 if (!s.text) continue;
                 if (!preloaded.has(i) && s.startMs >= now && budget > 0) {
                     budget--; preloaded.add(i);
-                    send({ action: 'TTS_PRELOAD', id: s.id, text: s.text, startMs: s.startMs, endMs: s.endMs });
+                    send({ action: 'TTS_PRELOAD', id: s.id, text: s.text, startMs: s.startMs, endMs: s.endMs, nowMs: now });   // [AGENT-EXP] 2026-10-25: nowMs = miejsce filmu (bramka zapasu w offscreen)
                 }
                 if (!ownPauza && !wTle && !played.has(i) && now >= s.startMs && now < s.endMs) {
                     played.add(i);
