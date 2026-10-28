@@ -17,6 +17,9 @@ const POCKET_WS_URL = 'ws://127.0.0.1:9200';
 // [AGENT-EXP] 2026-10-17: OmniVoice (folder tts maja\omnivoice, URUCHOM_SERWER.bat, GPU) — ten sam serwer co w Piperze.
 // Protokół jak Pocket: JSON {text, voice, speed, pilne} → WAV; voice = opis głosu słowami (instruct), '' = losowy.
 const OMNIVOICE_WS_URL = 'ws://127.0.0.1:9100';
+// [AGENT-EXP] 2026-10-27: Kokoro-82M (folder tts maja\kokoro, URUCHOM_SERWER.bat, GPU) — polski pm_mateusz (fine-tune
+// Software Mansion) + oryginalne głosy Kokoro. Protokół jak Pocket: JSON {text, voice, speed, pilne} → WAV.
+const KOKORO_WS_URL = 'ws://127.0.0.1:9500';
 // [AGENT-EXP] Audio8 ONNX INT8 udostępnia binarny WAV przez WebSocket na porcie 9300.
 const AUDIO8_WS_URL = 'ws://127.0.0.1:9300';
 const AUDIO8_TIMEOUT_MS = 15 * 60 * 1000;
@@ -29,6 +32,7 @@ let tts2Voice = '';
 let audio8Voice = 'default';
 let pocketVoice = 'ref';   // [AGENT-EXP] ID głosu z VOICES w serwer_pocket.py
 let omnivoiceVoice = 'male, young adult, moderate pitch';   // [AGENT-EXP] opis głosu z VOICES w serwer_omnivoice.py
+let kokoroVoice = 'pm_mateusz';   // [AGENT-EXP] 2026-10-27: ID głosu z silnik.VOICES (tts maja\kokoro)
 let matchaVoice = 'web:male_voxcpm_2:elegancki';   // [AGENT-EXP] 2026-10-17: ID głosu z VOICES w serwer_matcha.py (★ = nowe, naturalne); 2026-10-24: 'web:…' = w przeglądarce (matcha_web)
 // [AGENT-EXP] 2026-10-24: Matcha-TTS-PL-Edge-v2 w przeglądarce (matcha_web/engine.js) — głosy 'web:<głos>[:elegancki]', bez serwera.
 let mwMod = null, mwModP = null;
@@ -134,13 +138,14 @@ const audio8Sockets = new Set();
 // [AGENT-EXP] Pocket-TTS-PL — własne zestawy połączeń (czytane teraz / nagrywane do przodu).
 const pocketSockets = new Set(), pocketPreloadSockets = new Set();
 const omnivoiceSockets = new Set(), omnivoicePreloadSockets = new Set();   // [AGENT-EXP] OmniVoice
+const kokoroSockets = new Set(), kokoroPreloadSockets = new Set();   // [AGENT-EXP] 2026-10-27 Kokoro
 // [AGENT-EXP] 2026-10-17: osobne zestawy połączeń dla NAGRYWANIA DO PRZODU (preload). Pauza / przewinięcie /
 // TTS_CLEAR_BUFFER przerywają tylko syntezę „na gorąco”; preload przerywa dopiero zmiana silnika lub głosu.
 // Wcześniej pauza kasowała nagrane do przodu kwestie, a skrypty strony uważały je za nagrane → od tej chwili
 // wszystko syntezowane w chwili czytania (XTTS nie nadąża → lektor milknie).
 const matchaPreloadSockets = new Set(), xttsPreloadSockets = new Set(), audio8PreloadSockets = new Set();
 function cancelRemotePreloads() {
-    for (const set of [matchaPreloadSockets, xttsPreloadSockets, audio8PreloadSockets, pocketPreloadSockets, omnivoicePreloadSockets]) {
+    for (const set of [matchaPreloadSockets, xttsPreloadSockets, audio8PreloadSockets, pocketPreloadSockets, omnivoicePreloadSockets, kokoroPreloadSockets]) {
         for (const socket of set) { try { socket.close(); } catch (e) {} }
         set.clear();
     }
@@ -263,7 +268,7 @@ function resumeAudioCtx() {
 function applySettings(s) {
     if (!s || typeof s !== 'object') return;
     if (s.ttsEngine !== undefined) {
-        const nextEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(s.ttsEngine) >= 0 ? s.ttsEngine : 'matcha';   // [AGENT-EXP] 2026-10-24
+        const nextEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'].indexOf(s.ttsEngine) >= 0 ? s.ttsEngine : 'matcha';   // [AGENT-EXP] 2026-10-24
         if (nextEngine !== ttsEngine) {
             ttsEngine = nextEngine;
             cancelMatchaRequests();
@@ -271,6 +276,7 @@ function applySettings(s) {
             cancelAudio8Requests();
             cancelPocketRequests();
             cancelOmnivoiceRequests();
+            cancelKokoroRequests();   // [AGENT-EXP] 2026-10-27
             cancelRemotePreloads();   // [AGENT-EXP]
             cancelSupertonicPreloads();   // [VOX]
             // [VOX] inny silnik → Supertonic zwalnia workery / kartę (model zostaje pobrany na dysku)
@@ -320,6 +326,20 @@ function applySettings(s) {
                 clearTtsPlayback();
             }
             offLogPush('pocket-voice', nextVoice);
+        }
+    }
+    // [AGENT-EXP] 2026-10-27 Kokoro: zmiana głosu czyści bufor poprzedniego głosu.
+    if (s.kokoroVoice !== undefined) {
+        const nextVoice = typeof s.kokoroVoice === 'string' && s.kokoroVoice.trim()
+            ? s.kokoroVoice.trim() : 'pm_mateusz';
+        if (nextVoice !== kokoroVoice) {
+            kokoroVoice = nextVoice;
+            if (ttsEngine === 'kokoro') {
+                cancelKokoroRequests();
+                cancelRemotePreloads();
+                clearTtsPlayback();
+            }
+            offLogPush('kokoro-voice', nextVoice);
         }
     }
     // [AGENT-EXP] 2026-10-17 Matcha-TTS-PL: zmiana głosu czyści bufor poprzedniego głosu.
@@ -635,6 +655,23 @@ function cancelOmnivoiceRequests() {
     omnivoiceSockets.clear();
 }
 
+// [AGENT-EXP] 2026-10-27 Kokoro (GPU, ~15× szybciej niż mowa na RTX 3050). pilne = kwestia czytana TERAZ.
+// speed: 1, bo tempo ustawia odtwarzacz.
+function kokoroSynthesize(text, voice, sockets = kokoroSockets, pilne = false) {
+    return synthesizeRemoteWav(
+        KOKORO_WS_URL, sockets, { text, voice: voice || 'pm_mateusz', speed: 1, pilne: !!pilne }, 'Kokoro',
+        pilne ? 120000 : REMOTE_PRELOAD_TIMEOUT_MS
+    );
+}
+
+// [AGENT-EXP] Zatrzymuje oczekujące żądania do Kokoro (tylko „na gorąco”, nie preload).
+function cancelKokoroRequests() {
+    for (const socket of kokoroSockets) {
+        try { socket.close(); } catch (e) {}
+    }
+    kokoroSockets.clear();
+}
+
 function cancelMatchaRequests() {
     for (const socket of matchaSockets) {
         try { socket.close(); } catch (e) {}
@@ -722,12 +759,13 @@ function ttsDisk() {
     return ttsDiskDb;
 }
 function ttsPersistKey(msg) {
-    const eng = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(msg.ttsEngine) >= 0 ? msg.ttsEngine : ttsEngine;
+    const eng = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'].indexOf(msg.ttsEngine) >= 0 ? msg.ttsEngine : ttsEngine;
     const voice = eng === 'supertonic' ? ((msg.supertonicVoice || supertonicVoice) + '@' + (msg.supertonicSteps || supertonicSteps))   // [VOX]
         : (eng === 'xtts' || eng === 'f5') ? (msg.tts2Voice !== undefined ? msg.tts2Voice : tts2Voice)
         : eng === 'audio8' ? (msg.audio8Voice || audio8Voice)
         : eng === 'pocket' ? (msg.pocketVoice || pocketVoice)
         : eng === 'omnivoice' ? (msg.omnivoiceVoice !== undefined ? msg.omnivoiceVoice : omnivoiceVoice)
+        : eng === 'kokoro' ? (msg.kokoroVoice || kokoroVoice)   // [AGENT-EXP] 2026-10-27
         : eng === 'matcha' ? ((msg.matchaVoice || matchaVoice) + (/^web:/.test(msg.matchaVoice || matchaVoice) && (msg.matchaWebTryb || matchaWebTryb) === 'cpu_fp32' ? '@fp32' : ''))   // [AGENT-EXP] 2026-10-17: osobne nagrania dla każdego głosu; 2026-10-24: i dla wariantu fp32
         : eng === 'sherpa' ? (msg.voiceId || voiceId) : '';
     if (eng === 'browser') return '';   // [AGENT-EXP] 🗣 głos przeglądarki nie ma nagrań (pamięć / dysk)
@@ -1381,7 +1419,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // z aktualnym miejscem filmu tej karty (nowMs ze skryptu strony) i aktualnym suwakiem.
 const AHEAD_MIN_MS = 8000;   // suwak 0 = „na bieżąco”: najwyżej kilka sekund (jak full_subs_ondemand)
 const AHEAD_PAST_MS = 1000;  // kwestia skończyła się dawniej niż 1 s temu — nie liczymy
-const AHEAD_ENGINE_KEYS = ['ttsEngine', 'voiceId', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice',
+const AHEAD_ENGINE_KEYS = ['ttsEngine', 'voiceId', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice',
     'matchaWebTryb', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'];
 const aheadGate = { limitMs: 3 * 60000, tabs: new Map(), pending: new Map(), running: new Set(), max: 4, fields: {} };
 let aheadJob = null;   // obietnica syntezy ustawiana przez gałąź TTS_PRELOAD (koniec = wolne miejsce w bramce)
@@ -1479,6 +1517,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.audio8Voice !== undefined) applySettings({ audio8Voice: msg.audio8Voice });
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
+        if (msg.kokoroVoice !== undefined) applySettings({ kokoroVoice: msg.kokoroVoice });   // [AGENT-EXP] 2026-10-27
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
         if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
@@ -1516,8 +1555,8 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             sendResponse({ status: 'initialized', engine: 'audio8' });
             return true;
         }
-        // [AGENT-EXP] Pocket-TTS-PL i OmniVoice działają jako osobne serwery — bez inicjalizacji Sherpa.
-        if (ttsEngine === 'pocket' || ttsEngine === 'omnivoice') {
+        // [AGENT-EXP] Pocket-TTS-PL, OmniVoice i Kokoro działają jako osobne serwery — bez inicjalizacji Sherpa.
+        if (ttsEngine === 'pocket' || ttsEngine === 'omnivoice' || ttsEngine === 'kokoro') {
             sendResponse({ status: 'initialized', engine: ttsEngine });
             return true;
         }
@@ -1548,6 +1587,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.audio8Voice !== undefined) applySettings({ audio8Voice: msg.audio8Voice });
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
+        if (msg.kokoroVoice !== undefined) applySettings({ kokoroVoice: msg.kokoroVoice });   // [AGENT-EXP] 2026-10-27
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
         if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
@@ -1639,6 +1679,31 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 });
             return true;
         }
+        // [AGENT-EXP] 2026-10-27 Kokoro: nagrywanie do przodu (serwer sam dzieli na zdania, limit 2000 znaków).
+        if (ttsEngine === 'kokoro') {
+            const text = censoredText(msg.text);
+            if (!text || text.length < 2) {
+                sendResponse({ status: 'muted' });
+                return true;
+            }
+            if (text.length > 1900) {
+                offLogPush('kokoro-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
+                sendResponse({ status: 'preload_skipped_long' });
+                return true;
+            }
+            sendResponse({ status: 'preloading_kokoro' });
+            aheadJob = kokoroSynthesize(text, kokoroVoice, kokoroPreloadSockets)   // aheadJob: bramka; preload: pauza go nie przerywa
+                .then((blob) => {
+                    cacheRemoteTtsBlob(msg.id, blob);
+                    recCapture(msg, blob).catch(() => {});
+                    offLogPush('kokoro-preload', String(msg.id || '').slice(0, 40));
+                })
+                .catch((err) => {
+                    console.error('[Offscreen] Kokoro preload:', err);
+                    offLogPush('kokoro-preload-fail', errMsg(err));
+                });
+            return true;
+        }
         // [AGENT-EXP] Pocket-TTS-PL: nagrywanie do przodu (serwer sam dzieli na zdania, limit 2000 znaków).
         if (ttsEngine === 'pocket') {
             const text = censoredText(msg.text);
@@ -1716,6 +1781,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.audio8Voice !== undefined) applySettings({ audio8Voice: msg.audio8Voice });
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
+        if (msg.kokoroVoice !== undefined) applySettings({ kokoroVoice: msg.kokoroVoice });   // [AGENT-EXP] 2026-10-27
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
         if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
@@ -1823,6 +1889,21 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 });
             return true;
         }
+        // [AGENT-EXP] 2026-10-27 Kokoro: jak Pocket — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
+        if (ttsEngine === 'kokoro') {
+            playKokoroStream(msg, put)
+                .then(() => {
+                    end();
+                    sendResponse({ status: 'playing', engine: 'kokoro' });
+                })
+                .catch((err) => {
+                    end();
+                    console.error('[Offscreen] Kokoro playback:', err);
+                    offLogPush('kokoro-play-fail', errMsg(err));
+                    sendResponse({ status: 'error', error: 'Kokoro: ' + errMsg(err) });
+                });
+            return true;
+        }
         // [AGENT-EXP] OmniVoice: jak Pocket — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
         if (ttsEngine === 'omnivoice') {
             playOmnivoiceStream(msg, put)
@@ -1873,6 +1954,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         cancelAudio8Requests();
         cancelPocketRequests();
         cancelOmnivoiceRequests();
+        cancelKokoroRequests();   // [AGENT-EXP] 2026-10-27
         ordReset();
         playQueue.length = 0;
         finishCurrent();
@@ -1891,6 +1973,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         cancelAudio8Requests();
         cancelPocketRequests();
         cancelOmnivoiceRequests();
+        cancelKokoroRequests();   // [AGENT-EXP] 2026-10-27
         ordReset();
         playQueue.length = 0;
         finishCurrent();
@@ -2333,6 +2416,19 @@ async function playPocketStream(msg, put) {
         put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
         recCapture(msg, blob).catch(() => {});
         offLogPush('pocket-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
+    }
+}
+
+// [AGENT-EXP] 2026-10-27 Kokoro: kwestia czytana teraz idzie z flagą pilne; długie teksty partiami (limit 2000).
+async function playKokoroStream(msg, put) {
+    const chunks = splitForRemoteTts(msg.text, 1900);
+    for (let i = 0; i < chunks.length; i++) {
+        const blob = await kokoroSynthesize(chunks[i], kokoroVoice, kokoroSockets, true);
+        const single = chunks.length === 1;
+        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
+        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id);
+        recCapture(msg, blob).catch(() => {});
+        offLogPush('kokoro-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
     }
 }
 

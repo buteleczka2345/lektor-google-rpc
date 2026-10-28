@@ -248,7 +248,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.action === 'GET_TTS_SETTINGS') {
         // [AGENT-EXP] 2026-10-16 — przekazuje wybór Sherpa/Matcha do dokumentu offscreen.
         // [AGENT-EXP] Przekaż wybór silnika i lokalnych głosów także przy starcie dokumentu offscreen.
-        chrome.storage.local.get(['tempoMode', 'autoCatchup', 'readToEnd', 'compressor', 'liveBufTTLDays', 'ttsVolume', 'piperSpeed', 'offlineVoice', 'customVoice', 'builtinVoiceRemoved', 'censorEnabled', 'censorMode', 'censorCustomWords', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'], (items) => {
+        chrome.storage.local.get(['tempoMode', 'autoCatchup', 'readToEnd', 'compressor', 'liveBufTTLDays', 'ttsVolume', 'piperSpeed', 'offlineVoice', 'customVoice', 'builtinVoiceRemoved', 'censorEnabled', 'censorMode', 'censorCustomWords', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'], (items) => {
             sendResponse({
                 settings: {
                     tempoMode: ['A', 'B', 'C'].indexOf(items.tempoMode) >= 0 ? items.tempoMode : 'A', // OPTIONS-PAGE
@@ -258,11 +258,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                     liveBufTTLDays: Number(items.liveBufTTLDays) || 0,
                     ttsVolume: items.ttsVolume === undefined ? 100 : items.ttsVolume,
                     piperSpeed: Number(items.piperSpeed) || 1,
-                    ttsEngine: ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'].indexOf(items.ttsEngine) >= 0 ? items.ttsEngine : 'matcha',   // [AGENT-EXP] 2026-10-24: domyślnie Matcha 🌐
+                    ttsEngine: ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'].indexOf(items.ttsEngine) >= 0 ? items.ttsEngine : 'matcha',   // [AGENT-EXP] 2026-10-24: domyślnie Matcha 🌐
                     tts2Voice: typeof items.tts2Voice === 'string' ? items.tts2Voice : '',
                     audio8Voice: typeof items.audio8Voice === 'string' ? items.audio8Voice : 'default',
                     pocketVoice: typeof items.pocketVoice === 'string' && items.pocketVoice ? items.pocketVoice : 'ref',   // [AGENT-EXP]
                     omnivoiceVoice: typeof items.omnivoiceVoice === 'string' ? items.omnivoiceVoice : 'male, young adult, moderate pitch',   // [AGENT-EXP] OmniVoice ('' = losowy)
+                    kokoroVoice: typeof items.kokoroVoice === 'string' && items.kokoroVoice ? items.kokoroVoice : 'pm_mateusz',   // [AGENT-EXP] 2026-10-27 Kokoro
                     matchaVoice: typeof items.matchaVoice === 'string' && items.matchaVoice ? items.matchaVoice : 'web:male_voxcpm_2:elegancki',   // [AGENT-EXP] 2026-10-17 Matcha: głos z VOICES serwer_matcha.py; 2026-10-24: domyślnie w przeglądarce (matcha_web)
                     ...supertonicSettings(items),   // [VOX] Supertonic: głos, jakość, CPU/GPU
                     browserVoice: typeof items.browserVoice === 'string' ? items.browserVoice : '',   // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki
@@ -299,6 +300,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.audio8Voice) patch.audio8Voice = changes.audio8Voice.newValue;
     if (changes.pocketVoice) patch.pocketVoice = changes.pocketVoice.newValue;   // [AGENT-EXP] Pocket-TTS-PL
     if (changes.omnivoiceVoice) patch.omnivoiceVoice = changes.omnivoiceVoice.newValue;   // [AGENT-EXP] OmniVoice
+    if (changes.kokoroVoice) patch.kokoroVoice = changes.kokoroVoice.newValue;   // [AGENT-EXP] 2026-10-27 Kokoro
     if (changes.matchaVoice) patch.matchaVoice = changes.matchaVoice.newValue;   // [AGENT-EXP] Matcha-TTS-PL
     if (changes.matchaWebTryb) patch.matchaWebTryb = changes.matchaWebTryb.newValue;   // [AGENT-EXP] 2026-10-24: wariant Matcha 🌐
     if (changes.supertonicVoice) patch.supertonicVoice = changes.supertonicVoice.newValue;   // [VOX] Supertonic
@@ -462,9 +464,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 // [AGENT-EXP] 2026-10-21: router mowy napisany od nowa (Multilektor). Każde zlecenie dla dokumentu lektora dostaje
 // aktualny silnik i głosy ze storage — pierwsza kwestia po zmianie ustawienia trafia od razu do właściwego silnika.
-const TTS_KEYS = ['engine', 'piperSpeed', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'matchaVoice',
+const TTS_KEYS = ['engine', 'piperSpeed', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice',
     'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice', 'matchaWebTryb', 'lookaheadMin'];   // [AGENT-EXP] 2026-10-25: lookaheadMin → bramka zapasu   // [AGENT-EXP] 2026-10-24: matchaWebTryb
-const TTS_ENGINES = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'supertonic', 'browser'];
+const TTS_ENGINES = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'];
 const str = (v, dflt, allowEmpty) => (typeof v === 'string' && (allowEmpty || v) ? v : dflt);
 async function ttsEngineFields(withSpeed) {
     const s = await chrome.storage.local.get(TTS_KEYS);
@@ -475,6 +477,7 @@ async function ttsEngineFields(withSpeed) {
         audio8Voice: str(s.audio8Voice, 'default', true),
         pocketVoice: str(s.pocketVoice, 'ref'),
         omnivoiceVoice: str(s.omnivoiceVoice, 'male, young adult, moderate pitch', true),   // '' = losowy
+        kokoroVoice: str(s.kokoroVoice, 'pm_mateusz'),   // [AGENT-EXP] 2026-10-27 Kokoro
         matchaVoice: str(s.matchaVoice, 'web:male_voxcpm_2:elegancki'),   // [AGENT-EXP] 2026-10-24
         ...supertonicSettings(s),   // [VOX] Supertonic: głos, jakość, CPU/GPU
         browserVoice: str(s.browserVoice, '', true),   // 🗣 głos przeglądarki ('' = automatycznie)

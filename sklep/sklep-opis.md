@@ -96,7 +96,7 @@ Multilektor czyta napisy filmów na głos po polsku (lektor): pobiera napisy odt
 | `scripting` | Wstrzykuje skrypty lektora na stronach z wideo, gdy użytkownik włączy Łowcę napisów lub OCR na danej stronie. |
 | `tabCapture` | Funkcja „Film w karcie → napisy” (uruchamiana skrótem lub przyciskiem): dźwięk filmu z karty trafia do rozpoznawania mowy, żeby pokazać napisy tam, gdzie ich nie ma. |
 | `downloads` | Zapis na żądanie użytkownika: pobrane napisy (SRT) i nagrania lektora (ZIP/WAV). |
-| Dostęp do hostów `<all_urls>` | Napisy są na wielu serwisach wideo (YouTube, Netflix, iQIYI, Viki, Bilibili i inne); lektor musi odczytać napisy i ściszyć wideo na stronie, którą użytkownik ogląda. |
+| Dostęp do hostów `<all_urls>` | Rozszerzenie czyta na głos napisy filmów na stronie, którą użytkownik ogląda, i ścisza wtedy wideo. Obsługuje wiele serwisów wideo (YouTube, Netflix, Prime Video, iQIYI, Viki, Bilibili, Dailymotion i inne), a funkcja „Łowca napisów” oraz napisy LIVE działają na dowolnej stronie z filmem wybranej przez użytkownika — listy takich stron nie da się podać z góry. Dostęp jest też potrzebny do pobierania tłumaczeń napisów (Google Translate, Bing, DeepL) i plików napisów (OpenSubtitles, SubDL). Rozszerzenie nie zbiera ani nie wysyła historii przeglądania; cały kod jest w paczce. |
 
 **Zdalny kod:** „Nie, nie używam zdalnego kodu”. (Cały kod jest w paczce. Z sieci pobierane są tylko dane: modele głosu
 Supertonic z Hugging Face i pliki językowe OCR — nie kod.)
