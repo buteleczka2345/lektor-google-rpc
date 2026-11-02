@@ -149,6 +149,8 @@
             <div class="card-head"><b>Ducking (wyciszanie filmu)</b><span class="pill" id="duckVal">20%</span></div>
             <input type="range" id="duckRange" min="0" max="100" step="5" value="20">
             <div class="footnote">0 = całkowite wyciszenie · 100 = bez zmian</div>
+            <!-- [FIX 2026-11-02] 🔉 ściszanie tylko na czas mowy lektora (płynne przejścia) -->
+            <label class="check"><input type="checkbox" id="duckWhileCheck"> Ściszaj film tylko, gdy lektor mówi (płynnie, jak w telewizji)</label>
         </div>
 
         <div class="card" data-mod="glosnosc">

@@ -1050,6 +1050,7 @@ function playNext(item) {
     const baseRate = clampSpeed(lectorSpeed * tempoMul);
     player.playbackRate = baseRate;
     if (item.first && item.at) statLag(item.tab, Date.now() - item.at);   // [FIX 2026-11-02] opóźnienie lektora
+    if (item.tab && item.tab !== 'x') { try { chrome.runtime.sendMessage({ action: 'TTS_SPEAK', tab: item.tab }).catch(() => {}); } catch (e) {} }   // [FIX 2026-11-02] 🔉 ściszanie na czas mowy
     if (autoCatchup) {
         // [FIX 2026-11-02] Nadrabianie: (1) od ZALEGŁOŚCI — gdy w kolejce czekają kolejne kwestie, ta gra odrobinę szybciej
         // (+8% za każdą, najwyżej 5); (2) od TERMINU kwestii — liczy się czas, który naprawdę został do końca jej okna
@@ -1839,6 +1840,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 const need = (btext.length / 14 * 1000) / slotMs;
                 if (need > rate) rate = Math.min(Math.max(rate, MAX_CATCHUP_RATE), need);   // [FIX 2026-11-02] było 2,5×
             }
+            { const tb = aheadTab(msg.id); if (tb !== 'x') { try { chrome.runtime.sendMessage({ action: 'TTS_SPEAK', tab: tb }).catch(() => {}); } catch (e) {} } }   // [FIX 2026-11-02] 🔉
             browserTtsGet().speak(btext, {
                 clearQueue: false, rate, volume: lectorVolume, maxQueue: MAX_QUEUE, noSkip: !!msg.noSkip,
                 expireAt: slotMs > 0 && !msg.noSkip ? Date.now() + slotMs + 2500 : 0

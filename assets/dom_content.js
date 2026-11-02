@@ -407,6 +407,7 @@ if (!('__lektorBufPauza' in window)) {
     var duckReady = false;
     function applyDuck() {
         if (!duckReady || !enabled) return;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
+        var LS = window.__LektorSched; if (LS && LS.duckAllowed && !LS.duckAllowed()) return;   // [FIX 2026-11-02] 🔉 ścisza dopiero, gdy lektor mówi
         var v = getVideo(); if (!v) return;
         var target = duckLevel / 100;
         duckOrig(v);   // [AGENT-EXP] 2026-10-20
@@ -417,16 +418,18 @@ if (!('__lektorBufPauza' in window)) {
         // głos już nigdy nie wracał. Ustawiamy min(target, savedVolume), żeby nigdy
         // nie przekroczyć pierwotnej głośności ustawionej przez użytkownika.
         if (savedVolume !== null) {
-            v.volume = Math.min(target, savedVolume);
+            setV(v, Math.min(target, savedVolume));
         } else if (v.volume > target) {
-            v.volume = target;
+            setV(v, target);
         }
     }
+    function setV(v, x) { var S = window.__LektorSched; if (S && S.setVol) S.setVol(v, x); else v.volume = x; }   // [FIX 2026-11-02] płynnie w trybie „tylko gdy mówi”
     function restoreVolume() {
         var v = getVideo();
         if (v) { duckOrig(v); duckMemSet(null); }   // [AGENT-EXP] 2026-10-20
-        if (v && savedVolume !== null) { v.volume = savedVolume; savedVolume = null; }
+        if (v && savedVolume !== null) { setV(v, savedVolume); savedVolume = null; }
     }
+    try { window.__LektorSched.onDuck(function () { if (enabled) applyDuck(); }, function () { restoreVolume(); }); } catch (e) {}   // [FIX 2026-11-02] 🔉
     // [FIX 2026-11-02] Kwestia z pliku / całych napisów przerwana pauzą (bez „Czytaj zawsze do końca”) — po wznowieniu
     // czytana od początku (wspólna funkcja harmonogramu). Wcześniej zostawała oznaczona jako przeczytana i jej reszta przepadała.
     var pausedAtMs = -1;

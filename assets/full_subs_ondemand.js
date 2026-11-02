@@ -238,11 +238,14 @@ if (!('__lektorBufPauza' in window)) {
     var duckReady = false;
     function applyDuck() {
         if (!video || !duckReady || !enabled) return;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
+        var LS = window.__LektorSched; if (LS && LS.duckAllowed && !LS.duckAllowed()) return;   // [FIX 2026-11-02] 🔉 ścisza dopiero, gdy lektor mówi
         var target = duckLevel / 100;
         if (savedVolume === null && video.volume > target) savedVolume = video.volume;
-        if (video.volume > target) video.volume = target;
+        if (video.volume > target) setV(video, target);
     }
-    function restoreVolume() { if (video && savedVolume !== null) { try { video.volume = savedVolume; } catch (e) {} } savedVolume = null; }
+    function setV(v, x) { var S = window.__LektorSched; if (S && S.setVol) S.setVol(v, x); else v.volume = x; }   // [FIX 2026-11-02] płynnie w trybie „tylko gdy mówi”
+    function restoreVolume() { if (video && savedVolume !== null) { try { setV(video, savedVolume); } catch (e) {} } savedVolume = null; }
+    try { window.__LektorSched.onDuck(function () { if (enabled && items) applyDuck(); }, function () { restoreVolume(); }); } catch (e) {}   // [FIX 2026-11-02] 🔉
 
     function stopLoop() { if (loopTimer) { clearInterval(loopTimer); loopTimer = null; } restoreVolume(); }
     var fsSrcSent = -1;   // [FIX 2026-11-02] „czytam z: …”
@@ -268,6 +271,7 @@ if (!('__lektorBufPauza' in window)) {
                 onPlay: function () { applyDuck(); },
                 afterPlay: function (c) {
                     clearTimeout(startOwnLoop._r);
+                    if (S.duckWhileOn && S.duckWhileOn()) return;   // 🔉 głośność oddaje koniec mowy lektora, nie zegar
                     startOwnLoop._r = setTimeout(restoreVolume, Math.min(6000, Math.max(1500, c.text.length * 65) + 400));
                 }
             });

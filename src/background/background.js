@@ -227,6 +227,13 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     }
 });
 chrome.tabs.onRemoved.addListener((tabId) => { narratorTabs.delete(tabId); });
+// [FIX 2026-11-02] 🔉 lektor zaczął mówić → karta tej kwestii (ściszanie filmu tylko na czas mowy)
+chrome.runtime.onMessage.addListener((msg, sender) => {
+    if (!msg || msg.action !== 'TTS_SPEAK' || (sender && sender.tab)) return;
+    const tab = Number(msg.tab);
+    if (!Number.isInteger(tab)) return;
+    try { chrome.tabs.sendMessage(tab, { action: 'TTS_SPEAK' }, () => { void chrome.runtime.lastError; }); } catch (e) {}
+});
 
 // ENERGIA: dokument lektora (offscreen) NIE startuje razem z przeglądarką — tworzy go dopiero
 // pierwsza kwestia do przeczytania (callOffscreen → ensureOffscreen). Bez lektora nic nie działa w tle.

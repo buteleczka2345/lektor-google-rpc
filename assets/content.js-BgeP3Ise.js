@@ -219,6 +219,7 @@ if (!('__lektorBufPauza' in window)) {
     var duckReady = false;
     function applyDuck() {
         if (!duckReady || !enabled) return;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
+        var LS = window.__LektorSched; if (LS && LS.duckAllowed && !LS.duckAllowed()) return;   // [FIX 2026-11-02] 🔉 ścisza dopiero, gdy lektor mówi
         var v = getVideo();
         if (!v) return;
         var target = duckLevel / 100;
@@ -229,21 +230,23 @@ if (!('__lektorBufPauza' in window)) {
         // Ustawiamy min(target, savedVolume), żeby nigdy nie przekroczyć pierwotnej
         // głośności ustawionej przez użytkownika.
         if (savedVolume !== null) {
-            v.volume = Math.min(target, savedVolume);
+            setV(v, Math.min(target, savedVolume));
         } else if (v.volume > target) {
-            v.volume = target;
+            setV(v, target);
         }
     }
+    function setV(v, x) { var S = window.__LektorSched; if (S && S.setVol) S.setVol(v, x); else v.volume = x; }   // [FIX 2026-11-02] płynnie w trybie „tylko gdy mówi”
 
     function restoreVideo() {
         var v = getVideo();
         if (v) duckOrig(v);   // [AGENT-EXP] 2026-10-20
         duckMemSet(null);
         if (v && savedVolume !== null) {
-            v.volume = savedVolume;
+            setV(v, savedVolume);
             savedVolume = null;
         }
     }
+    try { window.__LektorSched.onDuck(function () { if (enabled) applyDuck(); }, function () { restoreVideo(); }); } catch (e) {}   // [FIX 2026-11-02] 🔉
 
     // ===== „Co jest na ekranie" — lektor ma mówić to, co widzi użytkownik =====
     // Netflix renderuje własne napisy w .player-timedtext, a Immersive Translate dokłada

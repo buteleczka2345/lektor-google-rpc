@@ -370,18 +370,21 @@ if (!('__lektorBufPauza' in window)) {
         if (IS_EMBED) return;
         if (!duckReady || !enabled) return;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
         var v = getVideo(); if (!v) return;
-        if (!fileSubs.length && isPolishVideo()) { if (savedVolume !== null || duckMemGet() !== null) restoreVolume(); return; }   // [AGENT-EXP] 2026-10-27: film po polsku → lektor milczy, więc nie ściszamy (i oddajemy głośność); [FIX 2026-11-02] wgrany plik napisów czyta zawsze — wtedy ściszamy
+        if (!fileSubs.length && isPolishVideo()) { if (savedVolume !== null || duckMemGet() !== null) restoreVolume(); return; }
+        var LS = window.__LektorSched; if (LS && LS.duckAllowed && !LS.duckAllowed()) return;   // [FIX 2026-11-02] 🔉 ścisza dopiero, gdy lektor mówi   // [AGENT-EXP] 2026-10-27: film po polsku → lektor milczy, więc nie ściszamy (i oddajemy głośność); [FIX 2026-11-02] wgrany plik napisów czyta zawsze — wtedy ściszamy
         var target = duckLevel / 100;
         duckOrig(v);   // [AGENT-EXP] 2026-10-20
         if (savedVolume === null && v.volume > target) savedVolume = v.volume;
         if (savedVolume !== null) duckMemSet(savedVolume);   // [AGENT-EXP] 2026-10-20
         if (savedVolume !== null) {
-            v.volume = Math.min(target, savedVolume);
+            setV(v, Math.min(target, savedVolume));
         } else if (v.volume > target) {
-            v.volume = target;
+            setV(v, target);
         }
     }
-    function restoreVolume() { var v = getVideo(); if (v && !IS_EMBED) { duckOrig(v); duckMemSet(null); } if (v && savedVolume !== null) v.volume = savedVolume; savedVolume = null; }   // [AGENT-EXP] 2026-10-20: + pamięć
+    function setV(v, x) { var S = window.__LektorSched; if (S && S.setVol) S.setVol(v, x); else v.volume = x; }   // [FIX 2026-11-02] płynnie w trybie „tylko gdy mówi”
+    function restoreVolume() { var v = getVideo(); if (v && !IS_EMBED) { duckOrig(v); duckMemSet(null); } if (v && savedVolume !== null) setV(v, savedVolume); savedVolume = null; }   // [AGENT-EXP] 2026-10-20: + pamięć
+    try { window.__LektorSched.onDuck(function () { if (enabled) applyDuck(); }, function () { if (!IS_EMBED) restoreVolume(); }); } catch (e) {}   // [FIX 2026-11-02] 🔉
 
     // === HOVER: wyciszenie natywnego podglądu (poll 50 ms podbija, gdyby YT przywracał dźwięk) ===
     function muteHoverPreview() {

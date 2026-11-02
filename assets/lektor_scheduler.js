@@ -115,8 +115,53 @@
         });
     } catch (e) {}
 
+    // [FIX 2026-11-02] 🔉 „Ściszaj film tylko, gdy lektor mówi” (popup → Ducking; duckWhileSpeaking, domyślnie wył.).
+    // Dokument lektora wysyła TTS_SPEAK, gdy NAPRAWDĘ zaczyna mówić, a TTS_QUEUE_IDLE, gdy skończył — film ścisza się
+    // na czas mowy i wraca po 0,4 s ciszy (bez skakania między zdaniami). Zmiany głośności płynne (~0,25 s).
+    // Skrypty stron: duckAllowed() na początku swojego applyDuck, setVol() zamiast video.volume = …, onDuck(duck, restore).
+    var duckWhile = false, speaking = false, holdT = 0, hooks = [];
+    try {
+        chrome.storage.local.get('duckWhileSpeaking', function (r) { duckWhile = !!(r && r.duckWhileSpeaking); });
+        chrome.storage.onChanged.addListener(function (ch, a) {
+            if (a !== 'local' || !ch.duckWhileSpeaking) return;
+            duckWhile = !!ch.duckWhileSpeaking.newValue;
+            hooks.forEach(function (h) { try { if (duckWhile && !speaking) h.restore(); else h.duck(); } catch (e) {} });
+        });
+        chrome.runtime.onMessage.addListener(function (msg) {
+            if (!msg || !duckWhile) return;
+            if (msg.action === 'TTS_SPEAK') {
+                clearTimeout(holdT);
+                if (!speaking) { speaking = true; hooks.forEach(function (h) { try { h.duck(); } catch (e) {} }); }
+            } else if (msg.action === 'TTS_QUEUE_IDLE') {
+                clearTimeout(holdT);
+                holdT = setTimeout(function () { speaking = false; hooks.forEach(function (h) { try { h.restore(); } catch (e) {} }); }, 400);
+            }
+        });
+    } catch (e) {}
+    function duckAllowed() { return !duckWhile || speaking; }
+    function onDuck(duck, restore) { hooks.push({ duck: duck, restore: restore }); }
+    var fades = typeof WeakMap === 'function' ? new WeakMap() : null;
+    function setVol(v, target) {
+        if (!v) return;
+        target = Math.max(0, Math.min(1, Number(target)));
+        if (!isFinite(target)) return;
+        var run = fades && fades.get(v);
+        if (!duckWhile || !fades) { if (run) { clearInterval(run.t); fades.delete(v); } v.volume = target; return; }
+        if (run && Math.abs(run.to - target) < 0.005) return;   // już płynie w tę stronę
+        if (run) clearInterval(run.t);
+        var from = v.volume, n = 0;
+        if (Math.abs(from - target) < 0.01) { v.volume = target; if (fades) fades.delete(v); return; }
+        var t = setInterval(function () {
+            n++;
+            try { v.volume = from + (target - from) * (n / 10); } catch (e) {}
+            if (n >= 10) { clearInterval(t); fades.delete(v); }
+        }, 25);
+        fades.set(v, { t: t, to: target });
+    }
+
     window.__LektorSched = {
         CPS: CPS, estSpeechMs: estSpeechMs, slotMs: slotMs, budgetFor: budgetFor, canPlay: canPlay, tick: tick,
-        rearmAfterPause: rearmAfterPause, readToEndOn: readToEndOn, setSource: setSource, getSource: getSource
+        rearmAfterPause: rearmAfterPause, readToEndOn: readToEndOn, setSource: setSource, getSource: getSource,
+        duckAllowed: duckAllowed, onDuck: onDuck, setVol: setVol, duckWhileOn: function () { return duckWhile; }
     };
 })();

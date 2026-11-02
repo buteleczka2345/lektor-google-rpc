@@ -1473,5 +1473,7 @@ self.ML_I18N_EN = {
     "✂ Skracaj za długie kwestie (AI w Chrome)": "✂ Shorten lines that are too long (AI in Chrome)",
     "Gdy zdanie wyraźnie nie zmieści się w czasie napisu, Gemini Nano wbudowany w Chrome (lokalnie, bez klucza) skraca je jak lektor — zamiast przyspieszać mowę. Działa przy nagrywaniu do przodu (całe napisy, plik, bazy). Wymaga Chrome z Prompt API i pobranym modelem; bez niego lektor czyta oryginał.": "When a sentence clearly won't fit in the subtitle's time, Gemini Nano built into Chrome (locally, no key) shortens it like a voice-over narrator — instead of speeding up the speech. Works when recording ahead (whole subtitles, file, databases). Needs Chrome with the Prompt API and the downloaded model; without it the narrator reads the original.",
     "🗣 Słownik wymowy": "🗣 Pronunciation dictionary",
-    "Jedna reguła w linii: tekst => jak czytać, np. Netflix => Netfliks, AI => aj aj, Mr. => mister. Całe słowa, wielkość liter bez znaczenia; # na początku linii = komentarz.": "One rule per line: text => how to read it, e.g. Netflix => Netfliks, AI => aj aj, Mr. => mister. Whole words, case does not matter; # at the start of a line = comment."
+    "Jedna reguła w linii: tekst => jak czytać, np. Netflix => Netfliks, AI => aj aj, Mr. => mister. Całe słowa, wielkość liter bez znaczenia; # na początku linii = komentarz.": "One rule per line: text => how to read it, e.g. Netflix => Netfliks, AI => aj aj, Mr. => mister. Whole words, case does not matter; # at the start of a line = comment.",
+    // [FIX 2026-11-02]
+    "Ściszaj film tylko, gdy lektor mówi (płynnie, jak w telewizji)": "Lower the video only while the narrator speaks (smoothly, like on TV)"
 };

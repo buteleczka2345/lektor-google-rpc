@@ -2210,6 +2210,15 @@ try {
     });
 })();
 
+// [FIX 2026-11-02] 🔉 checkbox „Ściszaj film tylko, gdy lektor mówi” (duckWhileSpeaking, domyślnie wył.)
+(function () {
+    const chk = document.getElementById('duckWhileCheck');
+    if (!chk) return;
+    chrome.storage.local.get('duckWhileSpeaking', (r) => { chk.checked = !!(r && r.duckWhileSpeaking); });
+    chk.addEventListener('change', () => chrome.storage.local.set({ duckWhileSpeaking: chk.checked }));
+    chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.duckWhileSpeaking) chk.checked = !!ch.duckWhileSpeaking.newValue; });
+})();
+
 // [AGENT-EXP] 2026-10-26: checkbox „Auto-nadrabianie” (autoCatchup, domyślnie włączony — jak w Ustawieniach).
 (function () {
     const chk = document.getElementById('autoCatchupCheck');
