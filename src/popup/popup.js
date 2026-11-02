@@ -697,6 +697,21 @@ async function init() {
     // NA ŻĄDANIE: pobierz całe napisy filmu w BIEŻĄCEJ karcie — dowolna strona z filmem.
     // 1) strona ze wsparciem (YouTube, iQIYI, WeTV, Viki, Bilibili) odpowiada na LOAD_FULL_SUBS;
     // 2) inaczej wstrzykujemy uniwersalny pobieracz (ścieżki napisów odtwarzacza HTML5) — tylko po kliknięciu.
+    // [FIX 2026-11-02] 💾 napisy PL → .srt (lektor_bar.js w ramce z filmem składa plik i go pobiera)
+    const srtBtn = $('exportSrtBtn');
+    if (srtBtn) srtBtn.addEventListener('click', () => {
+        const st = $('exportSrtStatus');
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            const tab = tabs && tabs[0];
+            if (!tab || tab.id == null) return;
+            chrome.tabs.sendMessage(tab.id, { action: 'LEKTOR_EXPORT_SRT' }, (r) => {
+                void chrome.runtime.lastError;
+                if (st) st.textContent = r && r.ok
+                    ? '✓ Zapisano ' + r.count + ' kwestii do pliku .srt (Pobrane).'
+                    : '⛔ Brak całych napisów na tej karcie — najpierw „⬇ Pobierz całe napisy”, plik albo bazy napisów.';
+            });
+        });
+    });
     const fullBtn = $('fullSubsBtn');
     const fullStatus = $('fullSubsStatus');
     function fullSet(t) { if (fullStatus) fullStatus.textContent = t; }

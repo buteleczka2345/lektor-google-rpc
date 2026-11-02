@@ -1431,5 +1431,13 @@ self.ML_I18N_EN = {
     "na żywo: napisy z ekranu Netflix": "live: Netflix on-screen subtitles",
     "na żywo: napisy ze strony → tłumacz": "live: on-page subtitles → translator",
     "na żywo: napisy ze strony": "live: on-page subtitles",
-    "OCR: napisy z obrazu": "OCR: subtitles from the picture"
+    "OCR: napisy z obrazu": "OCR: subtitles from the picture",
+    // [FIX 2026-11-02]
+    "💾 Zapisz napisy PL do pliku .srt": "💾 Save Polish subtitles to an .srt file",
+    "Zapisuje to, co lektor ma do przeczytania (tłumaczenie z czasami) — np. do odtwarzacza albo na później.": "Saves what the narrator is going to read (the translation with timings) — e.g. for a player or for later.",
+    "✓ Zapisano ": "✓ Saved ",
+    " kwestii do pliku .srt (Pobrane).": " lines to an .srt file (Downloads).",
+    "⛔ Brak całych napisów na tej karcie — najpierw „⬇ Pobierz całe napisy”, plik albo bazy napisów.": "⛔ No whole subtitles on this tab — first use “⬇ Download whole subtitles”, a file or the subtitle databases.",
+    " · ⏱ opóźnienie ": " · ⏱ delay ",
+    " · ⏭ pominięte: ": " · ⏭ skipped: "
 };

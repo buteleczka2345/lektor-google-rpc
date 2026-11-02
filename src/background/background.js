@@ -401,6 +401,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         })().then((keys) => sendResponse({ keys }), () => sendResponse({ keys: [] }));
         return true;
     }
+    if (msg.action === 'LEKTOR_STATS') {   // [FIX 2026-11-02] 📊 pasek lektora: pominięte kwestie i opóźnienie tej karty
+        (async () => {
+            const tab = sender && sender.tab ? sender.tab.id : null;
+            if (tab == null || !(await hasOffscreen())) return null;
+            return sendOffscreen({ action: 'TTS_STATS', tab: String(tab) });
+        })().then((r) => sendResponse(r || null), () => sendResponse(null));
+        return true;
+    }
     if (msg.action === 'LEKTOR_FILE_FOR_TAB') {   // popup: status dla aktywnej karty
         chrome.tabs.get(msg.tabId).then((t) => fileSubsFor(t && t.url)).then((file) => sendResponse({ file }), () => sendResponse({ file: null }));
         return true;

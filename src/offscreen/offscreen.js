@@ -718,7 +718,7 @@ function clearTtsPlayback() {
     finishCurrent();
     playerReset();   // [FIX 2026-11-02] bez fałszywego „audio-error”
     for (const url of audioCache.values()) URL.revokeObjectURL(url);
-    audioCache.clear();
+    audioCache.clear(); cacheSizeReset();   // [FIX 2026-11-02] pamięć w MB
     playingUrls.clear();
 }
 
@@ -726,6 +726,7 @@ function clearTtsPlayback() {
 function cacheRemoteTtsBlob(id, blob, fromDisk) {
     const url = URL.createObjectURL(blob);
     audioCache.set(id, url);
+    cacheSizeSet(id, blob && blob.size);               // [FIX 2026-11-02] pamięć liczona w MB
     ttsCacheEvict();                                   // [AGENT-EXP] najpierw przeczytane
     if (!fromDisk) ttsDiskPut(ttsIdKey.get(id), blob); // [AGENT-EXP] 💾 na dysk (30 dni)
     return url;
@@ -741,7 +742,7 @@ const playedKeys = new Set();
 const ttsIdKey = new Map();   // id kwestii (z background: karta|id|skrót) → klucz dysku
 const ttsMeta = new Map();    // [AGENT-EXP] id kwestii → { text, startMs, endMs } (dla „Zapisz bufor filmu”)
 function ttsCacheEvict() {
-    while (audioCache.size > MAX_CACHE) {
+    while (audioCache.size > MAX_CACHE || audioCacheTotal > MAX_CACHE_BYTES) {   // [FIX 2026-11-02] + limit w MB
         let victim = null;
         for (const [k, u] of audioCache) {
             if (playingUrls.has(u)) continue;
@@ -751,6 +752,7 @@ function ttsCacheEvict() {
         if (victim === null) break;
         try { URL.revokeObjectURL(audioCache.get(victim)); } catch (e) {}
         audioCache.delete(victim);
+        cacheSizeDrop(victim);   // [FIX 2026-11-02]
         playedKeys.delete(victim);
         ttsIdKey.delete(victim);
     }
@@ -855,6 +857,19 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
         sendResponse({ keys: Array.from(audioCache.keys()) });
         return;
     }
+    if (msg.action === 'TTS_STATS') {   // [FIX 2026-11-02] 📊 pasek lektora: pominięte kwestie (10 min) i opóźnienie tej karty
+        const st = lekStats.get(String(msg.tab || 'x'));
+        const since = Date.now() - 10 * 60000;
+        const lags = st ? st.lags : [];
+        sendResponse({
+            skipped10m: st ? st.skips.filter((t) => t > since).length : 0,
+            lagMs: lags.length ? lags[lags.length - 1] : null,
+            lagAvgMs: lags.length ? Math.round(lags.reduce((a, b) => a + b, 0) / lags.length) : null,
+            played: st ? st.played : 0,
+            cacheMb: Math.round(audioCacheTotal / 1048576), cacheMaxMb: Math.round(MAX_CACHE_BYTES / 1048576)
+        });
+        return;
+    }
     if (msg.action === 'PING' || msg.action === 'GET_STATUS') {
         sendResponse({
             status: 'ok',
@@ -913,7 +928,7 @@ function keepAliveOn() {
 }
 chrome.runtime.onMessage.addListener((msg) => {
     if (!msg || msg.target !== 'offscreen') return;
-    if (msg.action === 'PING' || msg.action === 'GET_STATUS' || msg.action === 'TTS_CACHE_KEYS' || msg.action === 'SUPERTONIC_STATUS' || msg.action === 'BROWSER_TTS_VOICES') return; // samo sprawdzenie stanu to nie praca
+    if (msg.action === 'PING' || msg.action === 'GET_STATUS' || msg.action === 'TTS_CACHE_KEYS' || msg.action === 'TTS_STATS' || msg.action === 'SUPERTONIC_STATUS' || msg.action === 'BROWSER_TTS_VOICES') return; // samo sprawdzenie stanu to nie praca
     lektorLastActivity = Date.now();
     keepAliveOn();
 });
@@ -936,7 +951,47 @@ let queueActive = false;
 let queueDone = null; // zamyka bieżący element (usuwa listenery)
 const MAX_QUEUE = 4; // ponad to pomijamy najstarsze, żeby lektor nie gonił
 const MAX_CACHE = 5000; // [AGENT-EXP] 2026-10-17: było 3000 (wcześniej 120, 50); użytkownik ma 32 GB RAM — cały film w RAM
+// [FIX 2026-11-02] limit pamięci nagrań w MB (wg RAM komputera; Chrome podaje najwyżej 8 GB): 8 GB+ → 600 MB, 4 GB → 300 MB,
+// mniej → 150 MB. Same sztuki (5000) przy 44 kHz to nawet kilka GB. Nagranie wyrzucone z pamięci zostaje na dysku (30 dni).
+const MAX_CACHE_BYTES = (() => { const gb = Number(navigator.deviceMemory) || 4; return (gb >= 8 ? 600 : gb >= 4 ? 300 : 150) * 1048576; })();
+const audioCacheBytes = new Map();   // klucz nagrania → bajty
+let audioCacheTotal = 0;
+// [FIX 2026-11-02] auto-nadrabianie najwyżej 1,8× (było 2,5× — polska mowa robiła się niezrozumiała); wyższa prędkość
+// ustawiona w popupie zostaje (to wybór użytkownika).
+const MAX_CATCHUP_RATE = 1.8;
 const playingUrls = new Set(); // URL-e aktualnie grane/w kolejce — eviction ich nie rusza
+// [FIX 2026-11-02] Liczniki dla paska 📊: pominięte kwestie (spóźnione / nadmiar w kolejce) i opóźnienie lektora
+// (od przyjścia kwestii do początku jej dźwięku) — osobno dla każdej karty. Wcześniej pomijanie było ciche.
+const lekStats = new Map();   // karta → { skips: [czas], lags: [ms], played }
+function statOf(tab) {
+    const k = String(tab || 'x');
+    let st = lekStats.get(k);
+    if (!st) { st = { skips: [], lags: [], played: 0 }; lekStats.set(k, st); if (lekStats.size > 50) lekStats.delete(lekStats.keys().next().value); }
+    return st;
+}
+function statSkip(tab, why) {
+    const st = statOf(tab);
+    st.skips.push(Date.now());
+    if (st.skips.length > 500) st.skips.shift();
+    offLogPush('skip', why);
+}
+function statLag(tab, ms) {
+    const st = statOf(tab);
+    st.played++;
+    st.lags.push(Math.max(0, Math.round(ms)));
+    if (st.lags.length > 20) st.lags.shift();
+}
+function cacheSizeSet(key, bytes) {
+    const prev = audioCacheBytes.get(key) || 0;
+    audioCacheTotal += (Number(bytes) || 0) - prev;
+    audioCacheBytes.set(key, Number(bytes) || 0);
+}
+function cacheSizeDrop(key) {
+    audioCacheTotal -= audioCacheBytes.get(key) || 0;
+    audioCacheBytes.delete(key);
+    if (audioCacheTotal < 0) audioCacheTotal = 0;
+}
+function cacheSizeReset() { audioCacheBytes.clear(); audioCacheTotal = 0; }
 
 function clampSpeed(s) {
     s = Number(s);
@@ -954,6 +1009,7 @@ function runQueue() {
     // Kwestia z osi czasu, której czas już minął (lektor nie nadążał) — pomijamy, żeby nie odstawał.
     while (next && next.expireAt && Date.now() > next.expireAt) {
         try { playingUrls.delete(next.url); } catch (e) {}
+        statSkip(next.tab, 'spóźniona o ' + Math.round((Date.now() - next.expireAt + 2500) / 100) / 10 + ' s');   // [FIX 2026-11-02]
         next = playQueue.shift();
     }
     if (!next) { playingGroup = null; playingNr = 0; }   // [AGENT-EXP] (+ playingNr 2026-10-22)
@@ -993,14 +1049,25 @@ function playNext(item) {
     const tempoMul = tempoMode === 'C' ? 1 : (tempoMode === 'B' ? (1 + (vr - 1) * 0.5) : vr);
     const baseRate = clampSpeed(lectorSpeed * tempoMul);
     player.playbackRate = baseRate;
-    if (item.slotMs > 0 && autoCatchup) {
-        player.onloadedmetadata = () => {
-            player.onloadedmetadata = null;
-            const dur = player.duration;
-            if (!Number.isFinite(dur) || dur <= 0) return;
-            const need = (dur * 1000) / item.slotMs;
-            if (need > baseRate) player.playbackRate = Math.min(2.5, need);
-        };
+    if (item.first && item.at) statLag(item.tab, Date.now() - item.at);   // [FIX 2026-11-02] opóźnienie lektora
+    if (autoCatchup) {
+        // [FIX 2026-11-02] Nadrabianie: (1) od ZALEGŁOŚCI — gdy w kolejce czekają kolejne kwestie, ta gra odrobinę szybciej
+        // (+8% za każdą, najwyżej 5); (2) od TERMINU kwestii — liczy się czas, który naprawdę został do końca jej okna
+        // (synteza i czekanie w kolejce już go zjadły), a nie całe okno jak dawniej. Najwyżej 1,8×.
+        const cap = Math.max(baseRate, MAX_CATCHUP_RATE);
+        const waiting = new Set(playQueue.filter((q) => q.group !== item.group).map((q) => q.group)).size;
+        const boost = waiting > 0 ? Math.min(cap, baseRate * (1 + 0.08 * Math.min(5, waiting))) : baseRate;
+        player.playbackRate = boost;
+        if (item.slotMs > 0) {
+            player.onloadedmetadata = () => {
+                player.onloadedmetadata = null;
+                const dur = player.duration;
+                if (!Number.isFinite(dur) || dur <= 0) return;
+                const left = item.deadline ? Math.max(300, item.deadline - Date.now() + 300) : item.slotMs;
+                const need = Math.min(cap, (dur * 1000) / left);
+                if (need > player.playbackRate) player.playbackRate = need;
+            };
+        }
     }
     player.play().catch((err) => {
         // [AGENT-EXP] 2026-10-24: czytelny błąd (wcześniej „[object DOMException]”). AbortError = play() przerwane nowym
@@ -1020,8 +1087,9 @@ function playNext(item) {
 // Wcześniej przy 5+ paczkach wypadały środkowe paczki → lektor urywał dłuższe zdanie w połowie.
 let playingGroup = null;
 let playingNr = 0, flushNr = 0;   // [AGENT-EXP] 2026-10-22: nr kwestii (ord) grającej / właśnie wkładanej przez ordFlush
-function enqueuePlay(url, durationMs, piperSpeed, rate, slotMs, noSkip, group) {
+function enqueuePlay(url, durationMs, piperSpeed, rate, slotMs, noSkip, group, meta) {
     const item = { url, durationMs, rate: Number(rate) || 1, slotMs: Number(slotMs) || 0, noSkip: !!noSkip, group: group || url, nr: flushNr };
+    if (meta) { item.tab = meta.tab; item.at = meta.at; item.first = !!meta.first; if (item.slotMs > 0 && meta.at) item.deadline = meta.at + item.slotMs; }   // [FIX 2026-11-02]
     if (item.slotMs > 0 && !item.noSkip) item.expireAt = Date.now() + item.slotMs + 2500;
     playQueue.push(item);
     for (;;) {
@@ -1031,14 +1099,27 @@ function enqueuePlay(url, durationMs, piperSpeed, rate, slotMs, noSkip, group) {
         // najstarsza kwestia, którą wolno pominąć (nie noSkip, nie bieżąca, nie ta właśnie dodana)
         const g = groups.find((gr) => gr !== item.group && !playQueue.some((q) => q.group === gr && q.noSkip));
         if (g === undefined) break;
+        let droppedTab = null;
         for (let i = playQueue.length - 1; i >= 0; i--) {
             if (playQueue[i].group !== g) continue;
             const dropped = playQueue.splice(i, 1)[0];
+            droppedTab = dropped.tab;
             try { playingUrls.delete(dropped.url); } catch (e) {}
         }
+        statSkip(droppedTab, 'za dużo kwestii w kolejce');   // [FIX 2026-11-02]
     }
     playingUrls.add(url);
     runQueue();
+}
+
+// [FIX 2026-11-02] karta przestała czytać (pauza / przewinięcie / zamknięcie), a gra inna: wyrzucamy tylko jej zaległe kwestie
+function dropTabItems(tab) {
+    const t = String(tab);
+    for (let i = playQueue.length - 1; i >= 0; i--) {
+        if (String(playQueue[i].tab) !== t) continue;
+        const dropped = playQueue.splice(i, 1)[0];
+        try { playingUrls.delete(dropped.url); } catch (e) {}
+    }
 }
 
 // noSkip (Dyktowanie): synteza idzie równolegle w puli, ale kwestie grają w KOLEJNOŚCI PRZYJŚCIA —
@@ -1093,7 +1174,7 @@ function resetVoice(nextId) {
     // budowę modelu w nieskończoność (build nigdy się nie kończy → timeout).
     sessionGen++;
     for (const u of audioCache.values()) URL.revokeObjectURL(u);
-    audioCache.clear();
+    audioCache.clear(); cacheSizeReset();   // [FIX 2026-11-02] pamięć w MB
     playingUrls.clear();
     voiceId = nextId;
     session = null;
@@ -1524,7 +1605,7 @@ function aheadPump() {
 function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany — ponowne wejście po sprawdzeniu dysku
     if (!msg || msg.target !== 'offscreen') return;
     // [FIX 2026-11-02] pokolenie z chwili PRZYJŚCIA kwestii (sprawdzenie dysku jest asynchroniczne — pauza w tym czasie też się liczy)
-    if (msg.action === 'TTS_PLAY' && msg.__live === undefined) msg.__live = liveGen;
+    if (msg.action === 'TTS_PLAY' && msg.__live === undefined) { msg.__live = liveGen; msg.__at = Date.now(); }
 
     // PING/GET_STATUS obsługuje wczesny listener na górze pliku (odpowiada zawsze).
 
@@ -1614,7 +1695,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
 
     if (msg.action === 'CLEAR_CACHE') {
         for (const u of audioCache.values()) URL.revokeObjectURL(u);
-        audioCache.clear();
+        audioCache.clear(); cacheSizeReset();   // [FIX 2026-11-02] pamięć w MB
         sendResponse({ status: 'cache_cleared' });
         return true;
     }
@@ -1841,7 +1922,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             const slotMs = Number(msg.slotMs) || 0;
             if (slotMs > 0 && autoCatchup) {   // szacunek długości (14 znaków/s) zamiast duration z <audio>
                 const need = (btext.length / 14 * 1000) / slotMs;
-                if (need > rate) rate = Math.min(2.5, need);
+                if (need > rate) rate = Math.min(Math.max(rate, MAX_CATCHUP_RATE), need);   // [FIX 2026-11-02] było 2,5×
             }
             browserTtsGet().speak(btext, {
                 clearQueue: false, rate, volume: lectorVolume, maxQueue: MAX_QUEUE, noSkip: !!msg.noSkip,
@@ -1858,7 +1939,15 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         const putNow = nr ? (...a) => ordPart(nr, a) : enqueuePlay;
         // [FIX 2026-11-02] synteza skończona po pauzie / przewinięciu — nie gramy (patrz liveGen)
         const myLive = msg.__live !== undefined ? msg.__live : liveGen;
-        const put = (...a) => { if (myLive === liveGen) putNow(...a); else offLogPush('play-stale', String(msg.id || '').slice(0, 40)); };
+        // [FIX 2026-11-02] meta: karta (liczniki, czyszczenie z innej karty), chwila przyjścia (opóźnienie, termin kwestii)
+        const meta0 = { tab: aheadTab(msg.id), at: msg.__at || Date.now() };
+        let firstPut = true;
+        const put = (url, durationMs, piperSpeed, rate, slotMs, noSkip, group) => {
+            if (myLive !== liveGen) { offLogPush('play-stale', String(msg.id || '').slice(0, 40)); return; }
+            const meta = Object.assign({ first: firstPut }, meta0);
+            firstPut = false;
+            putNow(url, durationMs, piperSpeed, rate, slotMs, noSkip, group, meta);
+        };
         const end = () => { if (nr) ordEnd(nr); };
         const cached = audioCache.get(msg.id);
         if (cached) {
@@ -2018,7 +2107,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
 
     if (msg.action === 'TTS_PAUSE') {
         // [FIX 2026-11-02] pauza z karty, która teraz NIE czyta (np. film w tle się skończył) — nie ucinamy lektora
-        if (msg.tab != null && lastPlayTab && String(msg.tab) !== lastPlayTab) { sendResponse({ status: 'other_tab' }); return true; }
+        if (msg.tab != null && lastPlayTab && String(msg.tab) !== lastPlayTab) { dropTabItems(msg.tab); sendResponse({ status: 'other_tab' }); return true; }
         // [AGENT-EXP] 2026-10-22: pauza filmu przy „Czytaj zawsze do końca” — lektor dokańcza bieżące zdanie
         if (readToEnd && msg.reason === 'pause' && softStop()) { sendResponse({ status: 'finishing' }); return true; }
         liveGen++;   // [FIX 2026-11-02] kwestie liczone teraz (każdy silnik) nie wejdą już do kolejki
@@ -2040,7 +2129,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
 
     if (msg.action === 'TTS_CLEAR_BUFFER') {
         // [FIX 2026-11-02] czyszczenie z karty, która teraz NIE czyta (np. przewinięcie / koniec filmu w tle) — pomijamy
-        if (msg.tab != null && lastPlayTab && String(msg.tab) !== lastPlayTab) { sendResponse({ status: 'other_tab' }); return true; }
+        if (msg.tab != null && lastPlayTab && String(msg.tab) !== lastPlayTab) { dropTabItems(msg.tab); sendResponse({ status: 'other_tab' }); return true; }
         // [AGENT-EXP] 2026-10-22: pauza filmu przy „Czytaj zawsze do końca” — lektor dokańcza bieżące zdanie
         if (readToEnd && msg.reason === 'pause' && softStop()) { sendResponse({ status: 'finishing' }); return true; }
         liveGen++;   // [FIX 2026-11-02] kwestie liczone teraz (każdy silnik) nie wejdą już do kolejki
@@ -2571,6 +2660,8 @@ async function predictStream(session, msg, put = enqueuePlay) {
         if (!blob) continue;
         const url = URL.createObjectURL(blob);
         audioCache.set(msg.id + '#' + i, url);
+        cacheSizeSet(msg.id + '#' + i, blob.size);   // [FIX 2026-11-02] pamięć w MB
+        ttsCacheEvict();
         put(url, 0, msg.piperSpeed, msg.rate, 0, msg.noSkip, grp); // [AGENT-EXP] paczki = jedna kwestia (group)
         offLogPush('play', 'paczka ' + (i + 1) + '/' + chunks.length + ' (stream)');
     }
