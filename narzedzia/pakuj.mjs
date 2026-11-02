@@ -2,7 +2,8 @@
 // Uruchom w folderze repozytorium:  node narzedzia/pakuj.mjs      (Windows: narzedzia\pakuj.bat)
 // Wynik: dist/Multilektor-<wersja z manifest.json>.zip  — w środku manifest.json w katalogu głównym (jak wymaga sklep).
 // Pomija: .git, narzedzia/, tests/, sklep/ (teksty do panelu sklepu i polityka prywatności — ta jest na GitHub Pages),
-// src/bench/ (benchmarki), dist/, README.md, pliki *.bak* i ukryte (.gitignore, .nojekyll…). Bez zewnętrznych bibliotek.
+// src/bench/ (benchmarki), dist/, README.md, pliki *.bak* i ukryte (.gitignore, .nojekyll…); z manifest.json usuwa update_url.
+// Bez zewnętrznych bibliotek.
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -36,7 +37,12 @@ let offset = 0, rawTotal = 0;
 const d = new Date(), dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1),
     dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
 for (const rel of files) {
-    const data = fs.readFileSync(path.join(root, rel));
+    let data = fs.readFileSync(path.join(root, rel));
+    if (rel === 'manifest.json') {   // paczka do Sklepu: bez update_url (adres aktualizacji nadaje Sklep)
+        const m = JSON.parse(data.toString('utf8'));
+        delete m.update_url;
+        data = Buffer.from(JSON.stringify(m, null, 4) + '\n', 'utf8');
+    }
     const name = Buffer.from(rel.split(path.sep).join('/'), 'utf8');
     const crc = crc32(data);
     let body = zlib.deflateRawSync(data, { level: 9 }), method = 8;
