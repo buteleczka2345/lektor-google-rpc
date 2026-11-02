@@ -188,12 +188,19 @@ if (!('__lektorBufPauza' in window)) {
     }
     var optPolishVideo = false, optPolishVideoId = '';   // wynik z bridge'a: film po polsku
     var lektorPausedVideo = false, lektorSelfPlay = false;
+    function optAsleepNow() { try { return !!(window.__LivedubOpts && window.__LivedubOpts.asleep()); } catch (e) { return false; } }
     function optApplyAsleep() {            // białe/czarne listy domen: na "uśpionej" domenie lektor milczy
-        try { if (window.__LivedubOpts && window.__LivedubOpts.asleep() && enabled) { enabled = false; stopSpeechSilently(); } } catch (e) {}
+        try { if (optAsleepNow() && enabled) { enabled = false; stopSpeechSilently(); } } catch (e) {}
     }
     try { if (window.__LivedubOpts) window.__LivedubOpts.onChange(function () {
         try { TARGET_SELECTORS = TARGET_BASE.concat(window.__LivedubOpts.customSelectors()); } catch (e) {}   // Kreator napisów
         optApplyAsleep();
+    }); } catch (e) {}
+    // [FIX 2026-11-02] 📋 lista domen zmieniona na otwartej karcie: uśpij lektora (bez obserwatora, pobierania i tłumaczenia
+    // napisów — strona poza listą nie zużywa procesora) albo obudź go ze stanem z popupu (dawniej zostawał wyłączony do odświeżenia).
+    try { if (window.__LivedubOpts && window.__LivedubOpts.onSleep) window.__LivedubOpts.onSleep(function (a) {
+        if (a) { applyEnabled(false); try { autoCancel(); } catch (e) {} return; }
+        chrome.storage.local.get('enabled', function (r) { applyEnabled(!r || r.enabled === undefined ? true : !!r.enabled); ttMaybeReload(); });
     }); } catch (e) {}
     // Pauza filmu razem z lektorem: pauza na czas kwestii, wznowienie po TTS_QUEUE_IDLE.
     function optPauseForLektor() {
@@ -301,9 +308,15 @@ if (!('__lektorBufPauza' in window)) {
             else if (!enabled && !IS_EMBED) duckRestoreWhenVideo();   // [AGENT-EXP] 2026-10-20
         });
     }
+    // Włącz / wyłącz (popup) — też po zmianie listy domen (onSleep wyżej); uśpiona domena zawsze = wyłączony.
+    function applyEnabled(v) {
+        enabled = !!v; optApplyAsleep(); initZeroLagObserver();
+        if (enabled) { lastSubtitle = ''; lastMainSubtitle = ''; lastHoverSubtitle = ''; if (document.visibilityState === 'visible' && !IS_EMBED) applyDuck(); }
+        else { stopSpeechSilently(); if (opt('extTrStopWithLektor', false)) { try { autoCancel(); } catch (e) {} } }   // [AGENT-EXP] opcja: zatrzymaj też tłumaczenie razem z lektorem
+    }
     chrome.storage.onChanged.addListener(function (changes, area) {
         if (area !== 'local') return;
-        if (changes.enabled !== undefined) { enabled = !!changes.enabled.newValue; optApplyAsleep(); initZeroLagObserver(); if (enabled) { lastSubtitle = ''; lastMainSubtitle = ''; lastHoverSubtitle = ''; if (document.visibilityState === 'visible' && !IS_EMBED) applyDuck(); } else { stopSpeechSilently(); if (opt('extTrStopWithLektor', false)) { try { autoCancel(); } catch (e) {} } } } // [AGENT-EXP] opcja: zatrzymaj też tłumaczenie razem z lektorem
+        if (changes.enabled !== undefined) applyEnabled(changes.enabled.newValue);
         if (changes.duckLevel !== undefined) { duckLevel = clampPct(changes.duckLevel.newValue); if (enabled && document.visibilityState === 'visible') { if (!IS_EMBED) applyDuck(); else if (__embDuckSaved !== null) { try { var vD = getVideo(); if (vD) vD.volume = Math.min(__embDuckSaved, duckLevel / 100); } catch (eD) {} } } }
         if (changes.engine !== undefined) engine = changes.engine.newValue;
         if (changes.ytSource !== undefined || changes.ytAuto !== undefined) {
@@ -1388,6 +1401,7 @@ if (!('__lektorBufPauza' in window)) {
     // Bramka: strona główna szanuje USE_TIMEDTEXT; EMBED ładuje oś czasu ZAWSZE (plan A podglądu).
     function ttMaybeReload() {
         if (!IS_EMBED && document.visibilityState !== 'visible') return; // karta w tle: nic nie robimy
+        if (optAsleepNow()) return;   // [FIX 2026-11-02] 📋 domena poza listą: bez pobierania i tłumaczenia napisów
         try { var _pv = ttGetVideoId(); if (_pv) optCheckPolish(_pv); } catch (e) {} // OPTIONS-PAGE
         if (!IS_EMBED) USE_TIMEDTEXT = calcTimedtext(); // nowy film = koniec trybu „na żądanie”
         if (!USE_TIMEDTEXT && !IS_EMBED) {

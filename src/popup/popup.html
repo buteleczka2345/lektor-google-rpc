@@ -60,6 +60,16 @@
             </label>
         </div>
 
+        <!-- [FIX 2026-11-02] 📋 lektor tylko na domenach z białej listy (domyślnie WŁ.) + stan aktywnej karty -->
+        <div class="card" data-mod="domeny">
+            <label class="check" title="Lektor uruchamia się tylko na stronach z białej listy (Ustawienia → 📋 Białe i czarne listy domen). Na innych stronach nie działa i nie zużywa procesora. Wyłączone = lektor wszędzie, gdzie się uruchomi."><input type="checkbox" id="domainListsCheck" checked> 📋 Tylko domeny z listy</label>
+            <div class="footnote" id="domainStateLine"></div>
+            <div class="btn-row" style="margin-top:6px;">
+                <button id="domainAddBtn" class="btn small" type="button" style="display:none;">➕ Dodaj tę stronę</button>
+                <button id="domainEditBtn" class="btn small" type="button">✏️ Edytuj listy</button>
+            </div>
+        </div>
+
         <!-- [AGENT-EXP] 2026-10-17: wybór silnika mowy (ten sam klucz ttsEngine co w Ustawieniach) + kropka serwera -->
         <div class="card" data-mod="silnik">
             <div class="card-head">
@@ -394,6 +404,7 @@
     <div class="footnote app-foot">Ustawienia zapisują się automatycznie.</div>
 
     <!-- [AGENT-EXP] 2026-10-26: 🧩 układ modułów — zwykłe skrypty, działają przed modułem popup.js -->
+    <script src="../../assets/domain_lists.js"></script><!-- [FIX 2026-11-02] 📋 listy domen -->
     <script src="./layout_shared.js"></script>
     <script src="./popup_layout.js"></script>
 

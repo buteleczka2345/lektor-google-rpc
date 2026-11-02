@@ -1,7 +1,7 @@
 // options_hooks.js — OPTIONS-PAGE: wspólne ustawienia ze strony opcji dla skryptów treści.
 // Wstrzykiwany jako pierwszy w grupie (ten sam izolowany świat → window.__LivedubOpts widzą
 // youtube_content.js, dom_content.js, content.js, sub_panel.js).
-// Zawiera: opcje (chrome.storage.local), listy domen (białą/czarną), selektory Kreatora napisów
+// Zawiera: opcje (chrome.storage.local), listy domen (białą/czarną — kod w domain_lists.js), selektory Kreatora napisów
 // oraz obsługę poleceń z strony opcji (test selektora, szukanie tekstu, wskazanie myszką).
 (function () {
     'use strict';
@@ -34,6 +34,7 @@
         aiModel: 'gpt-oss-20b-free',
         uiScale: 100,                 // skala panelu w %
         captionOverlay: false,        // nakładka z czytanym tekstem
+        domainListsOn: true,          // [FIX 2026-11-02] 📋 lektor tylko na domenach z białej listy (domyślnie WŁ.)
         domainWhitelist: '',
         domainBlacklist: '',
         customSources: {},            // { host: [selektory] }
@@ -43,8 +44,9 @@
     var o = {};
     KEYS.forEach(function (k) { o[k] = DEF[k]; });
     var listeners = [];
+    var sleepCbs = [], lastAsleep = false;   // [FIX 2026-11-02] onSleep — patrz checkSleep()
 
-    function fire() { listeners.forEach(function (f) { try { f(o); } catch (e) {} }); }
+    function fire() { listeners.forEach(function (f) { try { f(o); } catch (e) {} }); checkSleep(); }
 
     try {
         chrome.storage.local.get(KEYS, function (r) {
@@ -63,25 +65,31 @@
     function host() {
         try { return location.hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { return ''; }
     }
-    // Ten sam format co w Piper.js (parseDomainList): jedna domena na linię, # i // = komentarz.
-    function parseDomainList(text) {
-        var out = [];
-        String(text || '').split(/\r?\n/).forEach(function (line) {
-            var l = line.trim();
-            if (!l || l.indexOf('#') === 0 || l.indexOf('//') === 0) return;
-            l = l.replace(/^\*\./, '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').trim();
-            if (l && out.indexOf(l) === -1) out.push(l);
-        });
-        return out;
+    // [FIX 2026-11-02] Listy domen: wspólny kod w assets/domain_lists.js (wczytywany tuż przed tym plikiem).
+    // Liczy się strona z paska adresu — odtwarzacz w ramce z innej domeny działa razem ze stroną (dawniej ramka
+    // player.vimeo.com na cda.pl z białej listy spała), czarna lista obejmuje też domenę ramki; port i adres są obcinane.
+    function domains() { return window.__LektorDomains || null; }
+    function topHost() {
+        try { if (window === window.top) return host(); } catch (e) {}
+        try {
+            var ao = location.ancestorOrigins;
+            if (ao && ao.length) return new URL(ao[ao.length - 1]).hostname.replace(/^www\./, '').toLowerCase();
+        } catch (e) {}
+        try { return window.top.location.hostname.replace(/^www\./, '').toLowerCase(); } catch (e) {}
+        return '';
     }
-    function hostMatches(h, list) {
-        return list.some(function (d) { return h === d || h.slice(-(d.length + 1)) === '.' + d; });
+    function domainState() {
+        var D = domains();
+        return D ? D.state(topHost(), host(), o) : { asleep: false, why: '' };
     }
-    function asleep() {
-        var h = host();
-        if (hostMatches(h, parseDomainList(o.domainBlacklist))) return true;
-        var wl = parseDomainList(o.domainWhitelist);
-        return !!(wl.length && !hostMatches(h, wl));
+    function asleep() { return domainState().asleep; }
+    // Zmiana stanu (lista / przełącznik zmienione na otwartej karcie) → skrypty lektora usypiają się albo wracają
+    // do stanu z popupu. Start: zakładamy „nie śpi” — powiadomienie przychodzi tylko przy zmianie.
+    function checkSleep() {
+        var a = asleep();
+        if (a === lastAsleep) return;
+        lastAsleep = a;
+        sleepCbs.forEach(function (f) { try { f(a); } catch (e) {} });
     }
     function customSelectors() {
         var h = host();
@@ -94,7 +102,10 @@
         get: function (k) { return o[k]; },
         all: function () { return o; },
         host: host,
+        topHost: topHost,
         asleep: asleep,
+        domainState: domainState,
+        onSleep: function (f) { sleepCbs.push(f); },   // f(true) = uśpij lektora, f(false) = obudź (stan z popupu)
         customSelectors: customSelectors,
         onChange: function (f) { listeners.push(f); try { f(o); } catch (e) {} }
     };

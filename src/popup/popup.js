@@ -2035,6 +2035,7 @@ function lowcaSend(action, busyMsg) {
         chrome.runtime.sendMessage({ action }, (resp) => {
             void chrome.runtime.lastError;
             if (resp && resp.state) lowcaRender(resp.state);
+            else if (resp && resp.listed && status) status.textContent = '📋 ' + resp.listed + ' — dopisana do białej listy domen. 🔍 Szukam napisów…';   // [FIX 2026-11-02]
             else if (resp && resp.ok === false && status) {
                 status.textContent = '⛔ ' + (resp.error || 'nie udało się uruchomić (strona systemowa?)');
             }
@@ -2419,6 +2420,37 @@ try {
     });
     ask();
     setInterval(ask, 2000);
+})();
+
+// [FIX 2026-11-02] 📋 „Tylko domeny z listy” (domainListsOn, domyślnie WŁ.) — przełącznik, stan aktywnej karty
+// i „➕ Dodaj tę stronę”. Zasady list: assets/domain_lists.js (ten sam kod co w skryptach stron i w tle).
+(function () {
+    const DL = window.__LektorDomains;
+    const chk = document.getElementById('domainListsCheck'), line = document.getElementById('domainStateLine');
+    const addBtn = document.getElementById('domainAddBtn'), editBtn = document.getElementById('domainEditBtn');
+    if (!DL || !chk || !line || !addBtn) return;
+    let host = '';
+    function render(o) {
+        o = o || {};
+        chk.checked = o.domainListsOn !== false;
+        addBtn.style.display = 'none';
+        const st = DL.state(host, '', o);
+        if (st.why === 'off') line.textContent = '🌍 Wyłączone — lektor działa na każdej stronie, na której się uruchomi (listy czekają nieużywane).';
+        else if (st.why === 'empty') line.textContent = '🌍 Biała lista jest pusta — lektor działa wszędzie.';
+        else if (!host) line.textContent = 'Lektor działa tylko na stronach z białej listy.';
+        else if (st.why === 'black') line.textContent = '⛔ ' + host + ' — na czarnej liście: lektor tu milczy.';
+        else if (st.why === 'white') line.textContent = '✅ ' + host + ' — na białej liście: lektor działa.';
+        else { line.textContent = '💤 ' + host + ' — nie ma na białej liście: lektor tu śpi i nie zużywa procesora.'; addBtn.style.display = ''; }
+    }
+    const refresh = () => chrome.storage.local.get(DL.LIST_KEYS, render);
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => { host = DL.hostOf(tabs && tabs[0] && tabs[0].url); refresh(); });
+    chk.addEventListener('change', () => chrome.storage.local.set({ domainListsOn: chk.checked }));
+    addBtn.addEventListener('click', () => chrome.storage.local.get('domainWhitelist', (r) => {
+        const text = DL.addHost(r && r.domainWhitelist, host);
+        if (text) chrome.storage.local.set({ domainWhitelist: text });   // otwarta karta budzi lektora sama (options_hooks.js)
+    }));
+    if (editBtn) editBtn.addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('src/options/options.html#domeny') }));
+    chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && DL.LIST_KEYS.some((k) => ch[k])) refresh(); });
 })();
 
 // [AGENT-EXP] 2026-10-24: wariant Matcha w przeglądarce (klucz matchaWebTryb: 'kombi' | 'cpu_fp32'), widoczny przy silniku Matcha.

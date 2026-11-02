@@ -471,8 +471,13 @@
             if (token === runToken) busy = false;
         }
     }
+    // [FIX 2026-11-02] 📋 domena poza listą lektora (biała / czarna lista) — nic nie pobieramy ani nie tłumaczymy
+    function sleeping() { try { return !!(window.__LivedubOpts && window.__LivedubOpts.asleep()); } catch (e) { return false; } }
+    try { if (window.__LivedubOpts && window.__LivedubOpts.onSleep) window.__LivedubOpts.onSleep(function (a) {
+        if (a) { runToken++; busy = false; curKey = ''; apply(null); } else tick();
+    }); } catch (e) {}
     function tick() {
-        if (!lektorOn) return; // lektor wyłączony: nic nie pobieramy
+        if (!lektorOn || sleeping()) return; // lektor wyłączony / uśpiony listą domen: nic nie pobieramy
         if (document.visibilityState !== 'visible') return; // karta w tle: nic nie robimy
         if (!autoOn) {
             // tryb „na żądanie”: nowy odcinek = koniec pobierania/tłumaczenia poprzedniego
@@ -496,6 +501,7 @@
             if (!msg) return;
             if (msg.action === 'LOAD_FULL_SUBS') {
                 if (!lektorOn) { sendResponse({ ok: false, error: 'Lektor jest wyłączony — włącz go, żeby pobrać napisy.' }); return true; }
+                if (sleeping()) { sendResponse({ ok: false, error: 'Tej strony nie ma na liście domen lektora — dopisz ją w popupie (📋 ➕ Dodaj tę stronę) albo wyłącz „Tylko domeny z listy”.' }); return true; }
                 if (!document.querySelector('video')) { sendResponse({ ok: false, error: 'Nie widzę filmu na tej stronie — włącz odtwarzanie.' }); return true; }
                 curKey = videoKey();
                 if (SITE === 'iq' || SITE === 'wetv') hookData[SITE] = null;

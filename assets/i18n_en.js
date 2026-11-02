@@ -1475,5 +1475,25 @@ self.ML_I18N_EN = {
     "🗣 Słownik wymowy": "🗣 Pronunciation dictionary",
     "Jedna reguła w linii: tekst => jak czytać, np. Netflix => Netfliks, AI => aj aj, Mr. => mister. Całe słowa, wielkość liter bez znaczenia; # na początku linii = komentarz.": "One rule per line: text => how to read it, e.g. Netflix => Netfliks, AI => aj aj, Mr. => mister. Whole words, case does not matter; # at the start of a line = comment.",
     // [FIX 2026-11-02]
-    "Ściszaj film tylko, gdy lektor mówi (płynnie, jak w telewizji)": "Lower the video only while the narrator speaks (smoothly, like on TV)"
+    "Ściszaj film tylko, gdy lektor mówi (płynnie, jak w telewizji)": "Lower the video only while the narrator speaks (smoothly, like on TV)",
+    // [FIX 2026-11-02]
+    "📋 Tylko domeny z listy": "📋 Only domains from the list",
+    "Lektor uruchamia się tylko na stronach z białej listy (Ustawienia → 📋 Białe i czarne listy domen). Na innych stronach nie działa i nie zużywa procesora. Wyłączone = lektor wszędzie, gdzie się uruchomi.": "The narrator starts only on sites from the allow list (Settings → 📋 Domain allow and block lists). On other sites it does not run and uses no CPU. Off = the narrator works everywhere it starts.",
+    "➕ Dodaj tę stronę": "➕ Add this site",
+    "✏️ Edytuj listy": "✏️ Edit lists",
+    "🌍 Wyłączone — lektor działa na każdej stronie, na której się uruchomi (listy czekają nieużywane).": "🌍 Off — the narrator works on every site where it starts (the lists are kept, unused).",
+    "🌍 Biała lista jest pusta — lektor działa wszędzie.": "🌍 The allow list is empty — the narrator works everywhere.",
+    "Lektor działa tylko na stronach z białej listy.": "The narrator works only on sites from the allow list.",
+    " — na czarnej liście: lektor tu milczy.": " — on the block list: the narrator stays silent here.",
+    " — na białej liście: lektor działa.": " — on the allow list: the narrator works.",
+    " — nie ma na białej liście: lektor tu śpi i nie zużywa procesora.": " — not on the allow list: the narrator sleeps here and uses no CPU.",
+    " — dopisana do białej listy domen. 🔍 Szukam napisów…": " — added to the domain allow list. 🔍 Searching for subtitles…",
+    "Biała lista: lektor uruchamia się TYLKO na tych domenach (i ich subdomenach, np. youtube.com → m.youtube.com) — na pozostałych stronach nie działa i nie zużywa procesora. Czarna lista: tu lektor zawsze milczy. Jedna domena na linię; linie z # lub // to komentarze.": "Allow list: the narrator starts ONLY on these domains (and their subdomains, e.g. youtube.com → m.youtube.com) — on other sites it does not run and uses no CPU. Block list: the narrator is always silent here. One domain per line; lines starting with # or // are comments.",
+    "Włączone (domyślnie): działają obie listy. Wyłączone: lektor działa na każdej stronie, na której się uruchomi — listy zostają zapisane na później. Ten sam przełącznik jest w popupie.": "On (default): both lists apply. Off: the narrator works on every site where it starts — the lists stay saved for later. The same switch is in the popup.",
+    "📥 Wpisz domeny lektora": "📥 Add the narrator's domains",
+    "Serwisy z lektorem wbudowanym, strony zapamiętane przez Łowcę (z odtwarzaczami), Kreator napisów, strony z napisami z pliku / baz, OCR. Niczego nie usuwa.": "Services with the built-in narrator, sites remembered by the Hunter (with their players), Subtitle Creator, sites with subtitles from a file / databases, OCR. Removes nothing.",
+    "✔ Wszystkie domeny lektora już są na liście.": "✔ All of the narrator's domains are already on the list.",
+    "➕ Dopisano: ": "➕ Added: ",
+    "Zmiana działa od razu na otwartych kartach. Domena z czarnej listy zawsze wygrywa z białą. Liczy się strona z paska adresu — odtwarzacz w ramce z innej domeny działa razem z nią. Nową stronę dopiszesz też w popupie („📋 ➕ Dodaj tę stronę”); „🔍 Szukaj napisów” i „🌐 bazy napisów” dopisują ją same. Pusta biała lista = lektor wszędzie.": "Changes apply immediately to open tabs. A blocked domain always wins over an allowed one. What counts is the site in the address bar — a player in a frame from another domain works together with it. You can also add a new site in the popup (“📋 ➕ Add this site”); “🔍 Search subtitles” and “🌐 subtitle databases” add it by themselves. Empty allow list = the narrator works everywhere.",
+    "Tej strony nie ma na liście domen lektora — dopisz ją w popupie (📋 ➕ Dodaj tę stronę) albo wyłącz „Tylko domeny z listy”.": "This site is not on the narrator's domain list — add it in the popup (📋 ➕ Add this site) or turn off “Only domains from the list”."
 };

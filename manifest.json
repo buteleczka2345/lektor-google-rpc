@@ -125,6 +125,7 @@
             "js": [
                 "assets/i18n_en.js",
                 "assets/i18n.js",
+                "assets/domain_lists.js",
                 "assets/options_hooks.js",
                 "assets/lektor-controls.js",
                 "assets/lektor-settings.js"
@@ -163,6 +164,8 @@
             "js": [
                 "assets/i18n_en.js",
                 "assets/i18n.js",
+                "assets/domain_lists.js",
+                "assets/options_hooks.js",
                 "assets/lektor_bar.js",
                 "assets/sub_panel.js",
                 "assets/lektor_scheduler.js",
@@ -178,6 +181,8 @@
             "js": [
                 "assets/i18n_en.js",
                 "assets/i18n.js",
+                "assets/domain_lists.js",
+                "assets/options_hooks.js",
                 "assets/lektor_bar.js",
                 "assets/lektor_scheduler.js",
                 "assets/dom_content.js",
@@ -196,6 +201,8 @@
             "js": [
                 "assets/i18n_en.js",
                 "assets/i18n.js",
+                "assets/domain_lists.js",
+                "assets/options_hooks.js",
                 "assets/lektor_bar.js",
                 "assets/lektor_scheduler.js",
                 "assets/dom_content.js"
@@ -212,6 +219,8 @@
             "js": [
                 "assets/i18n_en.js",
                 "assets/i18n.js",
+                "assets/domain_lists.js",
+                "assets/options_hooks.js",
                 "assets/lektor_bar.js",
                 "assets/lektor_scheduler.js",
                 "assets/dom_content.js",

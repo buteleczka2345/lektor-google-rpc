@@ -193,9 +193,12 @@ function applyValues(data) {
 }
 
 // ---------------- Listy domen ----------------
+// [FIX 2026-11-02] 📋 przełącznik „Tylko domeny z listy” (domainListsOn, domyślnie WŁ.) i „📥 Wpisz domeny lektora”;
+// zasady list w assets/domain_lists.js (te same w skryptach stron, w tle i w popupie).
 function buildDomainLists() {
-  const s = section('📋 Białe i czarne listy domen', 'Jedna domena na linię (np. youtube.com). Biała lista pusta = lektor działa wszędzie, gdzie jest wstrzykiwany. Linie z # lub // to komentarze.', true);
-  const wrap = el('div', { style: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;' });
+  const s = section('📋 Białe i czarne listy domen', 'Biała lista: lektor uruchamia się TYLKO na tych domenach (i ich subdomenach, np. youtube.com → m.youtube.com) — na pozostałych stronach nie działa i nie zużywa procesora. Czarna lista: tu lektor zawsze milczy. Jedna domena na linię; linie z # lub // to komentarze.', true, 'domeny');
+  s.appendChild(buildRow({ k: 'domainListsOn', t: 'bool', def: true, label: '📋 Tylko domeny z listy', hint: 'Włączone (domyślnie): działają obie listy. Wyłączone: lektor działa na każdej stronie, na której się uruchomi — listy zostają zapisane na później. Ten sam przełącznik jest w popupie.' }));
+  const wrap = el('div', { style: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:10px;' });
   const mk = (key, title, ph) => {
     const box = el('div');
     box.appendChild(el('b', { style: 'font-size:13px;' }, title));
@@ -208,9 +211,32 @@ function buildDomainLists() {
   };
   const wl = mk('domainWhitelist', '✅ Biała lista (tylko te domeny)', 'np.:\nyoutube.com\nnetflix.com');
   const bl = mk('domainBlacklist', '⛔ Czarna lista (lektor wyłączony)', 'np.:\nrumble.com');
+  wl.style.minHeight = '220px';
   s.appendChild(wrap);
-  s.appendChild(el('div', { class: 'note' }, 'Zmiana działa od razu na otwartych kartach. Domena z czarnej listy zawsze wygrywa z białą.'));
+  const row = el('div', { class: 'btn-row', style: 'margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;' });
+  const fillBtn = el('button', { class: 'btn', type: 'button', title: 'Serwisy z lektorem wbudowanym, strony zapamiętane przez Łowcę (z odtwarzaczami), Kreator napisów, strony z napisami z pliku / baz, OCR. Niczego nie usuwa.' }, '📥 Wpisz domeny lektora');
+  const fillInfo = el('span', { class: 'note' }, '');
+  fillBtn.addEventListener('click', () => {
+    const D = window.__LektorDomains;
+    if (!D) return;
+    chrome.storage.local.get(D.SOURCE_KEYS, (all) => {
+      const r = D.fill(wl.value, Object.assign({}, all || {}, { domainWhitelist: wl.value, domainBlacklist: bl.value }));
+      if (!r.added.length) { fillInfo.textContent = '✔ Wszystkie domeny lektora już są na liście.'; return; }
+      wl.value = r.text;
+      save({ domainWhitelist: r.text });
+      fillInfo.textContent = '➕ Dopisano: ' + r.added.join(', ');
+    });
+  });
+  row.appendChild(fillBtn); row.appendChild(fillInfo);
+  s.appendChild(row);
+  s.appendChild(el('div', { class: 'note' }, 'Zmiana działa od razu na otwartych kartach. Domena z czarnej listy zawsze wygrywa z białą. Liczy się strona z paska adresu — odtwarzacz w ramce z innej domeny działa razem z nią. Nową stronę dopiszesz też w popupie („📋 ➕ Dodaj tę stronę”); „🔍 Szukaj napisów” i „🌐 bazy napisów” dopisują ją same. Pusta biała lista = lektor wszędzie.'));
   fields.__domainWl = { ta: wl }; fields.__domainBl = { ta: bl };
+  // zmiana z popupu („➕ Dodaj tę stronę”) albo z tła (Łowca) — pokaż od razu, chyba że ktoś właśnie pisze w polu
+  chrome.storage.onChanged.addListener((ch, area) => {
+    if (area !== 'local') return;
+    if (ch.domainWhitelist && document.activeElement !== wl) wl.value = String(ch.domainWhitelist.newValue || '');
+    if (ch.domainBlacklist && document.activeElement !== bl) bl.value = String(ch.domainBlacklist.newValue || '');
+  });
 }
 
 // ---------------- Kreator napisów ----------------
@@ -1250,7 +1276,8 @@ function build() {
 
 build();
 if (location.hash === '#ait') { const a = $('ait'); if (a) a.scrollIntoView(); }
-if (location.hash === '#uklad') { const a = $('uklad'); if (a) a.scrollIntoView(); }   // [AGENT-EXP] 2026-10-26: z popupu „⚙ Więcej”
+if (location.hash === '#uklad') { const a = $('uklad'); if (a) a.scrollIntoView(); }
+if (location.hash === '#domeny') { const a = $('domeny'); if (a) a.scrollIntoView(); }   // [FIX 2026-11-02] z popupu „✏️ Edytuj listy”   // [AGENT-EXP] 2026-10-26: z popupu „⚙ Więcej”
 chrome.storage.local.get(null, (all) => {
   all = all || {};
   applyValues(all);

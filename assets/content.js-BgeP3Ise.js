@@ -120,19 +120,32 @@ if (!('__lektorBufPauza' in window)) {
         else duckRestoreWhenVideo();   // [AGENT-EXP] 2026-10-20
     });
 
+    // Włącz / wyłącz (popup) — też po zmianie listy domen (onSleep niżej); uśpiona domena zawsze = wyłączony.
+    function applyEnabled(v) {
+        enabled = !!v;
+        try { if (window.__LivedubOpts && window.__LivedubOpts.asleep()) enabled = false; } catch (e) {} // OPTIONS-PAGE
+        if (enabled) {
+            schedule();
+            applyDuck();
+        } else {
+            restoreVideo();
+            if (timer) clearInterval(timer);
+        }
+    }
+    // [FIX 2026-11-02] 📋 lista domen zmieniona na otwartej karcie — dawniej Netflix jej nie słuchał (działała po odświeżeniu),
+    // a raz uśpiony lektor nie wracał po dopisaniu domeny. Uśpienie czyści też kolejkę lektora tej karty.
+    try { if (window.__LivedubOpts && window.__LivedubOpts.onSleep) window.__LivedubOpts.onSleep(function (a) {
+        if (a) {
+            if (enabled) { try { chrome.runtime.sendMessage({ action: 'TTS_CLEAR_BUFFER' }, function () { void chrome.runtime.lastError; }); } catch (e) {} }
+            applyEnabled(false);
+            return;
+        }
+        chrome.storage.local.get('enabled', function (r) { applyEnabled(!r || r.enabled === undefined ? true : !!r.enabled); });
+    }); } catch (e) {}
+
     chrome.storage.onChanged.addListener(function (changes, area) {
         if (area !== 'local') return;
-        if (changes.enabled !== undefined) {
-            enabled = !!changes.enabled.newValue;
-            try { if (window.__LivedubOpts && window.__LivedubOpts.asleep()) enabled = false; } catch (e) {} // OPTIONS-PAGE
-            if (enabled) {
-                schedule();
-                applyDuck();
-            } else {
-                restoreVideo();
-                if (timer) clearInterval(timer);
-            }
-        }
+        if (changes.enabled !== undefined) applyEnabled(changes.enabled.newValue);
         if (changes.engine !== undefined) engine = changes.engine.newValue;
         if (changes.subtitleOffsetMs !== undefined) storageOffsetMs = Number(changes.subtitleOffsetMs.newValue) || 0;
         if (changes.onlineVoiceRemote !== undefined) remoteVoice = !!changes.onlineVoiceRemote.newValue;

@@ -193,6 +193,16 @@ if (!('__lektorBufPauza' in window)) {
         try { IT_GROUP = IT_SELECTORS.concat(window.__LivedubOpts.customSelectors()).join(', '); } catch (e) {}
         try { if (optAsleep() && typeof enabled !== 'undefined' && enabled) { enabled = false; if (typeof stopSpeech === 'function') stopSpeech(); } } catch (e) {}
     }); } catch (e) {}
+    // [FIX 2026-11-02] 📋 lista domen zmieniona na otwartej karcie: uśpij albo obudź ze stanem z popupu (dawniej raz uśpiony
+    // lektor wracał dopiero po odświeżeniu strony). Uśpiony = obserwator napisów nic nie skanuje (sprawdza enabled).
+    try { if (window.__LivedubOpts && window.__LivedubOpts.onSleep) window.__LivedubOpts.onSleep(function (a) {
+        if (a) { if (enabled) { enabled = false; stopSpeech(); } return; }
+        chrome.storage.local.get('enabled', function (r) {
+            enabled = !r || r.enabled === undefined ? true : !!r.enabled;
+            if (optAsleep()) enabled = false;
+            if (enabled && document.visibilityState === 'visible') applyDuck();
+        });
+    }); } catch (e) {}
 
     // ===== Węzły ŹRÓDŁOWE IT (oryginał, np. EN) — MUSIMY JE POMIJAĆ =====
     // Bez tego na iq.com lektor czytał angielski oryginał obok polskiego tłumaczenia.

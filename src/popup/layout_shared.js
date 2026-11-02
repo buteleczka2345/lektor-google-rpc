@@ -20,6 +20,7 @@
     // kolejność = domyślny układ; noFold = karta bez nagłówka do zwijania
     var MODULES = [
         { id: 'lektor', tab: 'lektor', name: 'Lektor — włącz / wyłącz', noFold: true },
+        { id: 'domeny', tab: 'lektor', name: '📋 Tylko domeny z listy' },   // [FIX 2026-11-02]
         { id: 'silnik', tab: 'lektor', name: '🗣 Silnik mowy' },
         { id: 'bufor', tab: 'lektor', name: '💾 Buforowanie' },
         { id: 'predkosc', tab: 'lektor', name: 'Prędkość lektora' },

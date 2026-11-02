@@ -1,6 +1,8 @@
 import { extTrJobPush, extTrJobCancel, gtabTranslateText, extTrTranslateLive, extTrTranslateList, extTrRaceOne } from './ext_net.js'; // [AGENT-EXP] extTrRaceOne
 import { cacheGetVideo, cachePutVideo, cacheStats, cacheClear } from './subs_cache.js';
 import { subsDbSearch, subsDbGet } from './subs_db.js';
+import '../../assets/domain_lists.js'; // [FIX 2026-11-02] 📋 wspólne listy domen → globalThis.__LektorDomains
+const DL = globalThis.__LektorDomains;
 
 const OFFSCREEN_PATH = chrome.runtime.getURL('src/offscreen/offscreen.html');
 
@@ -31,6 +33,32 @@ chrome.storage.local.get(['cenzorWords', 'censorCustomWords', 'censorOneListV1']
     if (String(it.cenzorWords || '').trim()) patch.censorCustomWords = have.join(', ');
     chrome.storage.local.set(patch, () => { chrome.storage.local.remove('cenzorWords'); });
 });
+
+// [FIX 2026-11-02] 📋 Domyślnie lektor działa TYLKO na domenach z białej listy (przełącznik domainListsOn, domyślnie WŁ.;
+// popup → „📋 Tylko domeny z listy”). Jednorazowo wpisujemy na listę wszystkie domeny lektora: serwisy z manifestu,
+// strony Łowcy (z odtwarzaczami), Kreator napisów, strony z napisami z pliku / baz, OCR i układ popupu.
+// Niczego nie usuwamy — do listy wpisanej wcześniej ręcznie brakujące domeny są dopisywane na końcu.
+chrome.storage.local.get('domainWhitelistFillV1', (f) => {
+    if (f && f.domainWhitelistFillV1) return;
+    chrome.storage.local.get(DL.SOURCE_KEYS, (all) => {
+        const r = DL.fill(all && all.domainWhitelist, all || {});
+        const patch = { domainWhitelistFillV1: true };
+        if (r.added.length) patch.domainWhitelist = r.text;
+        chrome.storage.local.set(patch);
+    });
+});
+// Użycie lektora z popupu na nowej stronie („🔍 Szukaj napisów”, „🌐 bazy napisów”) = zgoda na lektora tutaj: przy
+// włączonym „Tylko domeny z listy” domena strony trafia na białą listę (czarnej listy nie ruszamy). Zwraca dopisaną domenę.
+async function domainListsAllow(url) {
+    const h = DL.hostOf(url);
+    if (!h) return '';
+    const o = await chrome.storage.local.get(['domainListsOn', 'domainWhitelist', 'domainBlacklist']);
+    if (DL.state(h, '', o).why !== 'notwhite') return '';
+    const text = DL.addHost(o.domainWhitelist, h);
+    if (!text) return '';
+    await chrome.storage.local.set({ domainWhitelist: text });
+    return h;
+}
 
 // [FIX 2026-11-02] przełącznik „Google RPC” usunięty (adres 404) — sprzątamy jego zapis
 try { chrome.storage.local.remove('extTrGoogleRpc'); } catch (e) {}
@@ -841,31 +869,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // [CC] Lekki przycisk CC Łowcy na każdej stronie z filmem — TYLKO gdy zaznaczony „Pokazuj GUI Łowcy”.
 // Zaznaczony → rejestrujemy assets/lowca_cc_stub.js (nowe strony) i wstrzykujemy go do otwartych kart;
 // odznaczony → wyrejestrowujemy, a przyciski na otwartych stronach same znikają (słuchają storage).
+// [FIX 2026-11-02] 📋 przy „Tylko domeny z listy” przycisk jest tylko na domenach z białej listy (bez czarnej) —
+// na pozostałych stronach nie ma żadnego skryptu lektora (dawniej przycisk sprawdzał każdą stronę co 2 s).
 const CC_STUB_ID = 'lektor-cc-stub';
-async function ccStubSync(on, injectOpen) {
+const CC_STUB_JS = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_cc_stub.js'];   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
+let ccStubChain = Promise.resolve();
+function ccStubSync(on, injectOpen) {
+    ccStubChain = ccStubChain.then(() => ccStubSyncNow(on, injectOpen), () => ccStubSyncNow(on, injectOpen));
+    return ccStubChain;
+}
+async function ccStubSyncNow(on, injectOpen) {
     try {
-        const reg = await chrome.scripting.getRegisteredContentScripts({ ids: [CC_STUB_ID] }).catch(() => []);
-        if (on && !reg.length) {
-            await chrome.scripting.registerContentScripts([{
-                id: CC_STUB_ID, js: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_cc_stub.js'], matches: ['http://*/*', 'https://*/*'],
-                allFrames: false, runAt: 'document_idle'
-            }]);
-        } else if (!on && reg.length) {
-            await chrome.scripting.unregisterContentScripts({ ids: [CC_STUB_ID] });
+        const reg = (await chrome.scripting.getRegisteredContentScripts({ ids: [CC_STUB_ID] }).catch(() => []))[0] || null;
+        if (!on) { if (reg) await chrome.scripting.unregisterContentScripts({ ids: [CC_STUB_ID] }).catch(() => {}); return; }
+        const lists = await chrome.storage.local.get(['domainListsOn', 'domainWhitelist', 'domainBlacklist']);
+        const listsOn = lists.domainListsOn !== false;
+        const white = listsOn ? DL.patterns(DL.parse(lists.domainWhitelist)) : [];
+        const black = listsOn ? DL.patterns(DL.parse(lists.domainBlacklist)) : [];
+        const script = { id: CC_STUB_ID, js: CC_STUB_JS, matches: white.length ? white : ['http://*/*', 'https://*/*'], allFrames: false, runAt: 'document_idle' };
+        if (black.length) script.excludeMatches = black;
+        const key = (r) => JSON.stringify([r.matches || [], r.excludeMatches || []]);
+        if (!reg || key(reg) !== key(script)) {   // przy każdym starcie tła — tylko gdy coś się zmieniło
+            if (reg) await chrome.scripting.unregisterContentScripts({ ids: [CC_STUB_ID] }).catch(() => {});
+            await chrome.scripting.registerContentScripts([script]);
         }
-        if (on && injectOpen) {
+        if (injectOpen) {
             const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
             for (const t of tabs) {
-                chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_cc_stub.js'] }).catch(() => {});   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
+                if (DL.state(DL.hostOf(t.url), '', lists).asleep) continue;
+                chrome.scripting.executeScript({ target: { tabId: t.id }, files: CC_STUB_JS }).catch(() => {});
             }
         }
     } catch (e) { console.warn('[LiveDub SW] przycisk CC:', e); }
 }
 chrome.storage.local.get('lowcaGui').then((r) => ccStubSync(!!(r && r.lowcaGui), false)).catch(() => {});
 chrome.storage.onChanged.addListener((ch, area) => {
-    if (area === 'local' && ch.lowcaGui) ccStubSync(!!ch.lowcaGui.newValue, true);
+    if (area !== 'local') return;
+    if (ch.lowcaGui) ccStubSync(!!ch.lowcaGui.newValue, true);
+    else if (ch.domainWhitelist || ch.domainBlacklist || ch.domainListsOn) {   // [FIX 2026-11-02] 📋 nowe listy = nowe strony przycisku
+        chrome.storage.local.get('lowcaGui').then((r) => { if (r && r.lowcaGui) ccStubSync(true, false); }).catch(() => {});
+    }
 });
-const LOWCA_LEKTOR_FRAMES = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/options_hooks.js', 'assets/lektor_bar.js', 'assets/lektor_scheduler.js', 'assets/dom_content.js'];   // [FIX 2026-11-02] + wspólny harmonogram   // [AGENT-EXP] 2026-10-21: i18n — język paneli   // [AGENT-EXP] lektor_bar: 📊 pasek postępu
+const LOWCA_LEKTOR_FRAMES = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/domain_lists.js', 'assets/options_hooks.js', 'assets/lektor_bar.js', 'assets/lektor_scheduler.js', 'assets/dom_content.js'];   // [FIX 2026-11-02] + wspólny harmonogram   // [AGENT-EXP] 2026-10-21: i18n — język paneli   // [AGENT-EXP] lektor_bar: 📊 pasek postępu
 const LOWCA_LEKTOR_TOP = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lektor-controls.js', 'assets/lektor-settings.js'];   // [AGENT-EXP] 2026-10-21
 // Serwisy z wbudowanym lektorem (manifest) — tam nic nie dokładamy.
 const LOWCA_BUILTIN = /(^|\.)(netflix\.com|youtube\.com|youtube-nocookie\.com|primevideo\.com|amazon\.com|iq\.com|iqiyi\.com|dailymotion\.com|dai\.ly|rumble\.com|viki\.com|wetv\.vip|bilibili\.com|bilibili\.tv)$/;
@@ -914,9 +959,12 @@ function lowcaSyncScripts() {
 async function lowcaSyncScriptsNow() {
     try {
         const sites = await lowcaSitesGet();
-        const tops = Object.keys(sites).filter((h) => !LOWCA_BUILTIN.test(h));
+        // [FIX 2026-11-02] 📋 tylko strony dozwolone przez listy domen — na pozostałych Łowca nie startuje (zero procesora)
+        const lists = await chrome.storage.local.get(['domainListsOn', 'domainWhitelist', 'domainBlacklist']);
+        const black = lists.domainListsOn === false ? [] : DL.parse(lists.domainBlacklist);
+        const tops = Object.keys(sites).filter((h) => !LOWCA_BUILTIN.test(h) && !DL.state(h, '', lists).asleep);
         const all = new Set(tops);
-        tops.forEach((h) => (sites[h].frames || []).forEach((f) => { if (!LOWCA_BUILTIN.test(f)) all.add(f); }));
+        tops.forEach((h) => (sites[h].frames || []).forEach((f) => { if (!LOWCA_BUILTIN.test(f) && !DL.matches(f, black)) all.add(f); }));
         const reg = await chrome.scripting.getRegisteredContentScripts({ ids: LOWCA_SCRIPT_IDS }).catch(() => []);
         if (reg.length) await chrome.scripting.unregisterContentScripts({ ids: reg.map((r) => r.id) }).catch(() => {});
         const allM = lowcaMatches(all), topM = lowcaMatches(tops);
@@ -937,7 +985,7 @@ async function lowcaSyncScriptsNow() {
 }
 lowcaSyncScripts();
 chrome.storage.onChanged.addListener((ch, area) => {
-    if (area === 'local' && ch.lowcaSites) lowcaSyncScripts();
+    if (area === 'local' && (ch.lowcaSites || ch.domainWhitelist || ch.domainBlacklist || ch.domainListsOn)) lowcaSyncScripts();
 });
 // Dokłada lektora (dom_content + panel) do ramek karty, w których go jeszcze nie ma —
 // po pierwszym „Szukaj napisów” na nowej stronie lektor rusza od razu, bez odświeżania.
@@ -1038,6 +1086,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             if (msg.action === 'SUBSDB_PREPARE') {
                 // Strona spoza listy wbudowanych: dołóż lektora do karty i zapamiętaj domenę (jak przy Łowcy).
                 const tab = msg.tabId != null ? await chrome.tabs.get(msg.tabId).catch(() => null) : null;
+                if (tab && tab.url) await domainListsAllow(tab.url).catch(() => '');   // [FIX 2026-11-02] 📋
                 if (tab && tab.url && !LOWCA_BUILTIN.test(lowcaHostOf(tab.url))) {
                     await lowcaRemember(tab.url, '');
                     await lowcaEnsureLektor(tab.id, tab.url);
@@ -1054,6 +1103,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 async function lowcaAutoCues(msg, sender, sendResponse) {
     const tab = sender && sender.tab;
     if (!tab || tab.id == null || !Array.isArray(msg.cues) || msg.cues.length < 5) { sendResponse({ ok: false }); return; }
+    // [FIX 2026-11-02] 📋 strona poza listą domen (np. odtwarzacz z zapamiętanej domeny osadzony na obcej stronie):
+    // nie zapamiętujemy jej i nie dokładamy lektora — sam z siebie nie rozchodzi się po kolejnych stronach.
+    const lists = await chrome.storage.local.get(['domainListsOn', 'domainWhitelist', 'domainBlacklist']);
+    if (DL.state(lowcaHostOf(tab.url), lowcaHostOf(sender.url), lists).asleep) { sendResponse({ ok: false, asleep: true }); return; }
     const saved = await lowcaRemember(tab.url, sender.url);
     await lowcaEnsureLektor(tab.id, tab.url);
     // [AGENT-EXP] 2026-10-25: cały plik HBO (z cenzora) — odbiorca LOWCA_AUTO_APPLY (lowca_auto.js, idempotentny) może jeszcze nie być w karcie
@@ -1225,6 +1278,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                 let tab = (msg.fromPage && _sender && _sender.tab) ? _sender.tab : null;
                 if (!tab) { const tabs = await chrome.tabs.query({ active: true, currentWindow: true }); tab = tabs && tabs[0]; }
                 if (!tab || tab.id == null) throw new Error('Brak aktywnej karty');
+                const listed = await domainListsAllow(tab.url).catch(() => '');   // [FIX 2026-11-02] 📋
                 await lowcaInject(tab.id);
                 if (msg.openPanel) {
                     await chrome.scripting.executeScript({
@@ -1234,7 +1288,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                 }
                 const st = await lowcaStateSet({ on: true, host: '', containers: 0, items: [] });
                 lowcaBroadcast(st);
-                sendResponse({ ok: true });
+                sendResponse({ ok: true, listed });
                 return;
             }
             if (msg.action === 'LOWCA_STOP') {
