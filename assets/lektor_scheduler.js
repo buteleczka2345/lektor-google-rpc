@@ -67,7 +67,9 @@
                 budget--;
                 cfg.preloaded.add(key);
                 if (cfg.onPreload) cfg.onPreload(c, i, st);
-                send(cfg, withExtra({ action: 'TTS_PRELOAD', id: id, text: c.text, startMs: st, endMs: en, nowMs: now }, cfg.extra));
+                // slotMs: okno kwestii od jej początku — offscreen ocenia, czy zdanie się zmieści (✂ skracanie)
+                send(cfg, withExtra({ action: 'TTS_PRELOAD', id: id, text: c.text, startMs: st, endMs: en, nowMs: now,
+                    slotMs: slotMs(list, i, st, off, rate) }, cfg.extra));
             }
             if (cfg.canPlay && !cfg.played.has(key) && now >= st - pre && now < en) {
                 cfg.played.add(key);

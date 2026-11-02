@@ -434,6 +434,18 @@ function applySettings(s) {
     }
 
     if (s.piperSpeed !== undefined) lectorSpeed = clampSpeed(s.piperSpeed);
+    // [FIX 2026-11-02] słownik wymowy: nowe reguły → nagrania w pamięci ze starą wymową wypadają (poza tym, co gra)
+    if (s.pronDict !== undefined) {
+        pronRules = pronParse(s.pronDict);
+        for (const [k, u] of [...audioCache]) {
+            if (playingUrls.has(u)) continue;
+            try { URL.revokeObjectURL(u); } catch (e) {}
+            audioCache.delete(k);
+            cacheSizeDrop(k);
+        }
+        offLogPush('wymowa', pronRules.length + ' reguł');
+    }
+    if (s.shortenLong !== undefined) shortenLong = !!s.shortenLong;   // [FIX 2026-11-02] ✂
     // OPTIONS-PAGE
     if (s.tempoMode !== undefined) tempoMode = ['A', 'B', 'C'].indexOf(s.tempoMode) >= 0 ? s.tempoMode : 'A';
     if (s.autoCatchup !== undefined) autoCatchup = !!s.autoCatchup;
@@ -690,8 +702,8 @@ function ttsPersistKey(msg) {
         // oddawał kwestie starym głosem) i znacznikiem tempa 1× (stare nagrania mogły mieć tempo z syntezy).
         : eng === 'sherpa' ? ((customVoice && customVoice.enabled ? 'cv:' + String(customVoice.id || customVoice.name || 'custom') : (msg.voiceId || voiceId)) + '@1x') : '';
     if (eng === 'browser') return '';   // [AGENT-EXP] 🗣 głos przeglądarki nie ma nagrań (pamięć / dysk)
-    const text = censoredText(msg.text || '');
-    return text && text.length >= 2 ? eng + '|' + voice + '|' + text : '';
+    const text = speechText(msg.text || '');
+    return text && text.length >= 2 ? eng + '|' + voice + '|' + text + (shortenLong ? '|skr' : '') : '';   // [FIX 2026-11-02] |skr: skrócone osobno
 }
 async function ttsDiskGet(key) {
     if (!key) return null;
@@ -726,6 +738,89 @@ setTimeout(async () => {
         rq.onsuccess = () => { const cur = rq.result; if (cur) { cur.delete(); cur.continue(); } };
     } catch (e) {}
 }, 15000);
+
+// [FIX 2026-11-02] 🗣 Słownik wymowy (Ustawienia → „Tekst lektora”): „tekst => jak czytać” (imiona, nazwy, skróty).
+// Całe słowa, bez rozróżniania wielkości liter, # = komentarz. Po cenzorze, przed syntezą — każdy silnik; zmienia też klucz
+// nagrań na dysku, więc nowa wymowa nie miesza się ze starymi nagraniami.
+let pronRules = [];
+function pronParse(src) {
+    const out = [];
+    String(src || '').split(/\r?\n/).forEach((line) => {
+        const l = line.trim();
+        if (!l || l.charAt(0) === '#') return;
+        const m = l.match(/^(.+?)\s*(?:=>|->|→|=)\s*(.*)$/);
+        if (!m || !m[1].trim()) return;
+        const from = m[1].trim(), to = m[2].trim();
+        const esc = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+        const word = /[\p{L}\p{N}]/u;
+        const L = word.test(from.charAt(0)) ? '(?<![\\p{L}\\p{N}])' : '';
+        const R = word.test(from.charAt(from.length - 1)) ? '(?![\\p{L}\\p{N}])' : '';
+        try { out.push({ re: new RegExp(L + esc + R, 'giu'), to }); } catch (e) { /* zła reguła — pomijamy */ }
+    });
+    return out.slice(0, 500);
+}
+function pronApply(t) {
+    let s = String(t || '');
+    if (!pronRules.length) return s;
+    for (const r of pronRules) s = s.replace(r.re, () => r.to);
+    return s.replace(/\s{2,}/g, ' ').trim();
+}
+function speechText(t) { return pronApply(censoredText(t)); }
+
+// [FIX 2026-11-02] ✂ Skracanie za długich kwestii (Ustawienia → „Tekst lektora”, domyślnie wył.): gdy zdanie przy nagrywaniu
+// do przodu wyraźnie nie mieści się w oknie kwestii (szacunek > 1,3× okna), Gemini Nano wbudowany w Chrome (Prompt API,
+// lokalnie, bez klucza) skraca je jak lektor — zamiast przyspieszać mowę. Brak modelu / zły wynik → oryginał.
+let shortenLong = false;
+const shortCache = new Map();   // tekst → skrócony ('' = zostaje oryginał)
+let lmP = null, lmTimer = 0, lmFailUntil = 0;
+const SHORTEN_SYS = 'Jesteś polskim lektorem filmowym. Skracasz kwestie tak, jak robi to lektor: zostaw sens, imiona, liczby i ton, '
+    + 'usuń powtórzenia, wtrącenia i zbędne słowa. Odpowiadasz wyłącznie skróconą kwestią — bez cudzysłowów i komentarzy.';
+function lmSession() {
+    if (!lmP) {
+        lmP = (async () => {
+            if (typeof LanguageModel === 'undefined' || !LanguageModel.create) throw new Error('brak Prompt API (Chrome 138+)');
+            const av = String(await LanguageModel.availability());
+            if (av !== 'available') throw new Error('model Gemini Nano: ' + av + ' (pobierz go w Chrome — chrome://on-device-internals)');
+            return LanguageModel.create({ initialPrompts: [{ role: 'system', content: SHORTEN_SYS }] });
+        })();
+        lmP.catch(() => { lmP = null; });
+    }
+    clearTimeout(lmTimer);
+    lmTimer = setTimeout(async () => { const p = lmP; lmP = null; try { (await p).destroy(); } catch (e) {} }, 60000);   // GPU wraca do spoczynku
+    return lmP;
+}
+async function shortenText(text, maxChars) {
+    if (shortCache.has(text)) return shortCache.get(text) || text;
+    if (Date.now() < lmFailUntil) return text;
+    let out = '';
+    try {
+        const sess = await lmSession();
+        const one = sess.clone ? await sess.clone() : sess;   // każda kwestia osobno (bez narastającej rozmowy)
+        try {
+            const r = await Promise.race([one.prompt('Skróć do najwyżej ' + maxChars + ' znaków:\n' + text),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('limit czasu 8 s')), 8000))]);
+            out = String(r || '').split(/\n/)[0].replace(/^["'„”“«»\s]+|["'„”“«»\s]+$/g, '').trim();
+        } finally { if (one !== sess) { try { one.destroy(); } catch (e) {} } }
+    } catch (e) {
+        lmFailUntil = Date.now() + 5 * 60000;
+        offLogPush('skracanie', 'niedostępne: ' + errMsg(e));
+    }
+    // za krótki wynik = AI zgubiło sens: mniej niż 40% oryginału ALBO 60% docelowej długości (krótkie okno wymaga mocnego skrótu)
+    const ok = !!out && out.length < text.length && out.length >= Math.max(8, Math.round(Math.min(text.length * 0.4, maxChars * 0.6)));
+    shortCache.set(text, ok ? out : '');
+    if (shortCache.size > 3000) shortCache.delete(shortCache.keys().next().value);
+    if (ok) offLogPush('skracanie', text.length + ' → ' + out.length + ' znaków');
+    return ok ? out : text;
+}
+// Ile znaków zmieści się w oknie kwestii (0 = nie trzeba skracać). slotMs przy nagrywaniu do przodu podaje harmonogram stron.
+function shortenTarget(msg, text) {
+    if (!shortenLong || ttsEngine === 'browser') return 0;
+    const slot = Number(msg.slotMs) || (msg.endMs != null && msg.startMs != null ? Number(msg.endMs) - Number(msg.startMs) + 1000 : 0);
+    if (!(slot > 0)) return 0;
+    const speed = Math.max(0.5, lectorSpeed);
+    if (text.length / 14 * 1000 / speed <= slot * 1.3) return 0;
+    return Math.max(20, Math.floor(slot / 1000 * 14 * speed));
+}
 
 function censoredText(t) {
     try {
@@ -1616,9 +1711,25 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             sendResponse({ status: 'skipped', engine: 'browser' });
             return true;
         }
+        // [FIX 2026-11-02] ✂ za długa kwestia: najpierw skrócenie (AI), potem synteza skróconej — bramka czeka na całość
+        if (!msg.__short && shortenLong) {
+            const t0 = censoredText(msg.text);
+            const max = t0 && t0.length >= 2 ? shortenTarget(msg, t0) : 0;
+            if (max) {
+                sendResponse({ status: 'shortening' });
+                aheadJob = shortenText(t0, max).then((t2) => {
+                    aheadJob = null;
+                    ttsMainHandler(Object.assign({}, msg, { text: t2, __short: true }), _sender, () => {});
+                    const inner = aheadJob;
+                    aheadJob = null;
+                    return inner;
+                });
+                return true;
+            }
+        }
         // [VOX] Supertonic: nagrywanie do przodu w zwykłym priorytecie (kwestia czytana teraz ma pierwszeństwo).
         if (ttsEngine === 'supertonic') {
-            const text = censoredText(msg.text);
+            const text = speechText(msg.text);
             if (!text || text.length < 2) {
                 sendResponse({ status: 'muted' });
                 return true;
@@ -1629,7 +1740,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         }
         if (ttsEngine === 'matcha') {
             const { id } = msg;
-            const text = censoredText(msg.text);
+            const text = speechText(msg.text);
             if (!text || text.length < 2) {
                 sendResponse({ status: 'muted' });
                 return true;
@@ -1658,7 +1769,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         // pozostałe mają limit 2000 znaków — dłuższa kwestia będzie liczona częściami przy czytaniu.
         if (REMOTE[ttsEngine]) {
             const eng = ttsEngine, c = REMOTE[eng];
-            const text = censoredText(msg.text);
+            const text = speechText(msg.text);
             if (!text || text.length < 2) {
                 sendResponse({ status: 'muted' });
                 return true;
@@ -1683,7 +1794,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         }
         resetVoice(msg.voiceId);
         const { id } = msg;
-        const text = censoredText(msg.text);
+        const text = speechText(msg.text);
         if (!text || text.length < 2) {
             // Cala kwestia to bylo przeklecstwo - nie syntetyzujemy (cisza).
             sendResponse({ status: 'muted' });
@@ -1718,7 +1829,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki — własna kolejka speechSynthesis (max MAX_QUEUE czekających,
         // spóźnione kwestie z osi czasu pomijane jak w playQueue); tempo jak w playNext (popup × film wg tempoMode).
         if (ttsEngine === 'browser') {
-            const btext = censoredText(msg.text);
+            const btext = speechText(msg.text);
             if (!btext || btext.length < 2) { sendResponse({ status: 'muted' }); return true; }
             const vr = Number(msg.rate) || 1;
             const tempoMul = tempoMode === 'C' ? 1 : (tempoMode === 'B' ? (1 + (vr - 1) * 0.5) : vr);
@@ -1761,7 +1872,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             sendResponse({ status: 'playing' });
             return true;
         }
-        const ctext = censoredText(msg.text);
+        const ctext = speechText(msg.text);
         if (!ctext || ctext.length < 2) {
             // Kwestia po cenzurze pusta - milczymy (nie ma czego grac).
             end();

@@ -1466,5 +1466,12 @@ self.ML_I18N_EN = {
     "Szukanie napisów na żądanie (przycisk w popupie). „Pokazuj GUI Łowcy (przycisk CC)” przełączasz w popupie, w karcie Łowcy.": "On-demand subtitle search (button in the popup). “Show the Hunter GUI (CC button)” is toggled in the popup, in the Hunter card.",
     // [FIX 2026-11-02]
     "Przyspiesza (najwyżej do 1,8×), gdy kwestia nie mieści się w czasie albo w kolejce czekają następne": "Speeds up (to at most 1.8×) when a line does not fit in its time or more lines are waiting",
-    "Auto-nadrabianie (najwyżej 1,8×, gdy kwestia nie mieści się w czasie)": "Auto catch-up (at most 1.8× when a line does not fit in its time)"
+    "Auto-nadrabianie (najwyżej 1,8×, gdy kwestia nie mieści się w czasie)": "Auto catch-up (at most 1.8× when a line does not fit in its time)",
+    // [FIX 2026-11-02]
+    "✂ Tekst lektora": "✂ Narrator text",
+    "Co lektor robi z polskim tekstem tuż przed czytaniem (każdy silnik).": "What the narrator does with the Polish text right before reading it (every engine).",
+    "✂ Skracaj za długie kwestie (AI w Chrome)": "✂ Shorten lines that are too long (AI in Chrome)",
+    "Gdy zdanie wyraźnie nie zmieści się w czasie napisu, Gemini Nano wbudowany w Chrome (lokalnie, bez klucza) skraca je jak lektor — zamiast przyspieszać mowę. Działa przy nagrywaniu do przodu (całe napisy, plik, bazy). Wymaga Chrome z Prompt API i pobranym modelem; bez niego lektor czyta oryginał.": "When a sentence clearly won't fit in the subtitle's time, Gemini Nano built into Chrome (locally, no key) shortens it like a voice-over narrator — instead of speeding up the speech. Works when recording ahead (whole subtitles, file, databases). Needs Chrome with the Prompt API and the downloaded model; without it the narrator reads the original.",
+    "🗣 Słownik wymowy": "🗣 Pronunciation dictionary",
+    "Jedna reguła w linii: tekst => jak czytać, np. Netflix => Netfliks, AI => aj aj, Mr. => mister. Całe słowa, wielkość liter bez znaczenia; # na początku linii = komentarz.": "One rule per line: text => how to read it, e.g. Netflix => Netfliks, AI => aj aj, Mr. => mister. Whole words, case does not matter; # at the start of a line = comment."
 };

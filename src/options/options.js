@@ -12,6 +12,11 @@ const SCHEMA = [
   { sec: '🗣 Silnik mowy — narzędzia', id: 'engineSec', sub: 'Silnik, głos, sprzęt (CPU / GPU) i jakość wybierasz w popupie, w karcie „🗣 Silnik mowy”. Tu: test lektora, restart silnika Supertonic i jego stan.', items: [] },
   // [AGENT-EXP] 2026-10-17: sekcja „🎙 Silnik lektora” usunięta — silnik i głos wybiera się w popupie
   // (🗣 Silnik mowy + Głos); buforowanie w pauzie / w tle też jest w popupie.
+  // [FIX 2026-11-02] ✂ / 🗣 — tekst lektora przed syntezą (src/offscreen/offscreen.js: shortenText, pronApply)
+  { sec: '✂ Tekst lektora', sub: 'Co lektor robi z polskim tekstem tuż przed czytaniem (każdy silnik).', items: [
+    { k: 'shortenLong', t: 'bool', def: false, label: '✂ Skracaj za długie kwestie (AI w Chrome)', hint: 'Gdy zdanie wyraźnie nie zmieści się w czasie napisu, Gemini Nano wbudowany w Chrome (lokalnie, bez klucza) skraca je jak lektor — zamiast przyspieszać mowę. Działa przy nagrywaniu do przodu (całe napisy, plik, bazy). Wymaga Chrome z Prompt API i pobranym modelem; bez niego lektor czyta oryginał.' },
+    { k: 'pronDict', t: 'textarea', def: '', label: '🗣 Słownik wymowy', hint: 'Jedna reguła w linii: tekst => jak czytać, np. Netflix => Netfliks, AI => aj aj, Mr. => mister. Całe słowa, wielkość liter bez znaczenia; # na początku linii = komentarz.' }
+  ]},
   // [FIX 2026-11-02] „Auto-nadrabianie” tylko w popupie (karta prędkości) — było w obu miejscach
   { sec: '⏩ Tempo', sub: 'Jak lektor nadąża za przyspieszonym filmem (np. 1.5×). Auto-nadrabianie (najwyżej 1,8×) włączasz w popupie, przy prędkości lektora.', items: [
     { k: 'tempoMode', t: 'select', def: 'A', label: 'Wariant tempa', hint: 'A — jak film, B — połowa przyspieszenia, C — stałe tempo', options: [

@@ -300,7 +300,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.action === 'GET_TTS_SETTINGS') {
         // [AGENT-EXP] 2026-10-16 — przekazuje wybór Sherpa/Matcha do dokumentu offscreen.
         // [AGENT-EXP] Przekaż wybór silnika i lokalnych głosów także przy starcie dokumentu offscreen.
-        chrome.storage.local.get(['tempoMode', 'autoCatchup', 'readToEnd', 'compressor', 'liveBufTTLDays', 'ttsVolume', 'piperSpeed', 'offlineVoice', 'customVoice', 'builtinVoiceRemoved', 'censorEnabled', 'censorMode', 'censorCustomWords', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice', 'serverUrl', 'serverVoice'], (items) => {
+        chrome.storage.local.get(['tempoMode', 'autoCatchup', 'readToEnd', 'compressor', 'liveBufTTLDays', 'ttsVolume', 'piperSpeed', 'offlineVoice', 'customVoice', 'builtinVoiceRemoved', 'censorEnabled', 'censorMode', 'censorCustomWords', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice', 'serverUrl', 'serverVoice', 'pronDict', 'shortenLong'], (items) => {
             sendResponse({
                 settings: {
                     tempoMode: ['A', 'B', 'C'].indexOf(items.tempoMode) >= 0 ? items.tempoMode : 'A', // OPTIONS-PAGE
@@ -318,6 +318,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                     kokoroVoice: typeof items.kokoroVoice === 'string' && items.kokoroVoice ? items.kokoroVoice : 'pm_mateusz',   // [AGENT-EXP] 2026-10-27 Kokoro
                     serverUrl: typeof items.serverUrl === 'string' && items.serverUrl ? items.serverUrl : 'ws://127.0.0.1:9000',   // [FIX 2026-11-02] Serwer lokalny — własny adres
                     serverVoice: typeof items.serverVoice === 'string' ? items.serverVoice : '',
+                    pronDict: typeof items.pronDict === 'string' ? items.pronDict : '',   // [FIX 2026-11-02] 🗣 słownik wymowy
+                    shortenLong: items.shortenLong === true,   // [FIX 2026-11-02] ✂ skracanie za długich kwestii (AI)
                     matchaVoice: typeof items.matchaVoice === 'string' && items.matchaVoice ? items.matchaVoice : 'web:male_voxcpm_2:elegancki',   // [AGENT-EXP] 2026-10-17 Matcha: głos z VOICES serwer_matcha.py; 2026-10-24: domyślnie w przeglądarce (matcha_web)
                     ...supertonicSettings(items),   // [VOX] Supertonic: głos, jakość, CPU/GPU
                     browserVoice: typeof items.browserVoice === 'string' ? items.browserVoice : '',   // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki
@@ -357,6 +359,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.kokoroVoice) patch.kokoroVoice = changes.kokoroVoice.newValue;   // [AGENT-EXP] 2026-10-27 Kokoro
     if (changes.serverUrl) patch.serverUrl = changes.serverUrl.newValue;   // [FIX 2026-11-02] Serwer lokalny — własny adres
     if (changes.serverVoice) patch.serverVoice = changes.serverVoice.newValue;
+    if (changes.pronDict) patch.pronDict = changes.pronDict.newValue || '';   // [FIX 2026-11-02]
+    if (changes.shortenLong) patch.shortenLong = changes.shortenLong.newValue === true;
     if (changes.matchaVoice) patch.matchaVoice = changes.matchaVoice.newValue;   // [AGENT-EXP] Matcha-TTS-PL
     if (changes.matchaWebTryb) patch.matchaWebTryb = changes.matchaWebTryb.newValue;   // [AGENT-EXP] 2026-10-24: wariant Matcha 🌐
     if (changes.supertonicVoice) patch.supertonicVoice = changes.supertonicVoice.newValue;   // [VOX] Supertonic

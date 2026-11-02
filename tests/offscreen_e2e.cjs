@@ -7,6 +7,7 @@
 //   E) „Czytaj zawsze do końca”: kolejność przyjścia            F) … i pauza filmu dokańcza bieżące zdanie
 //   G) nadrabianie ≤ 1,8× i liczniki pominiętych / opóźnienia (TTS_STATS)
 //   H) „Serwer lokalny — własny adres”: JSON do serwera WebSocket (czytanie pilne / nagrywanie do przodu) i odtworzenie WAV
+//   I) ✂ skracanie za długiej kwestii (atrapa Prompt API) i 🗣 słownik wymowy
 const http = require('http'), fs = require('fs'), os = require('os'), path = require('path'), crypto = require('crypto');
 
 // Minimalny serwer WebSocket (RFC 6455, jedna ramka na wiadomość): zapisuje JSON-y i odsyła 0,3 s ciszy w WAV.
@@ -78,6 +79,11 @@ window.__send = (msg) => new Promise((resolve) => {
   for (const fn of window.__listeners) { try { if (fn(Object.assign({ target: 'offscreen' }, msg), {}, sr) === true) asyncResp = true; } catch (e) { console.error(e); } }
   if (!asyncResp) setTimeout(() => sr(undefined), 0);
 });
+// atrapa Prompt API (Gemini Nano): „skraca” = bierze pierwsze 5 słów kwestii
+window.__lm = { prompts: 0 };
+window.LanguageModel = { availability: async () => 'available', create: async () => ({
+  clone: async function () { return this; }, destroy() {},
+  prompt: async (p) => { window.__lm.prompts++; const t = String(p).split('\\n').slice(1).join(' '); return t.split(' ').slice(0, 5).join(' ') + '.'; } }) };
 const oc = URL.createObjectURL; URL.createObjectURL = function (b) { const u = oc.call(URL, b); if (b && b.__text) window.__urlText[u] = b.__text; return u; };
 const origPlay = HTMLMediaElement.prototype.play;
 HTMLMediaElement.prototype.play = function () { if (this.id === 'tts-player') window.__plays.push({ src: this.src, t: performance.now() }); return origPlay.apply(this, arguments); };
@@ -198,6 +204,17 @@ const check = (name, ok, got) => { console.log((ok ? '  ✓ ' : '  ✗ ') + name
         check('H: odpowiedź serwera (WAV) zagrała', n === 1, n);
         await ctx.close();
         fake.srv.close(); }
+
+    { const { ctx, page } = await fresh({ shortenLong: true, pronDict: 'Netflix => Netfliks' });   // I
+        const long = 'Ta kwestia jest zdecydowanie za długa, żeby lektor zdążył ją przeczytać w czasie napisu, więc trzeba ją skrócić jak prawdziwy lektor robi to w kinie ~30ms';
+        await page.evaluate(([b, t]) => window.__send(Object.assign({ action: 'TTS_PRELOAD', id: '5|i1|x', text: t, startMs: 1000, endMs: 3000, slotMs: 2500, nowMs: 0, lookaheadMin: 3 }, b)), [BASE, long]);
+        await page.evaluate((b) => window.__send(Object.assign({ action: 'TTS_PLAY', id: '5|i2|x', text: 'Oglądam Netflix wieczorem ~30ms' }, b)), BASE);
+        await sleep(800);
+        const calls = await page.evaluate(() => window.__fakeMatcha.calls.map((c) => c.text));
+        const lm = await page.evaluate(() => window.__lm.prompts);
+        check('I: za długa kwestia skrócona przez AI przed syntezą', lm === 1 && calls.includes('Ta kwestia jest zdecydowanie za.'), [lm, calls]);
+        check('I: słownik wymowy (Netflix → Netfliks)', calls.includes('Oglądam Netfliks wieczorem ~30ms'), calls);
+        await ctx.close(); }
 
     await browser.close();
     srv.close();
