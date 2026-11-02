@@ -61,6 +61,7 @@
         },
         {
             "js": [
+                "assets/censor.js",
                 "assets/cenzor_main.js",
                 "assets/phrase_dict.js",
                 "assets/yt_subs_bridge.js"
@@ -73,6 +74,7 @@
         },
         {
             "js": [
+                "assets/censor.js",
                 "assets/cenzor_main.js"
             ],
             "matches": [

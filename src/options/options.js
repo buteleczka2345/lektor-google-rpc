@@ -65,11 +65,11 @@ const SCHEMA = [
   ]},
   // [AGENT-EXP] 2026-10-19 — 🤐 Cenzor przekleństw (assets/cenzor_main.js + cenzor_bridge.js). Wycisza oryginalny
   // dźwięk filmu (video.muted), głos lektora gra dalej. Domyślnie WYŁ. = zachowanie jak przed zmianą.
-  { sec: '🤐 Cenzor przekleństw', sub: 'Wycisza samo przekleństwo w oryginalnym dźwięku filmu. Pracuje tylko na tekście napisów (nie słucha dźwięku). Działa także przy wyłączonym lektorze; głos lektora, gdy jest włączony, gra dalej.', items: [
-    { k: 'cenzorOn', t: 'bool', def: false, label: 'Wyciszaj z pobranych napisów (YouTube, Netflix, HBO Max)', hint: 'Napisy filmu są pobierane z góry (tak jak robi to lektor; CC nie trzeba włączać), więc wiadomo, które słowa padną i kiedy — cisza wchodzi PRZED słowem. Auto-napisy YouTube mają czas każdego słowa — wtedy jest najdokładniej. HBO Max: cenzor sam ściąga całe polskie napisy filmu (gdy ich brak — angielskie), napisów w odtwarzaczu nie trzeba włączać.' },   // [AGENT-EXP] 2026-10-25: HBO Max
+  // [FIX 2026-11-02] JEDEN cenzor: włączanie (mowa lektora / dźwięk filmu z napisów / na bieżąco), tryb i JEDNA lista słów
+  // są w popupie (karta „🤬 Cenzor przekleństw”); tu zostały tylko szczegóły wyciszania oryginalnego dźwięku filmu.
+  { sec: '🤬 Cenzor przekleństw — wyciszanie dźwięku filmu', sub: 'Włączanie, tryb i lista słów (wspólna z lektorem) są w popupie, w karcie „🤬 Cenzor przekleństw”. Tu: skąd brać napisy i jak długo trwa cisza w oryginalnym dźwięku. Pracuje tylko na tekście napisów (nie słucha dźwięku); działa także przy wyłączonym lektorze.', items: [
     { k: 'cenzorNfPl', t: 'bool', def: true, label: 'Netflix: zawsze pobieraj całe polskie napisy', hint: 'Cenzor sam ściąga CAŁY polski plik napisów odcinka (z listy ścieżek filmu), nawet gdy w odtwarzaczu wybrane są inne napisy albo żadne — wszystkie przekleństwa są znane od pierwszej minuty. Gdy polski plik jest pobrany, wystarcza — inne napisy nie są już potrzebne. Lektor też dostaje ten cały plik, więc ma komplet polskich napisów od pierwszej minuty. Działa razem z opcją „Wyciszaj z pobranych napisów”.' },
     { k: 'cenzorYtPl', t: 'bool', def: true, label: 'YouTube: zawsze polskie napisy', hint: 'Jak na Netfliksie: cenzor bierze polskie napisy — ręczne, potem automatyczne, a gdy filmu nie ma po polsku — ścieżkę filmu przetłumaczoną przez YouTube na polski. Wył. = napisy w języku filmu (dokładniejsze przy angielskich filmach: słychać „fuck”, w napisie też jest „fuck”).' },
-    { k: 'cenzorLive', t: 'bool', def: false, label: 'Cenzor LIVE — na bieżąco, bez pobierania napisów', hint: 'Czyta napisy widoczne na ekranie (YouTube, Netflix, Prime, Kreator napisów, ścieżki odtwarzacza) i szacuje, kiedy padnie słowo. Działa na wszystkich stronach lektora; mniej dokładny, bo napis pojawia się razem z mową. Przy włączonej opcji wyżej jest tylko zapasem, gdy napisów z sieci brak.' },
     { k: 'cenzorBufferMs', t: 'range', def: 500, min: 0, max: 3000, step: 50, unit: ' ms', label: 'Wstecz — cisza przed słowem', hint: 'Słychać początek przekleństwa → zwiększ.' },
     { k: 'cenzorHoldMs', t: 'range', def: 100, min: 0, max: 2000, step: 50, unit: ' ms', label: 'Przód — cisza po słowie', hint: 'Słychać końcówkę → zwiększ.' },
     // [AGENT-EXP] 2026-10-20: trzeci suwak z „Netflix Cenzor” — tempo tekstu (Wstecz/Przód liczone w tym tempie).
@@ -78,7 +78,6 @@ const SCHEMA = [
     { k: 'cenzorLenMode', t: 'select', def: 'normal', label: 'Długość słowa', hint: 'Dłuższe przekleństwo trzymane dłużej', options: [
       ['off', 'wyłącz'], ['normal', 'normalnie'], ['strong', 'mocno']] },
     { k: 'cenzorAsrTag', t: 'bool', def: true, label: 'Wyciszaj „[ __ ]” z auto-napisów YouTube', hint: 'YouTube sam zamienia przekleństwa w auto-napisach na „[ __ ]”.' },
-    { k: 'cenzorWords', t: 'textarea', def: '', label: 'Lista słów (puste = wbudowana)', hint: 'Po przecinku; * na końcu = dowolna końcówka, np. kurw*, fuck*. Puste pole = wbudowana lista (polskie + kilka angielskich).' }
   ]},
   { sec: '🔍 Łowca napisów', sub: 'Szukanie napisów na żądanie (przycisk w popupie). Pokazuj GUI tylko wtedy, gdy go potrzebujesz.', items: [
     // [AGENT-EXP] 2026-10-15 — 🔋 tryb oszczędny Łowcy (assets/lowca_napisow.js, przekazuje mostek).

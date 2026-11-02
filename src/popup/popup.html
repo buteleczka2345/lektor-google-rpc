@@ -84,6 +84,7 @@
             <!-- [AGENT-EXP] 2026-10-24: wariant Matcha w przeglądarce (głosy 🌐) — tylko 2 (test: reszta wolniejsza) -->
             <div id="mwRows" class="field" style="display:none;">
                 <label class="field-label" for="mwTryb">Matcha 🌐 — wariant</label><select id="mwTryb"><option value="kombi">Kombinacja — koder i dekoder procesor INT8, wokoder karta (najszybszy)</option><option value="cpu_fp32">Wszystko na procesorze — FP32, naturalny rytm (sdp + t4 + fp32)</option></select>
+                <div id="mwTrybHint" class="footnote warn" style="display:none;">FP32 nie jest w paczce — pobierz go raz w „Języki świata” (ok. 85 MB na głos). Do tego czasu lektor liczy INT8.</div>
             </div>
             <div id="ttsVoiceRow" class="field" style="display:none;">
                 <label class="field-label" id="ttsVoiceLabel" for="ttsVoiceSelect">Głos</label>
@@ -275,17 +276,20 @@
             <div class="footnote">Model MMS ≈ 114 MB na język. Pobrany głos trafia na listę „Własny głos” i staje się aktywny. Źródło: HuggingFace (MMS: Meta, lic. CC-BY-NC; Piper: lic. MIT).</div>
         </div>
 
+        <!-- [FIX 2026-11-02] JEDEN cenzor (wcześniej dwa: mowa lektora tutaj, dźwięk filmu w Ustawieniach — z osobnymi listami) -->
         <div class="card" data-mod="cenzura">
-            <div class="card-head"><b>🤬 Cenzura przekleństw</b><span class="pill">wszystkie języki</span></div>
-            <button id="censorToggleBtn" class="btn ok" type="button">🤬 Cenzura: WŁĄCZONA</button>
+            <div class="card-head"><b>🤬 Cenzor przekleństw</b><span class="pill">jedna lista</span></div>
+            <button id="censorToggleBtn" class="btn ok" type="button">🗣 W mowie lektora: WŁĄCZONY</button>
             <select id="censorModeSelect" class="mt">
                 <option value="remove">Usuń słowo (cicho) — zalecane</option>
                 <option value="beep">[BEEP] (obcy głos wypowie na głos)</option>
                 <option value="replace">Gwiazdki (k****)</option>
             </select>
-            <input type="text" id="censorCustomWords" class="text-input mt" placeholder="Własne słowa po przecinku (każdy język)…">
+            <label class="check"><input type="checkbox" id="cenzorOnCheck"> 🔇 Wyciszaj w dźwięku filmu — z pobranych napisów (YouTube, Netflix, HBO Max)</label>
+            <label class="check"><input type="checkbox" id="cenzorLiveCheck"> 🔇 Wyciszaj w dźwięku filmu — na bieżąco (napisy z ekranu, inne strony)</label>
+            <input type="text" id="censorCustomWords" class="text-input mt" placeholder="Własne słowa po przecinku; -słowo = wyjątek…">
             <div class="footnote warn" id="censorStatus">—</div>
-            <div class="footnote" id="censorScopeNote">Działa dla WSZYSTKICH języków naraz (własne słowa + wbudowane listy). Ustawienia zapisują się na stałe.</div>
+            <div class="footnote" id="censorScopeNote">Jeden cenzor i jedna lista słów (wbudowane listy wielu języków + Twoje): wycina przekleństwa z mowy lektora i/lub wycisza je w oryginalnym dźwięku filmu. Czasy ciszy: Ustawienia → 🤬 Cenzor.</div>
         </div>
     </section>
 

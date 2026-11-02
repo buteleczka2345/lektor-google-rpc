@@ -483,8 +483,8 @@ function applySettings(s) {
     }
 
     // Cenzura przeklecstw (censor.js wczytany przed tym modulem).
-    if (window.Censor && window.Censor.applySettings) {
-        try { window.Censor.applySettings(s); } catch (e) { /* cenzura nie moze zabic lektora */ }
+    if (window.__lektorCensor && window.__lektorCensor.applySettings) {
+        try { window.__lektorCensor.applySettings(s); } catch (e) { /* cenzura nie moze zabic lektora */ }
     }
 }
 // Cenzura przeklecstw - censor.js jest wczytany przed tym modulem (offscreen.html).
@@ -822,7 +822,7 @@ setTimeout(async () => {
 
 function censoredText(t) {
     try {
-        if (window.Censor && window.Censor.applyText) return window.Censor.applyText(t);
+        if (window.__lektorCensor && window.__lektorCensor.applyText) return window.__lektorCensor.applyText(t);
     } catch (e) { /* cenzura nie moze zabic lektora */ }
     return String(t || '');
 }
@@ -867,8 +867,8 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
             poolReady: sherpaPool.filter((w) => w.ready).length,
             // Statystyki cenzury (ile języków / słów) — popup pokazuje je na żywo,
             // żeby użytkownik widział faktyczny zasięg, a nie liczbę na sztywno.
-            censorLanguages: (window.Censor && window.Censor.langCount) ? window.Censor.langCount() : 0,
-            censorWords: (window.Censor && window.Censor.wordCount) ? window.Censor.wordCount() : 0
+            censorLanguages: (window.__lektorCensor && window.__lektorCensor.langCount) ? window.__lektorCensor.langCount() : 0,
+            censorWords: (window.__lektorCensor && window.__lektorCensor.wordCount) ? window.__lektorCensor.wordCount() : 0
         });
     }
     // [VOX] Stan silnika Supertonic dla popupu i strony Ustawień (sprzęt, karta, workery, pobieranie modelu).

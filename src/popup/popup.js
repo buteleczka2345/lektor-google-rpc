@@ -613,14 +613,13 @@ async function init() {
             : CENSOR_STATUS_FALLBACK;
         const syncCensorUi = (on) => {
             censorToggle.dataset.on = on ? '1' : '0';
-            censorToggle.textContent = on ? '🤬 Cenzura: WŁĄCZONA' : '🤬 Cenzura: WYŁĄCZONA';
+            censorToggle.textContent = on ? '🗣 W mowie lektora: WŁĄCZONY' : '🗣 W mowie lektora: WYŁĄCZONY';
             censorToggle.className = 'btn ' + (on ? 'ok' : 'danger');   // [VOX] kolory z popup.css
-            censorModeSel.disabled = !on;
-            censorWords.disabled = !on;
+            censorModeSel.disabled = !on;   // lista słów działa też dla dźwięku filmu — zostaje dostępna
             if (censorStatus) {
                 censorStatus.textContent = on
                     ? censorActiveText()
-                    : 'Cenzura wyłączona — lektor czyta wszystko.';
+                    : 'W mowie lektora wyłączony — lektor czyta wszystko (wyciszanie dźwięku filmu działa osobno).';
             }
         };
         syncCensorUi(!!s.censorEnabled);
@@ -634,9 +633,9 @@ async function init() {
                 censorInfo = { languages: resp.languages, words: resp.words || 0 };
                 const scopeNote = $('censorScopeNote');
                 if (scopeNote) {
-                    scopeNote.textContent = 'Działa dla WSZYSTKICH języków naraz: '
-                        + resp.languages + ' języków, ' + (resp.words || 0) + ' słów + Twoje własne.'
-                        + ' Ustawienia zapisują się na stałe.';
+                    scopeNote.textContent = 'Jeden cenzor i jedna lista słów: '
+                        + resp.languages + ' języków, ' + (resp.words || 0) + ' słów + Twoje własne'
+                        + ' — w mowie lektora i/lub w dźwięku filmu. Czasy ciszy: Ustawienia → 🤬 Cenzor.';
                 }
                 if (censorToggle.dataset.on === '1'
                     && (!censorStatus || censorStatus.textContent === CENSOR_STATUS_FALLBACK
@@ -656,8 +655,21 @@ async function init() {
         });
         censorWords.addEventListener('input', debounce(() => {
             saveSettings({ censorCustomWords: censorWords.value });
-            if (censorStatus) censorStatus.textContent = '✓ Własne słowa zapisane (działają od następnej kwestii).';
+            if (censorStatus) censorStatus.textContent = '✓ Własne słowa zapisane (lektor: od następnej kwestii, dźwięk filmu: od razu).';
         }, 500));
+        // [FIX 2026-11-02] JEDEN cenzor: wyciszanie oryginalnego dźwięku filmu (dawniej osobny cenzor w Ustawieniach)
+        [['cenzorOnCheck', 'cenzorOn'], ['cenzorLiveCheck', 'cenzorLive']].forEach(([id, key]) => {
+            const box = $(id);
+            if (!box) return;
+            chrome.storage.local.get(key, (r) => { box.checked = !!(r && r[key]); });
+            box.addEventListener('change', () => {
+                saveSettings({ [key]: box.checked });
+                if (censorStatus) censorStatus.textContent = box.checked
+                    ? '✓ Wyciszanie dźwięku filmu włączone (ta sama lista słów co lektor).'
+                    : 'Wyciszanie dźwięku filmu wyłączone.';
+            });
+            chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch[key]) box.checked = !!ch[key].newValue; });
+        });
     }
     // Sklep głosów: katalog 1100+ języków (MMS + Piper) z pobieraniem w aplikacji.
     initLangStore();
@@ -2358,12 +2370,25 @@ try {
     const eng = document.getElementById('ttsEngineSelect');
     const rows = document.getElementById('mwRows');
     const sel = document.getElementById('mwTryb');
+    const hint = document.getElementById('mwTrybHint');
     if (!eng || !rows || !sel) return;
-    const show = () => { rows.style.display = eng.value === 'matcha' ? '' : 'none'; };
+    // [FIX 2026-11-02] FP32 nie jest już w paczce (162 MB) — podpowiedź, gdy wybrany, a niepobrany dla bieżącego głosu
+    const hintSync = () => {
+        if (!hint) return;
+        if (sel.value !== 'cpu_fp32') { hint.style.display = 'none'; return; }
+        chrome.storage.local.get('matchaVoice', async (r) => {
+            const mv = String((r && r.matchaVoice) || 'web:male_voxcpm_2').split(':')[1] === 'female_voxcpm_2' ? 'female_voxcpm_2' : 'male_voxcpm_2';
+            let have = false;
+            try { have = !!(await voiceGet('matcha/' + mv + '/_ok32')); } catch (e) {}
+            hint.style.display = have ? 'none' : '';
+        });
+    };
+    const show = () => { rows.style.display = eng.value === 'matcha' ? '' : 'none'; hintSync(); };
     chrome.storage.local.get('matchaWebTryb', (r) => { sel.value = r && r.matchaWebTryb === 'cpu_fp32' ? 'cpu_fp32' : 'kombi'; show(); });
-    sel.addEventListener('change', () => chrome.storage.local.set({ matchaWebTryb: sel.value }, () => { if (LANG_STORE.catalog) matchaRefreshState().then(langRender); }));
+    sel.addEventListener('change', () => chrome.storage.local.set({ matchaWebTryb: sel.value }, () => { hintSync(); if (LANG_STORE.catalog) matchaRefreshState().then(langRender); }));
     chrome.storage.onChanged.addListener((ch, area) => {   // [AGENT-EXP] 2026-10-24: „Włącz” w Językach świata → lista się zgadza
         if (area === 'local' && ch.matchaWebTryb) sel.value = ch.matchaWebTryb.newValue === 'cpu_fp32' ? 'cpu_fp32' : 'kombi';
+        if (area === 'local' && (ch.matchaWebTryb || ch.matchaVoice)) hintSync();
     });
     eng.addEventListener('change', show);
     setTimeout(show, 300);

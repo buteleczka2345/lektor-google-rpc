@@ -528,6 +528,7 @@ self.ML_I18N_EN = {
     "Wyłącz przy polskim dubbingu": "Turn off with Polish dubbing",
     "Gdy wybrana jest polska ścieżka audio": "When a Polish audio track is selected",
     "Wyłącz na polskich filmach/kanałach": "Turn off on Polish videos/channels",
+    "FP32 nie jest w paczce — pobierz go raz w „Języki świata” (ok. 85 MB na głos). Do tego czasu lektor liczy INT8.": "FP32 is not in the package — download it once in “World languages” (about 85 MB per voice). Until then the narrator uses INT8.",
     "Język audio PL lub automatyczne polskie napisy (mowa po polsku)": "Polish audio language or automatic Polish captions (Polish speech)",
     "Pomijaj wstawki dźwiękowe": "Skip sound cues",
     "(wiatr), [muzyka], ♪": "(wind), [music], ♪",
@@ -1384,5 +1385,24 @@ self.ML_I18N_EN = {
     "Ostatnio otwarta": "Last opened",
     "↺ Przywróć domyślny układ": "↺ Restore the default layout",
     "Zmiany widać w popupie od razu (otwórz go jeszcze raz). Układ jest też w eksporcie ustawień.": "Changes show in the popup right away (open it again). The layout is also part of the settings export.",
-    "Przywrócić domyślny układ popupu? Wszystkie moduły wrócą na swoje miejsca, reguły stron i zwinięcia znikną.": "Restore the default popup layout? All modules go back to their places; site rules and collapsed states are removed."
+    "Przywrócić domyślny układ popupu? Wszystkie moduły wrócą na swoje miejsca, reguły stron i zwinięcia znikną.": "Restore the default popup layout? All modules go back to their places; site rules and collapsed states are removed.",
+    // [FIX 2026-11-02]
+    "🤬 Cenzor przekleństw": "🤬 Profanity filter",
+    "jedna lista": "one list",
+    "🗣 W mowie lektora: WŁĄCZONY": "🗣 In the narrator's speech: ON",
+    "🗣 W mowie lektora: WYŁĄCZONY": "🗣 In the narrator's speech: OFF",
+    "🔇 Wyciszaj w dźwięku filmu — z pobranych napisów (YouTube, Netflix, HBO Max)": "🔇 Mute in the video sound — from downloaded subtitles (YouTube, Netflix, HBO Max)",
+    "🔇 Wyciszaj w dźwięku filmu — na bieżąco (napisy z ekranu, inne strony)": "🔇 Mute in the video sound — live (on-screen subtitles, other sites)",
+    "Własne słowa po przecinku; -słowo = wyjątek…": "Your own words, comma-separated; -word = exception…",
+    "Jeden cenzor i jedna lista słów (wbudowane listy wielu języków + Twoje): wycina przekleństwa z mowy lektora i/lub wycisza je w oryginalnym dźwięku filmu. Czasy ciszy: Ustawienia → 🤬 Cenzor.": "One filter and one word list (built-in lists for many languages + yours): it cuts profanity from the narrator's speech and/or mutes it in the original video sound. Mute timing: Settings → 🤬 Filter.",
+    "W mowie lektora wyłączony — lektor czyta wszystko (wyciszanie dźwięku filmu działa osobno).": "Off for the narrator's speech — the narrator reads everything (muting the video sound works separately).",
+    "Jeden cenzor i jedna lista słów: ": "One filter and one word list: ",
+    " — w mowie lektora i/lub w dźwięku filmu. Czasy ciszy: Ustawienia → 🤬 Cenzor.": " — in the narrator's speech and/or in the video sound. Mute timing: Settings → 🤬 Filter.",
+    "✓ Własne słowa zapisane (lektor: od następnej kwestii, dźwięk filmu: od razu).": "✓ Your words saved (narrator: from the next line, video sound: right away).",
+    "✓ Wyciszanie dźwięku filmu włączone (ta sama lista słów co lektor).": "✓ Muting the video sound is on (same word list as the narrator).",
+    "Wyciszanie dźwięku filmu wyłączone.": "Muting the video sound is off.",
+    "słów + Twoje własne": "words + your own",
+    // [FIX 2026-11-02]
+    "🤬 Cenzor przekleństw — wyciszanie dźwięku filmu": "🤬 Profanity filter — muting the video sound",
+    "Włączanie, tryb i lista słów (wspólna z lektorem) są w popupie, w karcie „🤬 Cenzor przekleństw”. Tu: skąd brać napisy i jak długo trwa cisza w oryginalnym dźwięku. Pracuje tylko na tekście napisów (nie słucha dźwięku); działa także przy wyłączonym lektorze.": "Switching on, the mode and the word list (shared with the narrator) are in the popup, in the “🤬 Profanity filter” card. Here: where subtitles come from and how long the silence in the original sound lasts. It works only on subtitle text (it does not listen to the audio); it also works with the narrator turned off."
 };

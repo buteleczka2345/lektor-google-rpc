@@ -1,7 +1,10 @@
-// censor.js — globalna cenzura przekleństw dla lektora (WSZYSTKIE języki naraz).
-// Wczytywany jako zwykły skrypt w offscreen.html PRZED offscreen.js (moduł ES),
-// więc global window.Censor jest dostępny w silniku TTS.
-// Cenzurujemy tekst każdej kwestii przed syntezą — niezależnie od języka głosu.
+// censor.js — JEDEN cenzor przekleństw Multilektora (WSZYSTKIE języki naraz). [FIX 2026-11-02]
+// Wcześniej były dwa cenzory z osobnymi listami: ten (mowa lektora) i cenzor_main.js (wyciszanie oryginalnego dźwięku
+// filmu, własna lista „kurw*”). Teraz to jest jedyny silnik słów i jedna lista (wbudowane + własne słowa użytkownika
+// „censorCustomWords”; „-słowo” = wyjątek z listy wbudowanej). Używają go:
+//   * dokument lektora (offscreen.html, PRZED offscreen.js) — applyText: tekst kwestii przed syntezą,
+//   * strony z filmem (świat MAIN, PRZED cenzor_main.js) — findMatches: gdzie w napisie jest przekleństwo → cisza w filmie.
+// Obiekt globalny: __lektorCensor (Censor — stara nazwa, tylko na stronach rozszerzenia).
 // Krzyżowe kolizje między językami (sv. 'hora' = es. 'godzina') usuwamy z list.
 (function (global) {
     'use strict';
@@ -375,9 +378,9 @@
         'przepierdal*', 'opierdal*', 'wpierdal*', 'dopierdol*', 'dopierdal*',
         'przypierdol*', 'przypierdal*', 'podpierdol*', 'podpierdal*', 'popierdol*', 'popierdal*',
         'zajeb*', 'dojeb*', 'pojeb*', 'najeb*', 'wyjeb*', 'odjeb*', 'rozjeb*', 'przejeb*',
-        'fuck*', 'motherfuck*'];
+        'fuck*', 'motherfuck*', 'shit*', 'bitch*', 'cunt*'];   // [FIX 2026-11-02] + reszta dawnej listy cenzora dźwięku
 
-    var cfg = { enabled: true, mode: DEFAULT_MODE, custom: [] };
+    var cfg = { enabled: true, mode: DEFAULT_MODE, custom: [], exclude: Object.create(null) };
     var reBounded = null;   // pisma ze spacjami (łacina, cyrylica, arabski, dewanagari...)
     var reUnbounded = null; // pisma bez spacji (japoński, chiński, tajski) — dopasowanie podciągiem
 
@@ -393,6 +396,17 @@
             .map(function (x) { return x.trim().toLowerCase(); })
             .filter(Boolean);
     }
+    // [FIX 2026-11-02] „-słowo” = wyjątek: to słowo (dokładnie ta forma) nie jest cenzurowane, nawet gdy jest na liście
+    // wbudowanej albo łapie je rdzeń „kurw*”. Zastępuje dawną opcję „własna lista zamiast wbudowanej” cenzora dźwięku.
+    function splitCustom(list) {
+        var add = [], ex = Object.create(null);
+        list.forEach(function (w) {
+            if (w.charAt(0) === '-') { var x = w.replace(/^-+/, '').trim(); if (x) ex[x] = 1; }
+            else if (w.replace(/\*+$/, '').length >= 2 || /[\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/.test(w)) add.push(w);   // 1 litera (np. „w”) wycinałaby pół mowy
+        });
+        return { add: add, ex: ex };
+    }
+    function excluded(m) { return !!cfg.exclude[String(m || '').toLowerCase()]; }
 
     // Pisma bez spacji (CJK: han / kana / hangul, oraz tajski) — słowa stykają
     // się bez separatorów, więc granice \p{L} nigdy by nie zadziałały (np.
@@ -435,6 +449,9 @@
         Object.keys(LISTS).forEach(function (k) { LISTS[k].forEach(add); });
         STEMS.forEach(add);   // [AGENT-EXP] 2026-10-19
         (cfg.custom || []).forEach(add);
+        // wyjątki („-słowo”) wypadają z list wbudowanych; formy złapane rdzeniem pomija excluded() przy dopasowaniu
+        bounded = bounded.filter(function (w) { return !cfg.exclude[w]; });
+        unbounded = unbounded.filter(function (w) { return !cfg.exclude[w]; });
         // [AGENT-EXP] 2026-10-19: „rdzeń*” = rdzeń + dowolne litery (kurw* → kurwa, kurwami, kurwiszon…).
         function pat(w) {
             if (w.length > 2 && w.charAt(w.length - 1) === '*') return esc(w.slice(0, -1)) + '\\p{L}*';
@@ -464,14 +481,15 @@
         var t = String(text || '');
         if (!cfg.enabled || !t) return t;
         if (reBounded === null && reUnbounded === null) rebuild();
-        var sub;
+        var rep;
         if (cfg.mode === 'beep') {
-            sub = '[BEEP]';
+            rep = function () { return '[BEEP]'; };
         } else if (cfg.mode === 'replace') {
-            sub = function (m) { return m.charAt(0) + new Array(m.length).join('*'); };
+            rep = function (m) { return m.charAt(0) + new Array(m.length).join('*'); };
         } else {
-            sub = ' ';
+            rep = function () { return ' '; };
         }
+        var sub = function (m) { return excluded(m) ? m : rep(m); };   // [FIX 2026-11-02] „-słowo” zostaje
         // Najpierw granice słów (bezpieczniejsze), potem podciągi (CJK / tajski).
         if (reBounded) t = t.replace(reBounded, sub);
         if (reUnbounded) t = t.replace(reUnbounded, sub);
@@ -482,11 +500,32 @@
         return t.replace(/^[\s,;:]+/, '').replace(/\s+$/, '');   // [AGENT-EXP] 2026-10-19: bez „, stary.” po wycięciu
     }
 
+    // [FIX 2026-11-02] Gdzie w tekście są przekleństwa: [{ word, index }] (rosnąco). Niezależnie od „cenzura w mowie
+    // lektora wł./wył.” — z tego korzysta wyciszanie oryginalnego dźwięku filmu (cenzor_main.js), które ma własny przełącznik.
+    function findMatches(text) {
+        var t = String(text || ''), out = [], m;
+        if (!t) return out;
+        if (reBounded === null && reUnbounded === null) rebuild();
+        [reBounded, reUnbounded].forEach(function (re) {
+            if (!re) return;
+            re.lastIndex = 0;
+            while ((m = re.exec(t))) {
+                if (!excluded(m[0])) out.push({ word: m[0], index: m.index });
+                if (m.index === re.lastIndex) re.lastIndex++;
+            }
+        });
+        return out.sort(function (a, b) { return a.index - b.index; });
+    }
+
     function applySettings(s) {
         if (!s || typeof s !== 'object') return;
         if (s.censorEnabled !== undefined) cfg.enabled = !!s.censorEnabled;
         if (s.censorMode !== undefined && ['remove', 'beep', 'replace'].indexOf(s.censorMode) >= 0) cfg.mode = s.censorMode;
-        if (s.censorCustomWords !== undefined) cfg.custom = parseCustom(s.censorCustomWords);
+        if (s.censorCustomWords !== undefined) {
+            var sp = splitCustom(parseCustom(s.censorCustomWords));   // [FIX 2026-11-02] „-słowo” = wyjątek
+            cfg.custom = sp.add;
+            cfg.exclude = sp.ex;
+        }
         reBounded = null; reUnbounded = null; // przebuduj przy najbliższym tekście
     }
 
@@ -500,10 +539,14 @@
         return n + (cfg.custom || []).length;
     }
 
-    global.Censor = {
+    var api = {
         applyText: applyText,
+        findMatches: findMatches,   // [FIX 2026-11-02] wyciszanie dźwięku filmu
         applySettings: applySettings,
         langCount: langCount,
         wordCount: wordCount
     };
+    global.__lektorCensor = api;
+    // stara nazwa tylko na stronach rozszerzenia — na stronach z filmem (świat MAIN) nie zajmujemy globalnego „Censor”
+    try { if (global.location && global.location.protocol === 'chrome-extension:') global.Censor = api; } catch (e) {}
 })(typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : this));

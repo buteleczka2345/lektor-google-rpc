@@ -600,7 +600,7 @@ if (!('__lektorBufPauza' in window)) {
         } catch (e) {}
     }, 2000);
 
-    // [FIX 2026-11-02] Wulgaryzmy wycina teraz WYŁĄCZNIE cenzor lektora (src/offscreen/censor.js) zgodnie z ustawieniami
+    // [FIX 2026-11-02] Wulgaryzmy wycina teraz WYŁĄCZNIE jeden cenzor (assets/censor.js) zgodnie z ustawieniami
     // (wł./wył., usuń / beep / gwiazdki, własne słowa). Ten stały wzorzec wycinał je zawsze — wbrew wyłączonemu cenzorowi,
     // tryby beep / gwiazdki nie miały czego zamienić, a rdzenie łapały też niewinne słowa (np. „szmatka”).
 

@@ -18,6 +18,20 @@ chrome.storage.local.get(['ttsEngine', 'customVoice', 'builtinVoiceRemoved'], (i
     if (Object.keys(patch).length) chrome.storage.local.set(patch);
 });
 
+// [FIX 2026-11-02] JEDEN cenzor: dawna osobna lista cenzora dźwięku filmu (cenzorWords, „puste = wbudowana”) trafia raz
+// do wspólnych własnych słów (censorCustomWords) — oba wyjścia cenzora (mowa lektora, dźwięk filmu) mają teraz jedną listę.
+chrome.storage.local.get(['cenzorWords', 'censorCustomWords', 'censorOneListV1'], (it) => {
+    if (!it || it.censorOneListV1) return;
+    // każda lista swoim formatem: własne słowa lektora po przecinku (frazy ze spacją zostają całe), dawna lista dźwięku — też po spacji
+    const have = String(it.censorCustomWords || '').split(/[,;\n]+/).map((w) => w.trim()).filter(Boolean);
+    const seen = new Set(have.map((w) => w.toLowerCase()));
+    String(it.cenzorWords || '').split(/[\s,;\n]+/).map((w) => w.trim()).filter((w) => w.replace(/\*+$/, '').length >= 2)
+        .forEach((w) => { if (!seen.has(w.toLowerCase())) { seen.add(w.toLowerCase()); have.push(w); } });
+    const patch = { censorOneListV1: true };
+    if (String(it.cenzorWords || '').trim()) patch.censorCustomWords = have.join(', ');
+    chrome.storage.local.set(patch, () => { chrome.storage.local.remove('cenzorWords'); });
+});
+
 // ===== Blokowane frazy — lektor NIGDY ich nie czyta =====
 // Centralny filtr: ostateczna kontrola odbywa się tutaj, przed TTS_PLAY → callOffscreen.
 const BLOCKED_PHRASES = [
@@ -849,7 +863,7 @@ async function lowcaSyncScriptsNow() {
             { id: 'lowca-auto-main', js: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_napisow.js'], world: 'MAIN', matches: allM, allFrames: true, runAt: 'document_start' },
             { id: 'lowca-auto-lektor', js: LOWCA_LEKTOR_FRAMES, matches: allM, allFrames: true, runAt: 'document_idle' },
             // [AGENT-EXP] 2026-10-25: 🤐 cenzor na stronach Łowcy — wycisza z napisów lektora (dom_content.js → cenzor_main.js)
-            { id: 'lowca-auto-cenzor-main', js: ['assets/cenzor_main.js'], world: 'MAIN', matches: allM, allFrames: true, runAt: 'document_start' },
+            { id: 'lowca-auto-cenzor-main', js: ['assets/censor.js', 'assets/cenzor_main.js'], world: 'MAIN', matches: allM, allFrames: true, runAt: 'document_start' },   // [FIX 2026-11-02] wspólny silnik cenzora
             { id: 'lowca-auto-cenzor-bridge', js: ['assets/cenzor_bridge.js'], matches: allM, allFrames: true, runAt: 'document_start' }
         ];
         if (topM.length) scripts.push({ id: 'lowca-auto-top', js: LOWCA_LEKTOR_TOP, matches: topM, allFrames: false, runAt: 'document_idle' });
@@ -875,7 +889,7 @@ async function lowcaEnsureLektor(tabId, tabUrl) {
     if (need.length) {
         await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: LOWCA_LEKTOR_FRAMES }).catch(() => {});
         // [AGENT-EXP] 2026-10-25: 🤐 cenzor od razu, bez odświeżania (cenzor_main.js musi być przed mostem — most wysyła ustawienia)
-        await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: ['assets/cenzor_main.js'], world: 'MAIN' }).catch(() => {});
+        await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: ['assets/censor.js', 'assets/cenzor_main.js'], world: 'MAIN' }).catch(() => {});   // [FIX 2026-11-02] wspólny silnik cenzora
         await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: ['assets/cenzor_bridge.js'] }).catch(() => {});
     }
     const top = res.find((r) => r && r.frameId === 0);
