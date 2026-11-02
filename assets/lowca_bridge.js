@@ -220,7 +220,9 @@
   window.addEventListener('message', function (ev) {
     try {
       var d = ev && ev.data;
-      if (!d || !d.__lowca_xhr) return;
+      // [FIX 2026-11-02] tylko z tej samej ramki (Łowca w świecie MAIN) — jak pozostałe kanały mostka; obce ramki
+      // (reklamy, odtwarzacze z innych domen) nie mogą już zlecać pobierania przez rozszerzenie.
+      if (!d || !d.__lowca_xhr || ev.source !== window) return;
       var q = d.__lowca_xhr;
       chrome.runtime.sendMessage(
         { action: 'LOWCA_XHR', id: q.id, url: q.url, headers: q.headers || {} },

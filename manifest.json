@@ -3,7 +3,7 @@
     "manifest_version": 3,
     "name": "__MSG_extName__",
     "default_locale": "pl",
-    "version": "3.5.0",
+    "version": "3.6.0",
     "description": "__MSG_extDesc__",
     "permissions": [
         "activeTab",
@@ -61,6 +61,7 @@
         },
         {
             "js": [
+                "assets/censor.js",
                 "assets/cenzor_main.js",
                 "assets/phrase_dict.js",
                 "assets/yt_subs_bridge.js"
@@ -73,6 +74,7 @@
         },
         {
             "js": [
+                "assets/censor.js",
                 "assets/cenzor_main.js"
             ],
             "matches": [
@@ -123,6 +125,7 @@
             "js": [
                 "assets/i18n_en.js",
                 "assets/i18n.js",
+                "assets/domain_lists.js",
                 "assets/options_hooks.js",
                 "assets/lektor-controls.js",
                 "assets/lektor-settings.js"
@@ -149,6 +152,7 @@
                 "assets/i18n_en.js",
                 "assets/i18n.js",
                 "assets/lektor_bar.js",
+                "assets/lektor_scheduler.js",
                 "assets/content.js-BgeP3Ise.js"
             ],
             "matches": [
@@ -160,8 +164,11 @@
             "js": [
                 "assets/i18n_en.js",
                 "assets/i18n.js",
+                "assets/domain_lists.js",
+                "assets/options_hooks.js",
                 "assets/lektor_bar.js",
                 "assets/sub_panel.js",
+                "assets/lektor_scheduler.js",
                 "assets/youtube_content.js-CI940SBo.js"
             ],
             "matches": [
@@ -174,7 +181,10 @@
             "js": [
                 "assets/i18n_en.js",
                 "assets/i18n.js",
+                "assets/domain_lists.js",
+                "assets/options_hooks.js",
                 "assets/lektor_bar.js",
+                "assets/lektor_scheduler.js",
                 "assets/dom_content.js",
                 "assets/auto_subs.js"
             ],
@@ -191,7 +201,10 @@
             "js": [
                 "assets/i18n_en.js",
                 "assets/i18n.js",
+                "assets/domain_lists.js",
+                "assets/options_hooks.js",
                 "assets/lektor_bar.js",
+                "assets/lektor_scheduler.js",
                 "assets/dom_content.js"
             ],
             "matches": [
@@ -206,7 +219,10 @@
             "js": [
                 "assets/i18n_en.js",
                 "assets/i18n.js",
+                "assets/domain_lists.js",
+                "assets/options_hooks.js",
                 "assets/lektor_bar.js",
+                "assets/lektor_scheduler.js",
                 "assets/dom_content.js",
                 "assets/auto_subs.js"
             ],

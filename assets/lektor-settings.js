@@ -29,12 +29,26 @@
             .replace(/[\s\u00A0]+/g, ' ')
             .trim().toLowerCase();
     }
+    // [FIX 2026-11-02] blokada pasuje do CAŁYCH słów (granice liter/cyfr): „tak” nie wycisza już zdań z „także”, „takiego”.
+    // Brzeg wpisu, który sam nie jest literą (np. „only the translation ,,”), sprawdzany jest jak dawniej (podciąg).
+    function phraseHit(text, phrase) {
+        if (!phrase) return false;
+        var w = /[\p{L}\p{N}]/u, i = text.indexOf(phrase);
+        var needL = w.test(phrase.charAt(0)), needR = w.test(phrase.charAt(phrase.length - 1));
+        while (i !== -1) {
+            var okL = !needL || i === 0 || !w.test(text.charAt(i - 1));
+            var okR = !needR || i + phrase.length >= text.length || !w.test(text.charAt(i + phrase.length));
+            if (okL && okR) return true;
+            i = text.indexOf(phrase, i + 1);
+        }
+        return false;
+    }
     function isBlockedText(t) {
         if (!blocked.length) return false;
         var n = normalizeForCheck(t);
         if (!n) return false;
         for (var i = 0; i < blocked.length; i++) {
-            if (n.indexOf(blocked[i]) !== -1) return true;
+            if (phraseHit(n, String(blocked[i] || '').toLowerCase())) return true;
         }
         return false;
     }
@@ -126,15 +140,19 @@
         if (!el) return;
         var m = null;
         try { if (window.__LIVEDUB_GET_MODE__) m = window.__LIVEDUB_GET_MODE__(); } catch (e) {}
-        if (!m) { el.textContent = ''; return; }
+        // [FIX 2026-11-02] „czytam z: …” — źródło tekstu z tej ramki (wspólny harmonogram)
+        var src = null;
+        try { src = window.__LektorSched && window.__LektorSched.getSource(); } catch (e) {}
+        var srcTxt = src ? ' · 📍 Czytam z: ' + src.name : '';
+        if (!m) { el.textContent = srcTxt ? srcTxt.slice(3) : ''; return; }
         if (m.mode === 'timeline') {
-            el.textContent = '🎬 Oś czasu napisów aktywna (' + m.cues + ' kwestii) — przesunięcie działa w OBIE strony, także w lewo (−).';
+            el.textContent = '🎬 Oś czasu napisów aktywna (' + m.cues + ' kwestii) — przesunięcie działa w OBIE strony, także w lewo (−).' + srcTxt;
             el.style.color = '#7effa0';
         } else if (m.mode === 'file') {
-            el.textContent = '📂 Napisy z pliku (' + m.cues + ' kwestii) — przesunięcie działa w OBIE strony.';
+            el.textContent = '📂 Napisy z pliku (' + m.cues + ' kwestii) — przesunięcie działa w OBIE strony.' + srcTxt;
             el.style.color = '#7effa0';
         } else {
-            el.textContent = '🔴 Czytanie NA ŻYWO — „+" (później) działa, „−" (wcześniej) NIE: lektor widzi napis dopiero, gdy się pojawia. Cofanie działa na Netflixie, z napisami z pliku i na YouTube, gdy oś czasu napisów jest aktywna.';
+            el.textContent = '🔴 Czytanie NA ŻYWO — „+" (później) działa, „−" (wcześniej) NIE: lektor widzi napis dopiero, gdy się pojawia. Cofanie działa na Netflixie, z napisami z pliku i na YouTube, gdy oś czasu napisów jest aktywna.' + srcTxt;
             el.style.color = '#ffb86b';
         }
     }

@@ -7,23 +7,20 @@
 const SCHEMA = [
   // [VOX] 2026-10-20: 🗣 Silnik mowy — ten sam klucz ttsEngine co w popupie, plus Supertonic (silnik z VoxNemesis).
   // Głos dla serwerów (Matcha, XTTS, Pocket…) dalej wybiera się w popupie.
-  { sec: '🗣 Silnik mowy', id: 'engineSec', sub: 'Którym głosem czyta lektor. Supertonic (z VoxNemesis) liczy na tym komputerze — procesorem albo kartą graficzną. Głos dla serwerów (Matcha, XTTS, Pocket…) wybierasz w popupie.', items: [
-    { k: 'ttsEngine', t: 'select', def: 'matcha',   /* [AGENT-EXP] 2026-10-24: domyślnie Matcha 🌐 */ label: 'Silnik', hint: 'Ten sam wybór co „🗣 Silnik mowy” w popupie. Głos przeglądarki (Web Speech API) gra prosto z systemu: bez wzmocnienia ponad 100%, kompresora, nagrywania i zapisu bufora', options: [ /* [AGENT-EXP] 2026-10-21 */
-      ['matcha', 'Matcha-TTS-PL 🌐 — w przeglądarce (domyślny) lub serwer :9000'], ['sherpa', 'Sherpa / Piper — pobrane głosy (Języki świata)'], ['browser', 'Głos przeglądarki (Google / Microsoft) — darmowy'], ['supertonic', 'Supertonic 3 (VoxNemesis) — CPU / GPU'], ['xtts', 'XTTS v2 (TTS2) — serwer :8000'],
-      ['audio8', 'Audio8 ONNX INT8 — serwer :9300'], ['f5', 'Lektor Marek (F5-TTS) — serwer :9400'], ['pocket', 'Pocket-TTS-PL — serwer :9200'], ['omnivoice', 'OmniVoice — serwer :9100'], ['kokoro', 'Kokoro — serwer :9500']] },
-    { k: 'supertonicVoice', t: 'select', def: 'Supertonic M1', label: 'Supertonic — głos', hint: '4 głosy wbudowane w model', st: true, options: [
-      ['Supertonic M1', 'Męski 1'], ['Supertonic M2', 'Męski 2'], ['Supertonic F1', 'Żeński 1'], ['Supertonic F2', 'Żeński 2']] },
-    { k: 'engineBackend', t: 'select', def: 'cpu', label: 'Supertonic — sprzęt', hint: 'Karta graficzna liczy kilka–kilkanaście razy szybciej. Gdy GPU nie działa, silnik sam wraca na CPU.', st: true, options: [
-      ['cpu', 'CPU — procesor'], ['igpu', 'GPU zintegrowana (np. AMD Radeon / Intel)'], ['gpu', 'GPU dedykowana (np. NVIDIA)']] },
-    { k: 'supertonicSteps', t: 'select', num: true, def: 4, label: 'Supertonic — jakość', hint: 'Kroki syntezy: więcej = lepszy głos, ale wolniej. Wolny procesor: 2–3.', st: true, options: [
-      ['2', '2 — najszybciej'], ['3', '3 — szybko'], ['4', '4 — zalecane'], ['5', '5'], ['6', '6 — lepiej'], ['8', '8 — wolniej'], ['10', '10 — najlepsza']] }
-  ]},
+  // [FIX 2026-11-02] bez dubli: silnik, głos, sprzęt i jakość Supertonic wybiera się TYLKO w popupie („🗣 Silnik mowy”).
+  // Tu zostały narzędzia, których popup nie ma: test lektora, restart Supertonic, instrukcja NVIDIA i stan silnika.
+  { sec: '🗣 Silnik mowy — narzędzia', id: 'engineSec', sub: 'Silnik, głos, sprzęt (CPU / GPU) i jakość wybierasz w popupie, w karcie „🗣 Silnik mowy”. Tu: test lektora, restart silnika Supertonic i jego stan.', items: [] },
   // [AGENT-EXP] 2026-10-17: sekcja „🎙 Silnik lektora” usunięta — silnik i głos wybiera się w popupie
   // (🗣 Silnik mowy + Głos); buforowanie w pauzie / w tle też jest w popupie.
-  { sec: '⏩ Tempo', sub: 'Jak lektor nadąża za przyspieszonym filmem (np. 1.5×).', items: [
+  // [FIX 2026-11-02] ✂ / 🗣 — tekst lektora przed syntezą (src/offscreen/offscreen.js: shortenText, pronApply)
+  { sec: '✂ Tekst lektora', sub: 'Co lektor robi z polskim tekstem tuż przed czytaniem (każdy silnik).', items: [
+    { k: 'shortenLong', t: 'bool', def: false, label: '✂ Skracaj za długie kwestie (AI w Chrome)', hint: 'Gdy zdanie wyraźnie nie zmieści się w czasie napisu, Gemini Nano wbudowany w Chrome (lokalnie, bez klucza) skraca je jak lektor — zamiast przyspieszać mowę. Działa przy nagrywaniu do przodu (całe napisy, plik, bazy). Wymaga Chrome z Prompt API i pobranym modelem; bez niego lektor czyta oryginał.' },
+    { k: 'pronDict', t: 'textarea', def: '', label: '🗣 Słownik wymowy', hint: 'Jedna reguła w linii: tekst => jak czytać, np. Netflix => Netfliks, AI => aj aj, Mr. => mister. Całe słowa, wielkość liter bez znaczenia; # na początku linii = komentarz.' }
+  ]},
+  // [FIX 2026-11-02] „Auto-nadrabianie” tylko w popupie (karta prędkości) — było w obu miejscach
+  { sec: '⏩ Tempo', sub: 'Jak lektor nadąża za przyspieszonym filmem (np. 1.5×). Auto-nadrabianie (najwyżej 1,8×) włączasz w popupie, przy prędkości lektora.', items: [
     { k: 'tempoMode', t: 'select', def: 'A', label: 'Wariant tempa', hint: 'A — jak film, B — połowa przyspieszenia, C — stałe tempo', options: [
       ['A', 'A — Za wideo 1:1'], ['B', 'B — Za wideo łagodnie'], ['C', 'C — Stałe tempo']] },
-    { k: 'autoCatchup', t: 'bool', def: true, label: 'Auto-nadrabianie', hint: 'Przyspiesza, gdy kwestia nie mieści się w czasie' },
     { k: 'compressor', t: 'bool', def: false, label: 'Anty-trzask', hint: 'Kompresor na wyjściu lektora' }
   ]},
   { sec: '🗂️ Karty i pauza', sub: 'Zachowanie przy wielu kartach i pauzie.', items: [
@@ -35,7 +32,7 @@ const SCHEMA = [
   ]},
   { sec: '📺 YouTube i filtry', sub: 'Wykrywanie polskiego dubbingu i filtrowanie wstawek.', items: [
     { k: 'detectYTPolish', t: 'bool', def: true, label: 'Wyłącz przy polskim dubbingu', hint: 'Gdy wybrana jest polska ścieżka audio' },
-    { k: 'detectYTPolishChannel', t: 'bool', def: true, label: 'Wyłącz na polskich filmach/kanałach', hint: 'Język audio PL lub ręczne polskie napisy' },
+    { k: 'detectYTPolishChannel', t: 'bool', def: true, label: 'Wyłącz na polskich filmach/kanałach', hint: 'Język audio PL lub automatyczne polskie napisy (mowa po polsku)' },
     { k: 'soundCuesFilter', t: 'bool', def: true, label: 'Pomijaj wstawki dźwiękowe', hint: '(wiatr), [muzyka], ♪' }
   ]},
   { sec: '🌐 Tłumaczenie sieciowe (eksperyment)', sub: 'Osobny tryb: porcje o różnej wielkości, rzadkie zapytania, rotacja silników. Lokalne tłumaczenie Chrome działa bez zmian.', items: [
@@ -55,7 +52,6 @@ const SCHEMA = [
     { k: 'extTrInterval', t: 'select', def: '30s', label: 'Odstęp między porcjami', hint: 'Plus losowe ±50%, żeby nie było jak zegarek; duża porcja starcza na długo', options: [   // [AGENT-EXP] 2026-10-17: ±50%, 1–5 min co minutę, bez 10 min
       ['20s', '20 sekund'], ['30s', '30 sekund'], ['1min', '1 minuta'], ['2min', '2 minuty'], ['3min', '3 minuty'], ['4min', '4 minuty'], ['5min', '5 minut']] },
     // [AGENT-EXP] NOWA OPCJA 1/2 — Google RPC: zamienia główną funkcję Google (gtx) na metodę RPC.
-    { k: 'extTrGoogleRpc', t: 'bool', def: false, label: 'Google RPC — nowa metoda (eksperymentalna)', hint: 'Zamienia główną funkcję Google (endpoint gtx) na metodę RPC z limitem 4 żądania/1350 ms i pełnym parsowaniem (bez ucinania tekstu). Działa, gdy włączone jest tłumaczenie sieciowe i wybrany Google (lub rotacja). Wył. = dokładnie jak dotychczas. [AGENT-EXP] Uwaga: adres RPC odpowiada dziś 404 — po porażce Google sam wraca na 10 min do zwykłej metody gtx.' },
     // [AGENT-EXP] NOWA OPCJA 2/2 — zatrzymanie tłumaczenia razem z lektorem.
     { k: 'extTrStopWithLektor', t: 'bool', def: false, label: 'Zatrzymaj tłumaczenie razem z lektorem', hint: 'Gdy wyłączysz lektora (STOP) lub przejdziesz na inny film — natychmiast ubija kolejkę tłumaczenia w tle (mniej zapytań, brak blokad). Wył. = tłumaczenie dokończy kolejkę samo.' },
     // [AGENT-EXP] NOWA OPCJA 3/3 — Microsoft/Bing: nowa metoda batch (czysta tablica + limit 7 żąd./1250 ms, styl Immersive Translate).
@@ -65,11 +61,11 @@ const SCHEMA = [
   ]},
   // [AGENT-EXP] 2026-10-19 — 🤐 Cenzor przekleństw (assets/cenzor_main.js + cenzor_bridge.js). Wycisza oryginalny
   // dźwięk filmu (video.muted), głos lektora gra dalej. Domyślnie WYŁ. = zachowanie jak przed zmianą.
-  { sec: '🤐 Cenzor przekleństw', sub: 'Wycisza samo przekleństwo w oryginalnym dźwięku filmu. Pracuje tylko na tekście napisów (nie słucha dźwięku). Działa także przy wyłączonym lektorze; głos lektora, gdy jest włączony, gra dalej.', items: [
-    { k: 'cenzorOn', t: 'bool', def: false, label: 'Wyciszaj z pobranych napisów (YouTube, Netflix, HBO Max)', hint: 'Napisy filmu są pobierane z góry (tak jak robi to lektor; CC nie trzeba włączać), więc wiadomo, które słowa padną i kiedy — cisza wchodzi PRZED słowem. Auto-napisy YouTube mają czas każdego słowa — wtedy jest najdokładniej. HBO Max: cenzor sam ściąga całe polskie napisy filmu (gdy ich brak — angielskie), napisów w odtwarzaczu nie trzeba włączać.' },   // [AGENT-EXP] 2026-10-25: HBO Max
+  // [FIX 2026-11-02] JEDEN cenzor: włączanie (mowa lektora / dźwięk filmu z napisów / na bieżąco), tryb i JEDNA lista słów
+  // są w popupie (karta „🤬 Cenzor przekleństw”); tu zostały tylko szczegóły wyciszania oryginalnego dźwięku filmu.
+  { sec: '🤬 Cenzor przekleństw — wyciszanie dźwięku filmu', sub: 'Włączanie, tryb i lista słów (wspólna z lektorem) są w popupie, w karcie „🤬 Cenzor przekleństw”. Tu: skąd brać napisy i jak długo trwa cisza w oryginalnym dźwięku. Pracuje tylko na tekście napisów (nie słucha dźwięku); działa także przy wyłączonym lektorze.', items: [
     { k: 'cenzorNfPl', t: 'bool', def: true, label: 'Netflix: zawsze pobieraj całe polskie napisy', hint: 'Cenzor sam ściąga CAŁY polski plik napisów odcinka (z listy ścieżek filmu), nawet gdy w odtwarzaczu wybrane są inne napisy albo żadne — wszystkie przekleństwa są znane od pierwszej minuty. Gdy polski plik jest pobrany, wystarcza — inne napisy nie są już potrzebne. Lektor też dostaje ten cały plik, więc ma komplet polskich napisów od pierwszej minuty. Działa razem z opcją „Wyciszaj z pobranych napisów”.' },
     { k: 'cenzorYtPl', t: 'bool', def: true, label: 'YouTube: zawsze polskie napisy', hint: 'Jak na Netfliksie: cenzor bierze polskie napisy — ręczne, potem automatyczne, a gdy filmu nie ma po polsku — ścieżkę filmu przetłumaczoną przez YouTube na polski. Wył. = napisy w języku filmu (dokładniejsze przy angielskich filmach: słychać „fuck”, w napisie też jest „fuck”).' },
-    { k: 'cenzorLive', t: 'bool', def: false, label: 'Cenzor LIVE — na bieżąco, bez pobierania napisów', hint: 'Czyta napisy widoczne na ekranie (YouTube, Netflix, Prime, Kreator napisów, ścieżki odtwarzacza) i szacuje, kiedy padnie słowo. Działa na wszystkich stronach lektora; mniej dokładny, bo napis pojawia się razem z mową. Przy włączonej opcji wyżej jest tylko zapasem, gdy napisów z sieci brak.' },
     { k: 'cenzorBufferMs', t: 'range', def: 500, min: 0, max: 3000, step: 50, unit: ' ms', label: 'Wstecz — cisza przed słowem', hint: 'Słychać początek przekleństwa → zwiększ.' },
     { k: 'cenzorHoldMs', t: 'range', def: 100, min: 0, max: 2000, step: 50, unit: ' ms', label: 'Przód — cisza po słowie', hint: 'Słychać końcówkę → zwiększ.' },
     // [AGENT-EXP] 2026-10-20: trzeci suwak z „Netflix Cenzor” — tempo tekstu (Wstecz/Przód liczone w tym tempie).
@@ -78,13 +74,12 @@ const SCHEMA = [
     { k: 'cenzorLenMode', t: 'select', def: 'normal', label: 'Długość słowa', hint: 'Dłuższe przekleństwo trzymane dłużej', options: [
       ['off', 'wyłącz'], ['normal', 'normalnie'], ['strong', 'mocno']] },
     { k: 'cenzorAsrTag', t: 'bool', def: true, label: 'Wyciszaj „[ __ ]” z auto-napisów YouTube', hint: 'YouTube sam zamienia przekleństwa w auto-napisach na „[ __ ]”.' },
-    { k: 'cenzorWords', t: 'textarea', def: '', label: 'Lista słów (puste = wbudowana)', hint: 'Po przecinku; * na końcu = dowolna końcówka, np. kurw*, fuck*. Puste pole = wbudowana lista (polskie + kilka angielskich).' }
   ]},
-  { sec: '🔍 Łowca napisów', sub: 'Szukanie napisów na żądanie (przycisk w popupie). Pokazuj GUI tylko wtedy, gdy go potrzebujesz.', items: [
+  // [FIX 2026-11-02] „Pokazuj GUI Łowcy” tylko w popupie (karta Łowcy) — było w obu miejscach
+  { sec: '🔍 Łowca napisów', sub: 'Szukanie napisów na żądanie (przycisk w popupie). „Pokazuj GUI Łowcy (przycisk CC)” przełączasz w popupie, w karcie Łowcy.', items: [
     // [AGENT-EXP] 2026-10-15 — 🔋 tryb oszczędny Łowcy (assets/lowca_napisow.js, przekazuje mostek).
     // [AGENT-EXP] 2026-10-17: opis zgodny z kodem — bez filmu Łowca się nie włącza, z filmem ~2 s (było „4 s / 15 s”).
     { k: 'lowcaEco', t: 'bool', def: true, label: 'Łowca: tryb oszczędny', hint: 'Strona bez filmu — Łowca w ogóle się nie włącza (włączy go dopiero film, który się na niej pojawi). Gdy film jest: szuka ok. 2 s gry filmu; po złapaniu napisów albo gdy ich brak (reklama YouTube się nie liczy) przestaje szukać do następnego filmu. „Szukaj napisów” w popupie albo „Szukaj dalej” w panelu Łowcy budzi go od razu.' },
-    { k: 'lowcaGui', t: 'bool', def: false, label: 'Pokazuj GUI Łowcy (przycisk CC)', hint: 'Wł. = przycisk CC zawsze widoczny na każdej stronie z filmem (klik uruchamia Łowcę i otwiera panel; panel też Alt+N). Wył. = przycisk schowany wszędzie. Ten sam checkbox jest w popupie.' },
     // [AGENT-EXP] 2026-10-17: pola kluczy API OpenSubtitles.com i SubDL usunięte z Ustawień (niepotrzebne).
     // subs_db.js dalej czyta osApiKey / subdlApiKey — bez klucza te bazy są pomijane; OpenSubtitles.org działa bez klucza.
     // Żeby wrócić: dopisz tu { k: 'osApiKey', t: 'text', secret: true, ... } (wzór w kopii kodu z 2026-10-17).
@@ -198,9 +193,12 @@ function applyValues(data) {
 }
 
 // ---------------- Listy domen ----------------
+// [FIX 2026-11-02] 📋 przełącznik „Tylko domeny z listy” (domainListsOn, domyślnie WŁ.) i „📥 Wpisz domeny lektora”;
+// zasady list w assets/domain_lists.js (te same w skryptach stron, w tle i w popupie).
 function buildDomainLists() {
-  const s = section('📋 Białe i czarne listy domen', 'Jedna domena na linię (np. youtube.com). Biała lista pusta = lektor działa wszędzie, gdzie jest wstrzykiwany. Linie z # lub // to komentarze.', true);
-  const wrap = el('div', { style: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;' });
+  const s = section('📋 Białe i czarne listy domen', 'Biała lista: lektor uruchamia się TYLKO na tych domenach (i ich subdomenach, np. youtube.com → m.youtube.com) — na pozostałych stronach nie działa i nie zużywa procesora. Czarna lista: tu lektor zawsze milczy. Jedna domena na linię; linie z # lub // to komentarze.', true, 'domeny');
+  s.appendChild(buildRow({ k: 'domainListsOn', t: 'bool', def: true, label: '📋 Tylko domeny z listy', hint: 'Włączone (domyślnie): działają obie listy. Wyłączone: lektor działa na każdej stronie, na której się uruchomi — listy zostają zapisane na później. Ten sam przełącznik jest w popupie.' }));
+  const wrap = el('div', { style: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:10px;' });
   const mk = (key, title, ph) => {
     const box = el('div');
     box.appendChild(el('b', { style: 'font-size:13px;' }, title));
@@ -213,9 +211,32 @@ function buildDomainLists() {
   };
   const wl = mk('domainWhitelist', '✅ Biała lista (tylko te domeny)', 'np.:\nyoutube.com\nnetflix.com');
   const bl = mk('domainBlacklist', '⛔ Czarna lista (lektor wyłączony)', 'np.:\nrumble.com');
+  wl.style.minHeight = '220px';
   s.appendChild(wrap);
-  s.appendChild(el('div', { class: 'note' }, 'Zmiana działa od razu na otwartych kartach. Domena z czarnej listy zawsze wygrywa z białą.'));
+  const row = el('div', { class: 'btn-row', style: 'margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;' });
+  const fillBtn = el('button', { class: 'btn', type: 'button', title: 'Serwisy z lektorem wbudowanym, strony zapamiętane przez Łowcę (z odtwarzaczami), Kreator napisów, strony z napisami z pliku / baz, OCR. Niczego nie usuwa.' }, '📥 Wpisz domeny lektora');
+  const fillInfo = el('span', { class: 'note' }, '');
+  fillBtn.addEventListener('click', () => {
+    const D = window.__LektorDomains;
+    if (!D) return;
+    chrome.storage.local.get(D.SOURCE_KEYS, (all) => {
+      const r = D.fill(wl.value, Object.assign({}, all || {}, { domainWhitelist: wl.value, domainBlacklist: bl.value }));
+      if (!r.added.length) { fillInfo.textContent = '✔ Wszystkie domeny lektora już są na liście.'; return; }
+      wl.value = r.text;
+      save({ domainWhitelist: r.text });
+      fillInfo.textContent = '➕ Dopisano: ' + r.added.join(', ');
+    });
+  });
+  row.appendChild(fillBtn); row.appendChild(fillInfo);
+  s.appendChild(row);
+  s.appendChild(el('div', { class: 'note' }, 'Zmiana działa od razu na otwartych kartach. Domena z czarnej listy zawsze wygrywa z białą. Liczy się strona z paska adresu — odtwarzacz w ramce z innej domeny działa razem z nią. Nową stronę dopiszesz też w popupie („📋 ➕ Dodaj tę stronę”); „🔍 Szukaj napisów” i „🌐 bazy napisów” dopisują ją same. Pusta biała lista = lektor wszędzie.'));
   fields.__domainWl = { ta: wl }; fields.__domainBl = { ta: bl };
+  // zmiana z popupu („➕ Dodaj tę stronę”) albo z tła (Łowca) — pokaż od razu, chyba że ktoś właśnie pisze w polu
+  chrome.storage.onChanged.addListener((ch, area) => {
+    if (area !== 'local') return;
+    if (ch.domainWhitelist && document.activeElement !== wl) wl.value = String(ch.domainWhitelist.newValue || '');
+    if (ch.domainBlacklist && document.activeElement !== bl) bl.value = String(ch.domainBlacklist.newValue || '');
+  });
 }
 
 // ---------------- Kreator napisów ----------------
@@ -237,13 +258,24 @@ function findTargetTab() {
 function tabHost(tab) {
   try { return new URL(tab.url).hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { return ''; }
 }
+// [FIX 2026-11-02] karta, na której ostatnio wskazywano / testowano — do „💾 Dodaj” (KREATOR_SITE w tle)
+let kTabId = null, kPickTop = '';
+const KREATOR_FILES = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/domain_lists.js', 'assets/options_hooks.js'];
 function sendToTab(msg) {
   return findTargetTab().then((tab) => new Promise((resolve) => {
-    if (!tab) { resolve({ error: 'Brak otwartej karty ze wspieranej strony (YouTube, Netflix, Prime…).' }); return; }
-    chrome.tabs.sendMessage(tab.id, msg, (resp) => {
-      if (chrome.runtime.lastError || !resp) resolve({ error: 'Karta nie odpowiada — odśwież ją (F5) po przeładowaniu rozszerzenia.', host: tabHost(tab) });
-      else resolve(Object.assign({ host: tabHost(tab) }, resp));
+    if (!tab) { resolve({ error: 'Brak otwartej karty ze stroną www — otwórz film w karcie obok.' }); return; }
+    kTabId = tab.id;
+    const ask = (retry) => chrome.tabs.sendMessage(tab.id, msg, (resp) => {
+      if (!chrome.runtime.lastError && resp) { resolve(Object.assign({ host: tabHost(tab) }, resp)); return; }
+      // [FIX 2026-11-02] strona bez lektora (nie z listy serwisów ani Łowcy): dokładamy narzędzia Kreatora i pytamy jeszcze raz
+      if (retry) {
+        chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: KREATOR_FILES })
+          .then(() => ask(false), () => resolve({ error: 'Ta strona nie pozwala na Kreatora (strona systemowa albo sklep Chrome).', host: tabHost(tab) }));
+        return;
+      }
+      resolve({ error: 'Karta nie odpowiada — odśwież ją (F5) po przeładowaniu rozszerzenia.', host: tabHost(tab) });
     });
+    ask(true);
   }));
 }
 
@@ -285,16 +317,23 @@ function addSelector() {
   const host = $('kHost').value.trim().toLowerCase().replace(/^www\./, '');
   const sel = $('kSel').value.trim();
   if (!host || !sel) { setStatus('Podaj domenę i selektor', 'err'); return; }
+  // [FIX 2026-11-02] błędny selektor nie trafia do zapisu (wyłączałby czytanie napisów na tej domenie)
+  try { document.createDocumentFragment().querySelector(sel); } catch (e) { setStatus('❌ Błędny selektor CSS: ' + sel, 'err'); return; }
   const l = customSources[host] || (customSources[host] = []);
   if (l.indexOf(sel) === -1) l.push(sel);
   if (customSourcesOn[host] === undefined) customSourcesOn[host] = true;
   save({ customSources, customSourcesOn });
   $('kSel').value = '';
   renderKreatorList(); renderKreatorAll();
+  // [FIX 2026-11-02] strona bez wbudowanego lektora: lektor startuje tam sam (jak na stronie Łowcy) + biała lista domen
+  chrome.runtime.sendMessage({ action: 'KREATOR_SITE', host, tabId: kTabId, top: kPickTop }, (r) => {
+    void chrome.runtime.lastError;
+    if (r && r.ok && (r.listed || r.remembered)) $('kResult').textContent = '💾 Zapisano. Lektor będzie czytał z tego miejsca na ' + host + '.' + (r.listed ? '\nDopisano do białej listy domen: ' + r.listed : '');
+  });
 }
 
 function buildKreator() {
-  const s = section('🧪 Kreator napisów — własne źródła', 'Własny selektor CSS kontenera napisów dla wybranej domeny (czytany obok wbudowanych). Działa na stronach, na których działa rozszerzenie (YouTube, Netflix, Prime, iQ, Dailymotion, Rumble). Testy i wskazywanie działają na ostatnio używanej takiej karcie.', true);
+  const s = section('🧪 Kreator napisów — własne źródła', 'Gdy lektor nie widzi napisów na stronie, pokaż mu je: „🎯 Wskaż myszką” → na karcie z filmem niebieska ramka pokazuje, co lektor złapie (z podglądem tekstu); kółkiem myszy albo strzałkami ↑ ↓ poszerzasz / zawężasz ramkę, klikiem wybierasz. Potem „💾 Dodaj”. Działa na każdej stronie z filmem (strony z czytaniem z ekranu: Prime, iQIYI, Dailymotion, Rumble, Viki, WeTV, Bilibili, YouTube i strony Łowcy; Netflix czyta napisy z pliku, nie z ekranu). Narzędzia działają na ostatnio używanej karcie ze stroną www. Napisy obcojęzyczne lektor czyta po przetłumaczeniu — przy włączonym tłumaczeniu sieciowym.', true);
   const r1 = el('div', { class: 'row', style: 'border-top:none;' });
   r1.appendChild(el('input', { type: 'text', id: 'kHost', placeholder: 'domena, np. youtube.com', style: 'max-width:240px;flex:none;' }));
   r1.appendChild(el('input', { type: 'text', id: 'kSel', placeholder: '.selektor-kontenera-napisow', spellcheck: 'false' }));
@@ -314,7 +353,8 @@ function buildKreator() {
   const pick = el('button', { class: 'btn' }, '🎯 Wskaż myszką');
   pick.addEventListener('click', async () => {
     const r = await sendToTab({ action: 'KREATOR_PICK' });
-    $('kResult').textContent = r.error ? '❌ ' + r.error : '🎯 Przełącz się na kartę z filmem i kliknij w napisy (Esc = anuluj).';
+    kPickTop = '';
+    $('kResult').textContent = r.error ? '❌ ' + r.error : '🎯 Przełącz się na kartę z filmem (' + (r.host || '?') + ') i najedź myszką na napisy — niebieska ramka pokaże, co lektor złapie. Kółko myszy albo ↑ ↓ — szerzej / węziej, klik — wybierz, Esc — anuluj. Film stoi na czas wskazywania.';
     if (r.host && !$('kHost').value) { $('kHost').value = r.host; renderKreatorList(); }
   });
   const viewAll = el('button', { class: 'btn' }, '📋 Podgląd wszystkich domen');
@@ -935,18 +975,20 @@ function buildExport() {
 // ---------------- [VOX] Silnik mowy: test, restart, stan Supertonic ----------------
 // Wzór: buildEngineTools / refreshEngine ze strony ustawień VoxNemesis.
 let engineLive = null;
+// [FIX 2026-11-02] silnik i sprzęt czytane ze storage (pola wyboru są tylko w popupie)
+const engineState = { engine: 'matcha', backend: 'cpu' };
+const ENGINE_NAMES = { matcha: 'Matcha-TTS-PL 🌐', sherpa: 'Sherpa / Piper', browser: 'Głos przeglądarki', supertonic: 'Supertonic 3',
+  server: 'Serwer lokalny — własny adres', xtts: 'XTTS v2 (serwer :8000)', audio8: 'Audio8 ONNX (serwer :9300)', f5: 'Lektor Marek F5-TTS (serwer :9400)',
+  pocket: 'Pocket-TTS-PL (serwer :9200)', omnivoice: 'OmniVoice (serwer :9100)', kokoro: 'Kokoro (serwer :9500)' };
 function syncEngineRows() {
-  const eng = fields.ttsEngine && fields.ttsEngine.input.value;
-  Object.keys(fields).forEach((k) => {
-    const f = fields[k];
-    if (!f.def || !f.def.st) return;
-    const row = f.input.closest('.row');
-    if (row) row.style.opacity = eng === 'supertonic' ? '' : '.5';
+  chrome.storage.local.get(['ttsEngine', 'engineBackend'], (r) => {
+    engineState.engine = (r && r.ttsEngine) || 'matcha';
+    engineState.backend = (r && r.engineBackend) || 'cpu';
+    refreshEngine();
   });
-  refreshEngine();
 }
 function describeSupertonic(r) {
-  const want = { cpu: 'CPU', igpu: 'GPU zintegrowana', gpu: 'GPU dedykowana' }[(fields.engineBackend && fields.engineBackend.input.value) || 'cpu'];
+  const want = { cpu: 'CPU', igpu: 'GPU zintegrowana', gpu: 'GPU dedykowana' }[engineState.backend] || 'CPU';
   if (!r || !r.running || !r.loaded) {
     return { cls: '', txt: 'Supertonic: ' + want + ' · silnik uruchomi się przy pierwszej kwestii (albo kliknij ▶ Test lektora).'
       + (r && r.running && r.isolated === false ? '\n⚠ Brak izolacji COOP/COEP — CPU liczy na 1 wątku.' : '') };
@@ -970,10 +1012,10 @@ function describeSupertonic(r) {
 }
 function refreshEngine() {
   if (!engineLive) return;
-  const eng = fields.ttsEngine && fields.ttsEngine.input.value;
+  const eng = engineState.engine;
   if (eng !== 'supertonic') {
     engineLive.className = 'live';
-    engineLive.textContent = 'Aktywny silnik: ' + (fields.ttsEngine ? fields.ttsEngine.input.selectedOptions[0].textContent : '—') + '.';
+    engineLive.textContent = 'Aktywny silnik: ' + (ENGINE_NAMES[eng] || eng) + ' (zmiana: popup → „🗣 Silnik mowy”).';
     return;
   }
   try {
@@ -1023,8 +1065,6 @@ function buildEngineTools() {
     });
   });
   nvidia.addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('supertonic/GPU-NVIDIA-instrukcja.txt') }));
-  fields.ttsEngine.input.addEventListener('change', () => setTimeout(syncEngineRows, 0));
-  fields.engineBackend.input.addEventListener('change', () => setTimeout(refreshEngine, 400));
   setInterval(() => { if (!document.hidden) refreshEngine(); }, 2000);
 }
 
@@ -1255,7 +1295,8 @@ function build() {
 
 build();
 if (location.hash === '#ait') { const a = $('ait'); if (a) a.scrollIntoView(); }
-if (location.hash === '#uklad') { const a = $('uklad'); if (a) a.scrollIntoView(); }   // [AGENT-EXP] 2026-10-26: z popupu „⚙ Więcej”
+if (location.hash === '#uklad') { const a = $('uklad'); if (a) a.scrollIntoView(); }
+if (location.hash === '#domeny') { const a = $('domeny'); if (a) a.scrollIntoView(); }   // [FIX 2026-11-02] z popupu „✏️ Edytuj listy”   // [AGENT-EXP] 2026-10-26: z popupu „⚙ Więcej”
 chrome.storage.local.get(null, (all) => {
   all = all || {};
   applyValues(all);
@@ -1269,10 +1310,13 @@ chrome.storage.local.get(null, (all) => {
 
 // wynik „Wskaż myszką" z karty
 chrome.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.action === 'KREATOR_PICK_CANCEL') { $('kResult').textContent = '⏹ Wskazywanie anulowane.'; return; }
   if (!msg || msg.action !== 'KREATOR_PICKED') return;
   $('kSel').value = msg.selector || '';
   if (msg.host) $('kHost').value = msg.host;
-  $('kResult').textContent = '🎯 Wskazano: ' + (msg.selector || '?') + (msg.text ? '\n„' + msg.text + '"' : '');
+  kPickTop = msg.top || '';
+  $('kResult').textContent = '🎯 Wskazano: ' + (msg.selector || '?') + (msg.count ? '  (pasuje: ' + msg.count + ')' : '')
+    + (msg.text ? '\n„' + msg.text + '”' : '') + '\nSprawdź tekst i kliknij „💾 Dodaj”.';
   renderKreatorList();
 });
 
@@ -1291,5 +1335,5 @@ chrome.storage.onChanged.addListener((ch, area) => {
     }
     touched = true;
   });
-  if (touched && (ch.ttsEngine || ch.engineBackend)) syncEngineRows();
+  if (ch.ttsEngine || ch.engineBackend) syncEngineRows();   // [FIX 2026-11-02] pola są w popupie — stan ze storage
 });

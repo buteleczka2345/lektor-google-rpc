@@ -187,11 +187,25 @@ if (!('__lektorBufPauza' in window)) {
         '[class*="immersive-translate"]'
     ];
     var IT_GROUP = IT_SELECTORS.join(', ');
+    // [FIX 2026-11-02] własne źródła z Kreatora osobno: ich linie jednego napisu czytamy RAZEM (customHits → customJoined),
+    // a obcojęzyczne przy tłumaczeniu sieciowym idą do tłumacza (dawniej czytana była tylko ostatnia linia napisu,
+    // a angielski z własnego źródła był pomijany nawet z włączonym tłumaczeniem)
+    var CUSTOM_GROUP = '', customHits = [];
     // OPTIONS-PAGE: selektory z Kreatora napisów + listy domen (white/black) z options_hooks.js
     function optAsleep() { try { return !!(window.__LivedubOpts && window.__LivedubOpts.asleep()); } catch (e) { return false; } }
     try { if (window.__LivedubOpts) window.__LivedubOpts.onChange(function () {
-        try { IT_GROUP = IT_SELECTORS.concat(window.__LivedubOpts.customSelectors()).join(', '); } catch (e) {}
+        try { var cs = window.__LivedubOpts.customSelectors(); IT_GROUP = IT_SELECTORS.concat(cs).join(', '); CUSTOM_GROUP = cs.join(', '); } catch (e) {}
         try { if (optAsleep() && typeof enabled !== 'undefined' && enabled) { enabled = false; if (typeof stopSpeech === 'function') stopSpeech(); } } catch (e) {}
+    }); } catch (e) {}
+    // [FIX 2026-11-02] 📋 lista domen zmieniona na otwartej karcie: uśpij albo obudź ze stanem z popupu (dawniej raz uśpiony
+    // lektor wracał dopiero po odświeżeniu strony). Uśpiony = obserwator napisów nic nie skanuje (sprawdza enabled).
+    try { if (window.__LivedubOpts && window.__LivedubOpts.onSleep) window.__LivedubOpts.onSleep(function (a) {
+        if (a) { if (enabled) { enabled = false; stopSpeech(); } return; }
+        chrome.storage.local.get('enabled', function (r) {
+            enabled = !r || r.enabled === undefined ? true : !!r.enabled;
+            if (optAsleep()) enabled = false;
+            if (enabled && document.visibilityState === 'visible') applyDuck();
+        });
     }); } catch (e) {}
 
     // ===== Węzły ŹRÓDŁOWE IT (oryginał, np. EN) — MUSIMY JE POMIJAĆ =====
@@ -379,8 +393,8 @@ if (!('__lektorBufPauza' in window)) {
         video = document.querySelector('video');
         if (video) {
             video.addEventListener('seeked', function () { try { filePlayed.clear(); } catch (e) {} stopSpeech(); });   // [AGENT-EXP] cofnięcie → kwestie czytane jeszcze raz
-            video.addEventListener('pause', function () { pauseSpeech(); }); // pauza filmu zawsze pauzuje lektora
-            video.addEventListener('play', function () { if (enabled) applyDuck(); else if (duckReady && duckMemGet() !== null) restoreVolume(); });   // [AGENT-EXP] 2026-10-20
+            video.addEventListener('pause', function () { pausedAtMs = video.currentTime * 1000; pauseSpeech(); }); // pauza filmu zawsze pauzuje lektora   // [FIX 2026-11-02] pausedAtMs
+            video.addEventListener('play', function () { if (enabled) { applyDuck(); rereadInterrupted(); } else if (duckReady && duckMemGet() !== null) restoreVolume(); });   // [AGENT-EXP] 2026-10-20   // [FIX 2026-11-02] rereadInterrupted
             video.addEventListener('volumechange', function () { if (enabled && tabFocused) applyDuck(); });
             if (enabled && tabFocused) applyDuck();
         }
@@ -407,6 +421,7 @@ if (!('__lektorBufPauza' in window)) {
     var duckReady = false;
     function applyDuck() {
         if (!duckReady || !enabled) return;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
+        var LS = window.__LektorSched; if (LS && LS.duckAllowed && !LS.duckAllowed()) return;   // [FIX 2026-11-02] 🔉 ścisza dopiero, gdy lektor mówi
         var v = getVideo(); if (!v) return;
         var target = duckLevel / 100;
         duckOrig(v);   // [AGENT-EXP] 2026-10-20
@@ -417,15 +432,27 @@ if (!('__lektorBufPauza' in window)) {
         // głos już nigdy nie wracał. Ustawiamy min(target, savedVolume), żeby nigdy
         // nie przekroczyć pierwotnej głośności ustawionej przez użytkownika.
         if (savedVolume !== null) {
-            v.volume = Math.min(target, savedVolume);
+            setV(v, Math.min(target, savedVolume));
         } else if (v.volume > target) {
-            v.volume = target;
+            setV(v, target);
         }
     }
+    function setV(v, x) { var S = window.__LektorSched; if (S && S.setVol) S.setVol(v, x); else v.volume = x; }   // [FIX 2026-11-02] płynnie w trybie „tylko gdy mówi”
     function restoreVolume() {
         var v = getVideo();
         if (v) { duckOrig(v); duckMemSet(null); }   // [AGENT-EXP] 2026-10-20
-        if (v && savedVolume !== null) { v.volume = savedVolume; savedVolume = null; }
+        if (v && savedVolume !== null) { setV(v, savedVolume); savedVolume = null; }
+    }
+    try { window.__LektorSched.onDuck(function () { if (enabled) applyDuck(); }, function () { restoreVolume(); }); } catch (e) {}   // [FIX 2026-11-02] 🔉
+    // [FIX 2026-11-02] Kwestia z pliku / całych napisów przerwana pauzą (bez „Czytaj zawsze do końca”) — po wznowieniu
+    // czytana od początku (wspólna funkcja harmonogramu). Wcześniej zostawała oznaczona jako przeczytana i jej reszta przepadała.
+    var pausedAtMs = -1;
+    function rereadInterrupted() {
+        var at = pausedAtMs;
+        pausedAtMs = -1;
+        var S = window.__LektorSched, v = getVideo();
+        if (!S || !v || !fileSubs.length || S.readToEndOn()) return;
+        S.rearmAfterPause(fileSubs, filePlayed, null, at, v.currentTime * 1000, getOff());
     }
     function pauseSpeech() {
         try { chrome.runtime.sendMessage({ action: 'TTS_PAUSE', reason: 'pause' }); } catch (e) {}   // [AGENT-EXP] 2026-10-22: woła ją tylko pauza filmu — „Czytaj zawsze do końca” dokańcza zdanie
@@ -469,8 +496,6 @@ if (!('__lektorBufPauza' in window)) {
         // Opisy dźwięków w nawiasach — nieczytane przez lektora
         cleaned = cleaned.replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' ').replace(/（[^）]*）/g, ' ').replace(/【[^】]*】/g, ' ').replace(/\s{2,}/g, ' ').trim();
         if (!cleaned) return '';
-        // Mocne wulgaryzmy — wycinane; pusta linia nie jest czytana
-        cleaned = cleaned.replace(LIVEDUB_PROFANITY_RE, ' ').replace(/\s{2,}/g, ' ').trim();
         cleaned = cleaned.replace(/\b(?:www\.|https?:\/\/)\S+/gi, ' ');
         var junkBefore = (cleaned.match(JUNK_VOCAB_RE) || []).length;
 
@@ -528,8 +553,9 @@ if (!('__lektorBufPauza' in window)) {
         'i'
     );
 
-    // Mocne wulgaryzmy PL+EN (rdzenie łapią odmiany) — wycinane z mowy lektora.
-    var LIVEDUB_PROFANITY_RE = /(\b\p{L}*(?:kurw|chuj|huj|jeb|pizd|pierdol|pierdal|cipk|cip[aeęyiu]|dziwk|szmat|g[óo]wn|fuck|motherfuck|cunt|cocksuck|wank|whore|slut|pussy|shit)[^\s]*)/giu;
+    // [FIX 2026-11-02] Wulgaryzmy wycina teraz WYŁĄCZNIE jeden cenzor (assets/censor.js) zgodnie z ustawieniami
+    // (wł./wył., usuń / beep / gwiazdki, własne słowa). Ten stały wzorzec wycinał je zawsze — wbrew wyłączonemu cenzorowi,
+    // tryby beep / gwiazdki nie miały czego zamienić, a rdzenie łapały też niewinne słowa (np. „szmatka”).
 
     // Normalizacja do testów: usuwa znaki zero-width i sprowadza wszystkie
     // białe znaki (w tym niełamliwe, nowe linie między <span>ami banera)
@@ -639,8 +665,11 @@ if (!('__lektorBufPauza' in window)) {
                 if (node.querySelector && node.querySelector(IT_GROUP)) continue; // tylko liście
                 var text = cleanTranslationJunk((node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim());
                 if (text.length >= 2 && !isSystemPrompt(text)) {
-                    if (looksEnglish(text)) continue; // oryginał EN (IT) — nigdy nie czytamy
+                    var own = false;
+                    if (CUSTOM_GROUP) { try { own = node.matches(CUSTOM_GROUP); } catch (e) {} }
+                    if (looksEnglish(text) && !(own && netTr)) continue; // oryginał EN (IT) — nigdy nie czytamy (własne źródło: po tłumaczeniu)
                     results.push(text);
+                    if (own) customHits.push(text);
                     subFoundNode = node;
                 }
             }
@@ -823,7 +852,7 @@ if (!('__lektorBufPauza' in window)) {
     //   (wbudowane to oryginał EN/CN; fallback czytał angielskie zdania).
     // - Prime Video: wg ustawienia primeSubtitleSource ('both' domyślnie = IT + wbudowane).
     function getCurrentCaption() {
-        var itTexts = collectIT(document, []);
+        var itTexts = collectITJoined();
         var natTexts = collectNative(document, [], itTexts);
 
         var useIT = true;
@@ -943,6 +972,7 @@ if (!('__lektorBufPauza' in window)) {
         return false;
     }
 
+    function liveSrc(n) { try { var S = window.__LektorSched, g = S && S.getSource(); if (S && (!g || g.name !== n)) S.setSource(n, 0); } catch (e) {} }   // [FIX 2026-11-02] „czytam z: …”
     function emitIfNew(text) {
         if (!enabled) return;
         if (fileSubs.length) return; // tryb napisów z pliku — żywe czytanie wyłączone
@@ -969,6 +999,7 @@ if (!('__lektorBufPauza' in window)) {
             applyDuck();
             var id = 'stream_' + Date.now() + '_' + key;
             panelLog(cleanAgain, 'spoken');
+            liveSrc(netTr ? 'na żywo: napisy ze strony → tłumacz' : 'na żywo: napisy ze strony');
             chrome.runtime.sendMessage({
                 action: 'TTS_PLAY', id: id, text: cleanAgain, durationMs: 0,
                 videoTimeMs: vNow ? Math.round(vNow.currentTime * 1000) : 0
@@ -986,8 +1017,24 @@ if (!('__lektorBufPauza' in window)) {
     // ===== Tłumaczenie sieciowe na żywo (iq.com, Prime, Dailymotion, Rumble…) =====
     // Gdy w ustawieniach wybrany jest silnik sieciowy: polski napis (np. z Immersive Translate)
     // czytamy od razu, a napis w innym języku tłumaczy service worker wybranym silnikiem.
+    // [FIX 2026-11-02] własne źródło złapane linia po linii (≥2 trafienia) = jeden napis: linie w kolejności na stronie
+    function customText(min) {
+        var u = [];
+        for (var i = 0; i < customHits.length; i++) if (u.indexOf(customHits[i]) === -1) u.push(customHits[i]);
+        return u.length >= (min || 1) ? u.join(' ') : '';
+    }
+    function customJoined() { return customText(2); }
+    function collectITJoined() {
+        customHits = [];
+        var it = collectIT(document, []);
+        var joined = customJoined();
+        if (joined) { it = it.filter(function (t) { return customHits.indexOf(t) === -1; }); it.push(joined); }
+        return it;
+    }
     function getNetCaption() {
-        var itTexts = collectIT(document, []);
+        var itTexts = collectITJoined();
+        var own = customText(1);   // [FIX 2026-11-02] własne źródło z Kreatora ma pierwszeństwo (cały napis, obcy → tłumacz)
+        if (own) return { text: own, needTr: !(looksPolish(own) || PL_WORDS_RE.test(own)) };
         var natTexts = collectNative(document, [], itTexts);
         var all = itTexts.concat(natTexts);
         for (var i = all.length - 1; i >= 0; i--) {
@@ -1130,11 +1177,25 @@ if (!('__lektorBufPauza' in window)) {
         renderBlockedChips();
     }
 
+    // [FIX 2026-11-02] blokada pasuje do CAŁYCH słów (granice liter/cyfr): „tak” nie wycisza już zdań z „także”, „takiego”.
+    // Brzeg wpisu, który sam nie jest literą (np. „only the translation ,,”), sprawdzany jest jak dawniej (podciąg).
+    function phraseHit(text, phrase) {
+        if (!phrase) return false;
+        var w = /[\p{L}\p{N}]/u, i = text.indexOf(phrase);
+        var needL = w.test(phrase.charAt(0)), needR = w.test(phrase.charAt(phrase.length - 1));
+        while (i !== -1) {
+            var okL = !needL || i === 0 || !w.test(text.charAt(i - 1));
+            var okR = !needR || i + phrase.length >= text.length || !w.test(text.charAt(i + phrase.length));
+            if (okL && okR) return true;
+            i = text.indexOf(phrase, i + 1);
+        }
+        return false;
+    }
     function isUserBlocked(text) {
         if (!userBlockedPhrases.length) return false;
         var norm = normalizeForCheck(text).toLowerCase();
         for (var i = 0; i < userBlockedPhrases.length; i++) {
-            if (norm.indexOf(userBlockedPhrases[i]) !== -1) return true;
+            if (phraseHit(norm, String(userBlockedPhrases[i] || '').toLowerCase())) return true;
         }
         return false;
     }
@@ -1295,8 +1356,9 @@ if (!('__lektorBufPauza' in window)) {
         startFileLoop();
     }
     try {
-        window.__LIVEDUB_AUTO_APPLY__ = function (cues, keep) {   // [AGENT-EXP] 2026-10-25: keep
+        window.__LIVEDUB_AUTO_APPLY__ = function (cues, keep, label) {   // [AGENT-EXP] 2026-10-25: keep   // [FIX 2026-11-02] label: „czytam z: …”
             autoSubs = Array.isArray(cues) && cues.length ? cues : null;
+            if (label) autoSrcName = String(label);
             // [AGENT-EXP] 2026-10-17: wygrywają NAJNOWSZE napisy — Łowca / „Pobierz całe napisy” przykrywają
             // wcześniej wczytany plik (wcześniej plik blokował je na zawsze); ich koniec → wraca plik tej karty
             if (autoSubs) { manualFile = false; autoApplyNow(!!keep); }
@@ -1305,8 +1367,10 @@ if (!('__lektorBufPauza' in window)) {
         };
     } catch (e) {}
 
+    var fileSrcName = 'plik napisów', autoSrcName = '', domSrcSent = '';   // [FIX 2026-11-02] „czytam z: …”
     function fileApply(f) {
         manualFile = !!(f && Array.isArray(f.cues) && f.cues.length);
+        if (manualFile) fileSrcName = /^🌐/.test(String(f.name || '')) ? 'bazy napisów: ' + String(f.name).replace(/^🌐\s*/, '') : 'plik napisów: ' + String(f.name || 'bez nazwy');
         lastFile = manualFile ? f : null;   // [AGENT-EXP]
         if (!manualFile && autoSubs) { autoApplyNow(); return; }
         if (f && Array.isArray(f.cues) && f.cues.length) {
@@ -1351,25 +1415,16 @@ if (!('__lektorBufPauza' in window)) {
             if (!enabled || fileSubs.length === 0) return;
             var v = getVideo();
             if (!v) return;
-            var filePauza = v.paused;   // [AGENT-EXP] pauza: tylko buforowanie, bez czytania
-            if (filePauza && window.__lektorBufPauza === false) return;
-            var nowMs = v.currentTime * 1000;
-            var off = getOff();
-            var preBudget = document.visibilityState !== 'visible'   // [AGENT-EXP] tło: więcej na tick albo nic (checkbox)
-                ? (window.__lektorBufTlo === false ? 0 : 50) : 4; // max nowe syntezy na tick — bez burstów
-            for (var i = 0; i < fileSubs.length; i++) {
-                var sub = fileSubs[i];
-                var startT = sub.startMs + off;
-                var endT = sub.endMs + off;
-                if (nowMs > endT + 1000) continue;
-                if (!sub.text) { if (startT > nowMs + fileLookahead) break; continue; } // jeszcze nieprzetłumaczona
-                if (!filePreloaded.has(sub.id) && startT >= nowMs && startT <= nowMs + fileLookahead && preBudget > 0) {
-                    preBudget--;
-                    filePreloaded.add(sub.id);
-                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: sub.id, text: sub.text, startMs: startT, endMs: endT, nowMs: nowMs });   // [AGENT-EXP] 2026-10-25: nowMs = miejsce filmu (bramka zapasu w offscreen)
-                }
-                if (!filePauza && !filePlayed.has(sub.id) && nowMs >= startT && nowMs < endT) {
-                    filePlayed.add(sub.id);
+            if (v.paused && window.__lektorBufPauza === false) return;   // [AGENT-EXP] pauza: tylko buforowanie, bez czytania
+            // [FIX 2026-11-02] wspólny harmonogram (assets/lektor_scheduler.js): okno kwestii, tempo filmu, czytanie tylko na
+            // widocznej karcie z grającym filmem (wcześniej plik czytał też w karcie w tle)
+            var S = window.__LektorSched;
+            var srcName = manualFile ? fileSrcName : (autoSrcName || 'całe napisy');
+            if (domSrcSent !== srcName + fileSubs.length) { domSrcSent = srcName + fileSubs.length; S.setSource(srcName, fileSubs.length); }
+            S.tick({
+                list: fileSubs, nowMs: v.currentTime * 1000, off: getOff(), rate: v.playbackRate || 1, lookaheadMs: fileLookahead,
+                budget: S.budgetFor(v), canPlay: S.canPlay(v), preloaded: filePreloaded, played: filePlayed,
+                onPlay: function (sub) {
                     pushSpoken(sub.text);
                     var w = String(sub.text || '').trim().split(/\s+/).filter(Boolean).length;
                     spokenWords += w;
@@ -1377,15 +1432,9 @@ if (!('__lektorBufPauza' in window)) {
                     recentSpoken.push({ t: sub.text, w: w });
                     if (recentSpoken.length > 5) recentSpoken.shift();
                     applyDuck();
-                    if (isBlockedPhrase(sub.text)) continue; // blokujemy "Only the translation ,,"
-                    chrome.runtime.sendMessage({
-                        action: 'TTS_PLAY', id: sub.id, text: sub.text,
-                        durationMs: sub.endMs - sub.startMs,
-                        startMs: startT, endMs: endT
-                    });
+                    if (isBlockedPhrase(sub.text)) return false; // blokujemy "Only the translation ,,"
                 }
-                if (startT > nowMs + fileLookahead) break;
-            }
+            });
         }, 50);
     }
     try {

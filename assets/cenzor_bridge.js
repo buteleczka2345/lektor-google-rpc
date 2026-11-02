@@ -8,7 +8,7 @@
     window.__lektorCenzorBridge = true;
 
     var KEYS = ['cenzorOn', 'cenzorLive', 'cenzorBufferMs', 'cenzorHoldMs', 'cenzorLenMode', 'cenzorTextRate', 'cenzorTextAuto',   // [AGENT-EXP] 2026-10-20: tempo tekstu
-        'cenzorAsrTag', 'cenzorWords', 'cenzorNfPl', 'cenzorYtPl', 'customSources', 'customSourcesOn'];
+        'cenzorAsrTag', 'censorCustomWords', 'cenzorNfPl', 'cenzorYtPl', 'customSources', 'customSourcesOn'];   // [FIX 2026-11-02] jedna lista słów (wspólna z lektorem)
     var last = {};
 
     function host() { try { return location.hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { return ''; } }

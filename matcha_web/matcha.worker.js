@@ -50,8 +50,8 @@ async function releaseVoice() {
     S = null; SKey = '';
 }
 
-// [AGENT-EXP] 2026-10-24: plik modelu z paczki (matcha_web/models/<głos>/), a gdy go tam nie ma — z pamięci rozszerzenia
-// (IndexedDB 'lektorVoices'/'files', klucz 'matcha/<głos>/<plik>'; popup pobiera go z HuggingFace w „Języki świata”).
+// [AGENT-EXP] 2026-10-24: plik modelu z pamięci rozszerzenia (IndexedDB 'lektorVoices'/'files', klucz 'matcha/<głos>/<plik>';
+// popup pobiera go z HuggingFace w „Języki świata”). 2026-11-02: modeli nie ma już w paczce — brakujący głos pobiera engine.js.
 function idbGet(key) {
     return new Promise((resolve) => {
         let req;
@@ -69,10 +69,6 @@ function idbGet(key) {
     });
 }
 async function modelBytes(voice, f) {
-    try {
-        const r = await fetch(new URL('./models/' + voice + '/' + f, import.meta.url));
-        if (r.ok) return new Uint8Array(await r.arrayBuffer());
-    } catch (e) { /* brak pliku w paczce */ }
     const v = await idbGet('matcha/' + voice + '/' + f);
     if (!v) throw new Error('brak modelu ' + voice + '/' + f + ' — pobierz głos Matcha w popupie („Języki świata”)');
     return v instanceof Blob ? new Uint8Array(await v.arrayBuffer()) : new Uint8Array(v.buffer ? v.buffer.slice(0) : v);
@@ -82,7 +78,7 @@ async function loadVoice(voice) {
     const key = voice + '|' + tryb + '|' + (gpuBroken || tryb !== 'kombi' ? 'cpu' : 'gpu');   // [AGENT-EXP] 2026-10-24: cpu_fp32 = zawsze 'cpu' (inaczej wczytywał modele przy każdej kwestii)
     if (S && SKey === key) return S;
     await releaseVoice();
-    const bytes = (f) => modelBytes(voice, f);   // [AGENT-EXP] 2026-10-24: paczka albo pamięć rozszerzenia (pobrany z internetu)
+    const bytes = (f) => modelBytes(voice, f);   // [AGENT-EXP] 2026-10-24: pamięć rozszerzenia (pobrany z internetu)
     const vj = JSON.parse(new TextDecoder().decode(await bytes('voices.json')));
     if (!gpuBroken && tryb === 'kombi') {
         try {

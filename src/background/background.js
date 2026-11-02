@@ -1,6 +1,8 @@
 import { extTrJobPush, extTrJobCancel, gtabTranslateText, extTrTranslateLive, extTrTranslateList, extTrRaceOne } from './ext_net.js'; // [AGENT-EXP] extTrRaceOne
 import { cacheGetVideo, cachePutVideo, cacheStats, cacheClear } from './subs_cache.js';
 import { subsDbSearch, subsDbGet } from './subs_db.js';
+import '../../assets/domain_lists.js'; // [FIX 2026-11-02] 📋 wspólne listy domen → globalThis.__LektorDomains
+const DL = globalThis.__LektorDomains;
 
 const OFFSCREEN_PATH = chrome.runtime.getURL('src/offscreen/offscreen.html');
 
@@ -18,21 +20,78 @@ chrome.storage.local.get(['ttsEngine', 'customVoice', 'builtinVoiceRemoved'], (i
     if (Object.keys(patch).length) chrome.storage.local.set(patch);
 });
 
+// [FIX 2026-11-02] JEDEN cenzor: dawna osobna lista cenzora dźwięku filmu (cenzorWords, „puste = wbudowana”) trafia raz
+// do wspólnych własnych słów (censorCustomWords) — oba wyjścia cenzora (mowa lektora, dźwięk filmu) mają teraz jedną listę.
+chrome.storage.local.get(['cenzorWords', 'censorCustomWords', 'censorOneListV1'], (it) => {
+    if (!it || it.censorOneListV1) return;
+    // każda lista swoim formatem: własne słowa lektora po przecinku (frazy ze spacją zostają całe), dawna lista dźwięku — też po spacji
+    const have = String(it.censorCustomWords || '').split(/[,;\n]+/).map((w) => w.trim()).filter(Boolean);
+    const seen = new Set(have.map((w) => w.toLowerCase()));
+    String(it.cenzorWords || '').split(/[\s,;\n]+/).map((w) => w.trim()).filter((w) => w.replace(/\*+$/, '').length >= 2)
+        .forEach((w) => { if (!seen.has(w.toLowerCase())) { seen.add(w.toLowerCase()); have.push(w); } });
+    const patch = { censorOneListV1: true };
+    if (String(it.cenzorWords || '').trim()) patch.censorCustomWords = have.join(', ');
+    chrome.storage.local.set(patch, () => { chrome.storage.local.remove('cenzorWords'); });
+});
+
+// [FIX 2026-11-02] 📋 Domyślnie lektor działa TYLKO na domenach z białej listy (przełącznik domainListsOn, domyślnie WŁ.;
+// popup → „📋 Tylko domeny z listy”). Jednorazowo wpisujemy na listę wszystkie domeny lektora: serwisy z manifestu,
+// strony Łowcy (z odtwarzaczami), Kreator napisów, strony z napisami z pliku / baz, OCR i układ popupu.
+// Niczego nie usuwamy — do listy wpisanej wcześniej ręcznie brakujące domeny są dopisywane na końcu.
+chrome.storage.local.get('domainWhitelistFillV1', (f) => {
+    if (f && f.domainWhitelistFillV1) return;
+    chrome.storage.local.get(DL.SOURCE_KEYS, (all) => {
+        const r = DL.fill(all && all.domainWhitelist, all || {});
+        const patch = { domainWhitelistFillV1: true };
+        if (r.added.length) patch.domainWhitelist = r.text;
+        chrome.storage.local.set(patch);
+    });
+});
+// Użycie lektora z popupu na nowej stronie („🔍 Szukaj napisów”, „🌐 bazy napisów”) = zgoda na lektora tutaj: przy
+// włączonym „Tylko domeny z listy” domena strony trafia na białą listę (czarnej listy nie ruszamy). Zwraca dopisaną domenę.
+async function domainListsAllow(url) {
+    const h = DL.hostOf(url);
+    if (!h) return '';
+    const o = await chrome.storage.local.get(['domainListsOn', 'domainWhitelist', 'domainBlacklist']);
+    if (DL.state(h, '', o).why !== 'notwhite') return '';
+    const text = DL.addHost(o.domainWhitelist, h);
+    if (!text) return '';
+    await chrome.storage.local.set({ domainWhitelist: text });
+    return h;
+}
+
+// [FIX 2026-11-02] przełącznik „Google RPC” usunięty (adres 404) — sprzątamy jego zapis
+try { chrome.storage.local.remove('extTrGoogleRpc'); } catch (e) {}
+
 // ===== Blokowane frazy — lektor NIGDY ich nie czyta =====
 // Centralny filtr: ostateczna kontrola odbywa się tutaj, przed TTS_PLAY → callOffscreen.
 const BLOCKED_PHRASES = [
     'only the translation',
     'only the translation ,,'
 ];
+// [FIX 2026-11-02] blokada pasuje do CAŁYCH słów (granice liter/cyfr): „tak” nie wycisza już zdań z „także”, „takiego”.
+// Brzeg wpisu, który sam nie jest literą (np. „only the translation ,,”), sprawdzany jest jak dawniej (podciąg).
+function phraseHit(text, phrase) {
+    if (!phrase) return false;
+    var w = /[\p{L}\p{N}]/u, i = text.indexOf(phrase);
+    var needL = w.test(phrase.charAt(0)), needR = w.test(phrase.charAt(phrase.length - 1));
+    while (i !== -1) {
+        var okL = !needL || i === 0 || !w.test(text.charAt(i - 1));
+        var okR = !needR || i + phrase.length >= text.length || !w.test(text.charAt(i + phrase.length));
+        if (okL && okR) return true;
+        i = text.indexOf(phrase, i + 1);
+    }
+    return false;
+}
 function isBlockedPhrase(text) {
     if (!text || typeof text !== 'string') return false;
     // [AGENT-EXP] ta sama normalizacja co przy zapisie blokady (lektor-settings.js): niewidoczne znaki i wielokrotne spacje
     const t = text.replace(/[\u200B-\u200D\uFEFF\u00AD]/g, ' ').replace(/[\s\u00A0]+/g, ' ').trim().toLowerCase();
     for (let i = 0; i < BLOCKED_PHRASES.length; i++) {
-        if (t.includes(BLOCKED_PHRASES[i])) return true;
+        if (phraseHit(t, BLOCKED_PHRASES[i])) return true;
     }
     for (let i = 0; i < userBlockedPhrases.length; i++) {
-        if (t.includes(userBlockedPhrases[i])) return true;
+        if (phraseHit(t, String(userBlockedPhrases[i] || '').toLowerCase())) return true;
     }
     return false;
 }
@@ -40,12 +99,15 @@ function isBlockedPhrase(text) {
 // ===== Użytkownicze blokady z panelu (zapisane w chrome.storage.local) =====
 // Ładuje się automatycznie przy starcie service workera i aktualizuje przy zmianach.
 let userBlockedPhrases = [];
+// [FIX 2026-11-02] obietnica wczytania blokad — TTS_PLAY / TTS_PRELOAD czekają na nią. Pierwsza kwestia po wybudzeniu
+// service workera przychodzi zwykle, zanim storage odpowie, więc wcześniej mogła przejść mimo blokady.
+let userBlockedReady = Promise.resolve();
 
 function loadUserBlockedPhrases() {
     // [AGENT-EXP] chrome.storage.local.get zwraca w MV3 OBIETNICĘ — wcześniej czytane bez await, więc po każdym
     // uśpieniu service workera (≈30 s bezczynności) lista Blokad była PUSTA, dopóki użytkownik czegoś nie zmienił.
     try {
-        chrome.storage.local.get('userBlockedPhrases').then((result) => {
+        userBlockedReady = chrome.storage.local.get('userBlockedPhrases').then((result) => {
             userBlockedPhrases = Array.isArray(result && result.userBlockedPhrases) ? result.userBlockedPhrases : [];
         }).catch(() => { userBlockedPhrases = []; });
     } catch (e) {
@@ -167,13 +229,38 @@ async function callOffscreen(payload, tries = 50) {
 }
 
 // OPTIONS-PAGE: offscreen zgłasza pustą kolejkę lektora → przekazujemy do kart (wznowienie filmu po pauzie z lektorem)
+// [FIX 2026-11-02] tylko do kart, z których lektor czytał w ostatnich 15 min (wcześniej do WSZYSTKICH kart po każdej
+// kwestii). Lista w storage.session przeżywa uśpienie service workera.
+const NARRATOR_TAB_MS = 15 * 60000;
+const narratorTabs = new Map();   // karta → chwila ostatniego TTS_PLAY
+try {
+    chrome.storage.session.get('narratorTabs').then((r) => {
+        (Array.isArray(r && r.narratorTabs) ? r.narratorTabs : []).forEach((e) => { if (Array.isArray(e) && !narratorTabs.has(e[0])) narratorTabs.set(e[0], e[1]); });
+    }).catch(() => {});
+} catch (e) {}
+function narratorTabNote(tabId) {
+    if (tabId == null) return;
+    const now = Date.now(), prev = narratorTabs.get(tabId) || 0;
+    narratorTabs.set(tabId, now);
+    if (now - prev < 60000) return;   // zapis najwyżej raz na minutę na kartę
+    for (const [t, at] of narratorTabs) if (now - at > NARRATOR_TAB_MS) narratorTabs.delete(t);
+    try { chrome.storage.session.set({ narratorTabs: [...narratorTabs] }).catch(() => {}); } catch (e) {}
+}
 chrome.runtime.onMessage.addListener((msg, sender) => {
     if (!msg || msg.action !== 'TTS_QUEUE_IDLE' || (sender && sender.tab)) return;
-    chrome.tabs.query({}, (tabs) => {
-        (tabs || []).forEach((t) => {
-            try { chrome.tabs.sendMessage(t.id, { action: 'TTS_QUEUE_IDLE' }, () => { void chrome.runtime.lastError; }); } catch (e) {}
-        });
-    });
+    const now = Date.now();
+    for (const [t, at] of narratorTabs) {
+        if (now - at > NARRATOR_TAB_MS) continue;
+        try { chrome.tabs.sendMessage(t, { action: 'TTS_QUEUE_IDLE' }, () => { void chrome.runtime.lastError; }); } catch (e) {}
+    }
+});
+chrome.tabs.onRemoved.addListener((tabId) => { narratorTabs.delete(tabId); });
+// [FIX 2026-11-02] 🔉 lektor zaczął mówić → karta tej kwestii (ściszanie filmu tylko na czas mowy)
+chrome.runtime.onMessage.addListener((msg, sender) => {
+    if (!msg || msg.action !== 'TTS_SPEAK' || (sender && sender.tab)) return;
+    const tab = Number(msg.tab);
+    if (!Number.isInteger(tab)) return;
+    try { chrome.tabs.sendMessage(tab, { action: 'TTS_SPEAK' }, () => { void chrome.runtime.lastError; }); } catch (e) {}
 });
 
 // ENERGIA: dokument lektora (offscreen) NIE startuje razem z przeglądarką — tworzy go dopiero
@@ -229,7 +316,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             } else if (msg.kind === 'clear-error') {
                 chrome.storage.local.remove('__offscreenError');
             } else if (msg.kind === 'log') {
-                chrome.storage.local.set({ __offscreenLog: Array.isArray(msg.entries) ? msg.entries : [] });
+                chrome.storage.session.set({ __offscreenLog: Array.isArray(msg.entries) ? msg.entries : [] }).catch(() => {});   // [FIX 2026-11-02] session — patrz telemetria
             }
         } catch (e) { /* ignore */ }
         sendResponse({ status: 'diag_ok' });
@@ -248,7 +335,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.action === 'GET_TTS_SETTINGS') {
         // [AGENT-EXP] 2026-10-16 — przekazuje wybór Sherpa/Matcha do dokumentu offscreen.
         // [AGENT-EXP] Przekaż wybór silnika i lokalnych głosów także przy starcie dokumentu offscreen.
-        chrome.storage.local.get(['tempoMode', 'autoCatchup', 'readToEnd', 'compressor', 'liveBufTTLDays', 'ttsVolume', 'piperSpeed', 'offlineVoice', 'customVoice', 'builtinVoiceRemoved', 'censorEnabled', 'censorMode', 'censorCustomWords', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'], (items) => {
+        chrome.storage.local.get(['tempoMode', 'autoCatchup', 'readToEnd', 'compressor', 'liveBufTTLDays', 'ttsVolume', 'piperSpeed', 'offlineVoice', 'customVoice', 'builtinVoiceRemoved', 'censorEnabled', 'censorMode', 'censorCustomWords', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice', 'serverUrl', 'serverVoice', 'pronDict', 'shortenLong'], (items) => {
             sendResponse({
                 settings: {
                     tempoMode: ['A', 'B', 'C'].indexOf(items.tempoMode) >= 0 ? items.tempoMode : 'A', // OPTIONS-PAGE
@@ -258,12 +345,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                     liveBufTTLDays: Number(items.liveBufTTLDays) || 0,
                     ttsVolume: items.ttsVolume === undefined ? 100 : items.ttsVolume,
                     piperSpeed: Number(items.piperSpeed) || 1,
-                    ttsEngine: ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'].indexOf(items.ttsEngine) >= 0 ? items.ttsEngine : 'matcha',   // [AGENT-EXP] 2026-10-24: domyślnie Matcha 🌐
+                    ttsEngine: ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'server', 'supertonic', 'browser'].indexOf(items.ttsEngine) >= 0 ? items.ttsEngine : 'matcha',   // [AGENT-EXP] 2026-10-24: domyślnie Matcha 🌐
                     tts2Voice: typeof items.tts2Voice === 'string' ? items.tts2Voice : '',
                     audio8Voice: typeof items.audio8Voice === 'string' ? items.audio8Voice : 'default',
                     pocketVoice: typeof items.pocketVoice === 'string' && items.pocketVoice ? items.pocketVoice : 'ref',   // [AGENT-EXP]
                     omnivoiceVoice: typeof items.omnivoiceVoice === 'string' ? items.omnivoiceVoice : 'male, young adult, moderate pitch',   // [AGENT-EXP] OmniVoice ('' = losowy)
                     kokoroVoice: typeof items.kokoroVoice === 'string' && items.kokoroVoice ? items.kokoroVoice : 'pm_mateusz',   // [AGENT-EXP] 2026-10-27 Kokoro
+                    serverUrl: typeof items.serverUrl === 'string' && items.serverUrl ? items.serverUrl : 'ws://127.0.0.1:9000',   // [FIX 2026-11-02] Serwer lokalny — własny adres
+                    serverVoice: typeof items.serverVoice === 'string' ? items.serverVoice : '',
+                    pronDict: typeof items.pronDict === 'string' ? items.pronDict : '',   // [FIX 2026-11-02] 🗣 słownik wymowy
+                    shortenLong: items.shortenLong === true,   // [FIX 2026-11-02] ✂ skracanie za długich kwestii (AI)
                     matchaVoice: typeof items.matchaVoice === 'string' && items.matchaVoice ? items.matchaVoice : 'web:male_voxcpm_2:elegancki',   // [AGENT-EXP] 2026-10-17 Matcha: głos z VOICES serwer_matcha.py; 2026-10-24: domyślnie w przeglądarce (matcha_web)
                     ...supertonicSettings(items),   // [VOX] Supertonic: głos, jakość, CPU/GPU
                     browserVoice: typeof items.browserVoice === 'string' ? items.browserVoice : '',   // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki
@@ -301,6 +392,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.pocketVoice) patch.pocketVoice = changes.pocketVoice.newValue;   // [AGENT-EXP] Pocket-TTS-PL
     if (changes.omnivoiceVoice) patch.omnivoiceVoice = changes.omnivoiceVoice.newValue;   // [AGENT-EXP] OmniVoice
     if (changes.kokoroVoice) patch.kokoroVoice = changes.kokoroVoice.newValue;   // [AGENT-EXP] 2026-10-27 Kokoro
+    if (changes.serverUrl) patch.serverUrl = changes.serverUrl.newValue;   // [FIX 2026-11-02] Serwer lokalny — własny adres
+    if (changes.serverVoice) patch.serverVoice = changes.serverVoice.newValue;
+    if (changes.pronDict) patch.pronDict = changes.pronDict.newValue || '';   // [FIX 2026-11-02]
+    if (changes.shortenLong) patch.shortenLong = changes.shortenLong.newValue === true;
     if (changes.matchaVoice) patch.matchaVoice = changes.matchaVoice.newValue;   // [AGENT-EXP] Matcha-TTS-PL
     if (changes.matchaWebTryb) patch.matchaWebTryb = changes.matchaWebTryb.newValue;   // [AGENT-EXP] 2026-10-24: wariant Matcha 🌐
     if (changes.supertonicVoice) patch.supertonicVoice = changes.supertonicVoice.newValue;   // [VOX] Supertonic
@@ -384,6 +479,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         })().then((keys) => sendResponse({ keys }), () => sendResponse({ keys: [] }));
         return true;
     }
+    if (msg.action === 'LEKTOR_STATS') {   // [FIX 2026-11-02] 📊 pasek lektora: pominięte kwestie i opóźnienie tej karty
+        (async () => {
+            const tab = sender && sender.tab ? sender.tab.id : null;
+            if (tab == null || !(await hasOffscreen())) return null;
+            return sendOffscreen({ action: 'TTS_STATS', tab: String(tab) });
+        })().then((r) => sendResponse(r || null), () => sendResponse(null));
+        return true;
+    }
     if (msg.action === 'LEKTOR_FILE_FOR_TAB') {   // popup: status dla aktywnej karty
         chrome.tabs.get(msg.tabId).then((t) => fileSubsFor(t && t.url)).then((file) => sendResponse({ file }), () => sendResponse({ file: null }));
         return true;
@@ -448,6 +551,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.target === 'offscreen') return;
     if (ocrOnlyBlocksTts(msg)) { sendResponse({ status: 'ocr-only' }); return; }   // [AGENT-EXP] tryb „tylko OCR”
     if ((msg.action === 'TTS_PRELOAD' || msg.action === 'TTS_PLAY') && msg.id != null) msg = { ...msg, id: ttsCacheId(msg, _sender) };   // [AGENT-EXP]
+    if (msg.action === 'TTS_PLAY' && _sender && _sender.tab) narratorTabNote(_sender.tab.id);   // [FIX 2026-11-02] adresaci TTS_QUEUE_IDLE
+    // [FIX 2026-11-02] pauza / czyszczenie ze strony niosą kartę — offscreen pomija je, gdy czyta inna karta
+    if ((msg.action === 'TTS_PAUSE' || msg.action === 'TTS_CLEAR_BUFFER') && _sender && _sender.tab && _sender.tab.id != null) msg = { ...msg, tab: String(_sender.tab.id) };
     if (msg.action === 'OFFSCREEN_READY') {
         sendResponse({ status: 'ok' });
         return true;
@@ -464,9 +570,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 // [AGENT-EXP] 2026-10-21: router mowy napisany od nowa (Multilektor). Każde zlecenie dla dokumentu lektora dostaje
 // aktualny silnik i głosy ze storage — pierwsza kwestia po zmianie ustawienia trafia od razu do właściwego silnika.
-const TTS_KEYS = ['engine', 'piperSpeed', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice',
+const TTS_KEYS = ['engine', 'piperSpeed', 'ttsEngine', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice', 'serverUrl', 'serverVoice',
     'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice', 'matchaWebTryb', 'lookaheadMin'];   // [AGENT-EXP] 2026-10-25: lookaheadMin → bramka zapasu   // [AGENT-EXP] 2026-10-24: matchaWebTryb
-const TTS_ENGINES = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'];
+const TTS_ENGINES = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'server', 'supertonic', 'browser'];
 const str = (v, dflt, allowEmpty) => (typeof v === 'string' && (allowEmpty || v) ? v : dflt);
 async function ttsEngineFields(withSpeed) {
     const s = await chrome.storage.local.get(TTS_KEYS);
@@ -478,6 +584,8 @@ async function ttsEngineFields(withSpeed) {
         pocketVoice: str(s.pocketVoice, 'ref'),
         omnivoiceVoice: str(s.omnivoiceVoice, 'male, young adult, moderate pitch', true),   // '' = losowy
         kokoroVoice: str(s.kokoroVoice, 'pm_mateusz'),   // [AGENT-EXP] 2026-10-27 Kokoro
+        serverUrl: str(s.serverUrl, 'ws://127.0.0.1:9000'),   // [FIX 2026-11-02] Serwer lokalny — własny adres
+        serverVoice: str(s.serverVoice, '', true),
         matchaVoice: str(s.matchaVoice, 'web:male_voxcpm_2:elegancki'),   // [AGENT-EXP] 2026-10-24
         ...supertonicSettings(s),   // [VOX] Supertonic: głos, jakość, CPU/GPU
         browserVoice: str(s.browserVoice, '', true),   // 🗣 głos przeglądarki ('' = automatycznie)
@@ -496,12 +604,14 @@ const TTS_ROUTES = {
     async INIT_TTS(msg) { return callOffscreen({ ...msg, ...(await ttsEngineFields()) }); },
     async CLEAR_CACHE(msg) { return callOffscreen({ ...msg, ...(await ttsEngineFields()) }); },
     async TTS_PRELOAD(msg) {
+        await userBlockedReady;   // [FIX 2026-11-02]
         if (isBlockedPhrase(msg.text)) return { status: 'blocked' };   // fraza na czarnej liście — bez syntezy
         const fields = await ttsEngineFields();
         callOffscreen({ ...msg, ...fields }, 20).catch(() => {});   // nie czekamy: nagrywanie do przodu idzie w tle
         return { status: 'queued' };
     },
     async TTS_PLAY(msg) {
+        await userBlockedReady;   // [FIX 2026-11-02]
         if (isBlockedPhrase(msg.text)) return { status: 'blocked' };
         return callOffscreen({ ...msg, ...(await ttsEngineFields(true)) });
     },
@@ -512,6 +622,12 @@ const TTS_ROUTES = {
     async TTS_PAUSE(msg) { if (await hasOffscreen()) sendOffscreen(msg).catch(() => {}); return { status: 'stopped' }; },
     async TTS_CLEAR_BUFFER(msg) { if (await hasOffscreen()) sendOffscreen(msg).catch(() => {}); return { status: 'stopped' }; }
 };
+
+// [FIX 2026-11-02] zamknięta karta, z której lektor właśnie czytał — kolejka tej karty przestaje grać
+// (wcześniej po zamknięciu karty lektor dokańczał jeszcze kilka zaległych kwestii). Inne karty: offscreen pomija.
+chrome.tabs.onRemoved.addListener((tabId) => {
+    hasOffscreen().then((ok) => { if (ok) return sendOffscreen({ action: 'TTS_CLEAR_BUFFER', tab: String(tabId) }); }).catch(() => {});
+});
 
 // ===== Nagrywanie lektora (REC) — orkiestracja sesji + pobieranie WAV =====
 // Przycisk REC na stronie (assets/rec_button.js) → tu → offscreen (zapis kwestii do IndexedDB).
@@ -529,7 +645,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             if (msg.action === 'REC_TELEMETRY') {
                 try {
                     const plat = (msg.platform === 'youtube' || msg.platform === 'dom') ? msg.platform : 'netflix';
-                    await chrome.storage.local.set({
+                    // [FIX 2026-11-02] storage.session (pamięć przeglądarki): zapis co 2 s z każdej karty z filmem nie budzi już
+                    // nasłuchów chrome.storage.onChanged we wszystkich kartach (skrypty stron nie widzą obszaru „session”)
+                    await chrome.storage.session.set({
                         ['__recTelemetry_' + plat]: {
                             platform: plat,
                             nowMs: msg.nowMs || 0,
@@ -710,7 +828,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             if (msg.action === 'OCR_TOOL_CMD') {
                 const tabId = sender && sender.tab && sender.tab.id;
                 if (tabId == null) { sendResponse({ ok: false }); return; }
-                await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/ocr_tool.js'] }).catch(() => {});   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
+                await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lektor_scheduler.js', 'assets/ocr_tool.js'] }).catch(() => {});   // [FIX 2026-11-02] + harmonogram (wskaźnik źródła)   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
                 chrome.tabs.sendMessage(tabId, { action: 'OCR_TOOL', cmd: msg.cmd }, (r) => {
                     void chrome.runtime.lastError;
                     sendResponse(r || { ok: false, novideo: true });
@@ -751,31 +869,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // [CC] Lekki przycisk CC Łowcy na każdej stronie z filmem — TYLKO gdy zaznaczony „Pokazuj GUI Łowcy”.
 // Zaznaczony → rejestrujemy assets/lowca_cc_stub.js (nowe strony) i wstrzykujemy go do otwartych kart;
 // odznaczony → wyrejestrowujemy, a przyciski na otwartych stronach same znikają (słuchają storage).
+// [FIX 2026-11-02] 📋 przy „Tylko domeny z listy” przycisk jest tylko na domenach z białej listy (bez czarnej) —
+// na pozostałych stronach nie ma żadnego skryptu lektora (dawniej przycisk sprawdzał każdą stronę co 2 s).
 const CC_STUB_ID = 'lektor-cc-stub';
-async function ccStubSync(on, injectOpen) {
+const CC_STUB_JS = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_cc_stub.js'];   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
+let ccStubChain = Promise.resolve();
+function ccStubSync(on, injectOpen) {
+    ccStubChain = ccStubChain.then(() => ccStubSyncNow(on, injectOpen), () => ccStubSyncNow(on, injectOpen));
+    return ccStubChain;
+}
+async function ccStubSyncNow(on, injectOpen) {
     try {
-        const reg = await chrome.scripting.getRegisteredContentScripts({ ids: [CC_STUB_ID] }).catch(() => []);
-        if (on && !reg.length) {
-            await chrome.scripting.registerContentScripts([{
-                id: CC_STUB_ID, js: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_cc_stub.js'], matches: ['http://*/*', 'https://*/*'],
-                allFrames: false, runAt: 'document_idle'
-            }]);
-        } else if (!on && reg.length) {
-            await chrome.scripting.unregisterContentScripts({ ids: [CC_STUB_ID] });
+        const reg = (await chrome.scripting.getRegisteredContentScripts({ ids: [CC_STUB_ID] }).catch(() => []))[0] || null;
+        if (!on) { if (reg) await chrome.scripting.unregisterContentScripts({ ids: [CC_STUB_ID] }).catch(() => {}); return; }
+        const lists = await chrome.storage.local.get(['domainListsOn', 'domainWhitelist', 'domainBlacklist']);
+        const listsOn = lists.domainListsOn !== false;
+        const white = listsOn ? DL.patterns(DL.parse(lists.domainWhitelist)) : [];
+        const black = listsOn ? DL.patterns(DL.parse(lists.domainBlacklist)) : [];
+        const script = { id: CC_STUB_ID, js: CC_STUB_JS, matches: white.length ? white : ['http://*/*', 'https://*/*'], allFrames: false, runAt: 'document_idle' };
+        if (black.length) script.excludeMatches = black;
+        const key = (r) => JSON.stringify([r.matches || [], r.excludeMatches || []]);
+        if (!reg || key(reg) !== key(script)) {   // przy każdym starcie tła — tylko gdy coś się zmieniło
+            if (reg) await chrome.scripting.unregisterContentScripts({ ids: [CC_STUB_ID] }).catch(() => {});
+            await chrome.scripting.registerContentScripts([script]);
         }
-        if (on && injectOpen) {
+        if (injectOpen) {
             const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
             for (const t of tabs) {
-                chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_cc_stub.js'] }).catch(() => {});   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
+                if (DL.state(DL.hostOf(t.url), '', lists).asleep) continue;
+                chrome.scripting.executeScript({ target: { tabId: t.id }, files: CC_STUB_JS }).catch(() => {});
             }
         }
     } catch (e) { console.warn('[LiveDub SW] przycisk CC:', e); }
 }
 chrome.storage.local.get('lowcaGui').then((r) => ccStubSync(!!(r && r.lowcaGui), false)).catch(() => {});
 chrome.storage.onChanged.addListener((ch, area) => {
-    if (area === 'local' && ch.lowcaGui) ccStubSync(!!ch.lowcaGui.newValue, true);
+    if (area !== 'local') return;
+    if (ch.lowcaGui) ccStubSync(!!ch.lowcaGui.newValue, true);
+    else if (ch.domainWhitelist || ch.domainBlacklist || ch.domainListsOn) {   // [FIX 2026-11-02] 📋 nowe listy = nowe strony przycisku
+        chrome.storage.local.get('lowcaGui').then((r) => { if (r && r.lowcaGui) ccStubSync(true, false); }).catch(() => {});
+    }
 });
-const LOWCA_LEKTOR_FRAMES = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/options_hooks.js', 'assets/lektor_bar.js', 'assets/dom_content.js'];   // [AGENT-EXP] 2026-10-21: i18n — język paneli   // [AGENT-EXP] lektor_bar: 📊 pasek postępu
+const LOWCA_LEKTOR_FRAMES = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/domain_lists.js', 'assets/options_hooks.js', 'assets/lektor_bar.js', 'assets/lektor_scheduler.js', 'assets/dom_content.js'];   // [FIX 2026-11-02] + wspólny harmonogram   // [AGENT-EXP] 2026-10-21: i18n — język paneli   // [AGENT-EXP] lektor_bar: 📊 pasek postępu
 const LOWCA_LEKTOR_TOP = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lektor-controls.js', 'assets/lektor-settings.js'];   // [AGENT-EXP] 2026-10-21
 // Serwisy z wbudowanym lektorem (manifest) — tam nic nie dokładamy.
 const LOWCA_BUILTIN = /(^|\.)(netflix\.com|youtube\.com|youtube-nocookie\.com|primevideo\.com|amazon\.com|iq\.com|iqiyi\.com|dailymotion\.com|dai\.ly|rumble\.com|viki\.com|wetv\.vip|bilibili\.com|bilibili\.tv)$/;
@@ -824,9 +959,12 @@ function lowcaSyncScripts() {
 async function lowcaSyncScriptsNow() {
     try {
         const sites = await lowcaSitesGet();
-        const tops = Object.keys(sites).filter((h) => !LOWCA_BUILTIN.test(h));
+        // [FIX 2026-11-02] 📋 tylko strony dozwolone przez listy domen — na pozostałych Łowca nie startuje (zero procesora)
+        const lists = await chrome.storage.local.get(['domainListsOn', 'domainWhitelist', 'domainBlacklist']);
+        const black = lists.domainListsOn === false ? [] : DL.parse(lists.domainBlacklist);
+        const tops = Object.keys(sites).filter((h) => !LOWCA_BUILTIN.test(h) && !DL.state(h, '', lists).asleep);
         const all = new Set(tops);
-        tops.forEach((h) => (sites[h].frames || []).forEach((f) => { if (!LOWCA_BUILTIN.test(f)) all.add(f); }));
+        tops.forEach((h) => (sites[h].frames || []).forEach((f) => { if (!LOWCA_BUILTIN.test(f) && !DL.matches(f, black)) all.add(f); }));
         const reg = await chrome.scripting.getRegisteredContentScripts({ ids: LOWCA_SCRIPT_IDS }).catch(() => []);
         if (reg.length) await chrome.scripting.unregisterContentScripts({ ids: reg.map((r) => r.id) }).catch(() => {});
         const allM = lowcaMatches(all), topM = lowcaMatches(tops);
@@ -836,7 +974,7 @@ async function lowcaSyncScriptsNow() {
             { id: 'lowca-auto-main', js: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lowca_napisow.js'], world: 'MAIN', matches: allM, allFrames: true, runAt: 'document_start' },
             { id: 'lowca-auto-lektor', js: LOWCA_LEKTOR_FRAMES, matches: allM, allFrames: true, runAt: 'document_idle' },
             // [AGENT-EXP] 2026-10-25: 🤐 cenzor na stronach Łowcy — wycisza z napisów lektora (dom_content.js → cenzor_main.js)
-            { id: 'lowca-auto-cenzor-main', js: ['assets/cenzor_main.js'], world: 'MAIN', matches: allM, allFrames: true, runAt: 'document_start' },
+            { id: 'lowca-auto-cenzor-main', js: ['assets/censor.js', 'assets/cenzor_main.js'], world: 'MAIN', matches: allM, allFrames: true, runAt: 'document_start' },   // [FIX 2026-11-02] wspólny silnik cenzora
             { id: 'lowca-auto-cenzor-bridge', js: ['assets/cenzor_bridge.js'], matches: allM, allFrames: true, runAt: 'document_start' }
         ];
         if (topM.length) scripts.push({ id: 'lowca-auto-top', js: LOWCA_LEKTOR_TOP, matches: topM, allFrames: false, runAt: 'document_idle' });
@@ -847,7 +985,7 @@ async function lowcaSyncScriptsNow() {
 }
 lowcaSyncScripts();
 chrome.storage.onChanged.addListener((ch, area) => {
-    if (area === 'local' && ch.lowcaSites) lowcaSyncScripts();
+    if (area === 'local' && (ch.lowcaSites || ch.domainWhitelist || ch.domainBlacklist || ch.domainListsOn)) lowcaSyncScripts();
 });
 // Dokłada lektora (dom_content + panel) do ramek karty, w których go jeszcze nie ma —
 // po pierwszym „Szukaj napisów” na nowej stronie lektor rusza od razu, bez odświeżania.
@@ -862,7 +1000,7 @@ async function lowcaEnsureLektor(tabId, tabUrl) {
     if (need.length) {
         await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: LOWCA_LEKTOR_FRAMES }).catch(() => {});
         // [AGENT-EXP] 2026-10-25: 🤐 cenzor od razu, bez odświeżania (cenzor_main.js musi być przed mostem — most wysyła ustawienia)
-        await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: ['assets/cenzor_main.js'], world: 'MAIN' }).catch(() => {});
+        await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: ['assets/censor.js', 'assets/cenzor_main.js'], world: 'MAIN' }).catch(() => {});   // [FIX 2026-11-02] wspólny silnik cenzora
         await chrome.scripting.executeScript({ target: { tabId, frameIds: need }, files: ['assets/cenzor_bridge.js'] }).catch(() => {});
     }
     const top = res.find((r) => r && r.frameId === 0);
@@ -870,6 +1008,35 @@ async function lowcaEnsureLektor(tabId, tabUrl) {
         await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: LOWCA_LEKTOR_TOP }).catch(() => {});
     }
 }
+// [FIX 2026-11-02] 🧪 Kreator napisów. Wskazywanie myszką rusza we wszystkich ramkach karty — wybór albo Esc w jednej
+// ramce kończy je w pozostałych (KREATOR_STOP). Zapisany selektor (KREATOR_SITE) na stronie bez wbudowanego lektora =
+// lektor startuje tam sam, jak na stronie Łowcy (od razu w otwartej karcie), a przy „Tylko domeny z listy” strona
+// z paska adresu trafia na białą listę.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (!msg) return;
+    if ((msg.action === 'KREATOR_PICKED' || msg.action === 'KREATOR_PICK_CANCEL') && sender && sender.tab && sender.tab.id != null) {
+        chrome.tabs.sendMessage(sender.tab.id, { action: 'KREATOR_STOP' }, () => { void chrome.runtime.lastError; });
+        return;
+    }
+    if (msg.action !== 'KREATOR_SITE') return;
+    (async () => {
+        const h = DL.norm(msg.host);
+        if (!h) return { ok: false };
+        const tab = msg.tabId != null ? await chrome.tabs.get(msg.tabId).catch(() => null) : null;
+        const top = tab && tab.url ? lowcaHostOf(tab.url) : '';
+        // selektor z tej karty (sama strona albo ramka odtwarzacza w niej) — liczy się strona z paska adresu
+        const fromTab = !!top && (DL.matches(h, [top]) || DL.matches(top, [h]) || DL.norm(msg.top) === top);
+        const pageUrl = fromTab ? tab.url : 'https://' + h + '/';
+        const listed = await domainListsAllow(pageUrl).catch(() => '');
+        let remembered = '';
+        if (!LOWCA_BUILTIN.test(h)) {
+            remembered = await lowcaRemember(pageUrl, fromTab && h !== top ? 'https://' + h + '/' : '').catch(() => '');
+            if (fromTab) await lowcaEnsureLektor(tab.id, tab.url).catch(() => {});
+        }
+        return { ok: true, listed, remembered };
+    })().then(sendResponse, (e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
+    return true;
+});
 // ===== Bazy napisów (popup „🌐 Szukaj w bazach napisów”, subs_db.js) =====
 // Wynik trafia do fileSubs (jak plik z dysku). Napisy nie po polsku tłumaczymy tu, w tle, od miejsca
 // filmu — fileSubs odświeżane co kilka paczek, więc lektor czyta już przetłumaczone kwestie.
@@ -948,6 +1115,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             if (msg.action === 'SUBSDB_PREPARE') {
                 // Strona spoza listy wbudowanych: dołóż lektora do karty i zapamiętaj domenę (jak przy Łowcy).
                 const tab = msg.tabId != null ? await chrome.tabs.get(msg.tabId).catch(() => null) : null;
+                if (tab && tab.url) await domainListsAllow(tab.url).catch(() => '');   // [FIX 2026-11-02] 📋
                 if (tab && tab.url && !LOWCA_BUILTIN.test(lowcaHostOf(tab.url))) {
                     await lowcaRemember(tab.url, '');
                     await lowcaEnsureLektor(tab.id, tab.url);
@@ -964,6 +1132,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 async function lowcaAutoCues(msg, sender, sendResponse) {
     const tab = sender && sender.tab;
     if (!tab || tab.id == null || !Array.isArray(msg.cues) || msg.cues.length < 5) { sendResponse({ ok: false }); return; }
+    // [FIX 2026-11-02] 📋 strona poza listą domen (np. odtwarzacz z zapamiętanej domeny osadzony na obcej stronie):
+    // nie zapamiętujemy jej i nie dokładamy lektora — sam z siebie nie rozchodzi się po kolejnych stronach.
+    const lists = await chrome.storage.local.get(['domainListsOn', 'domainWhitelist', 'domainBlacklist']);
+    if (DL.state(lowcaHostOf(tab.url), lowcaHostOf(sender.url), lists).asleep) { sendResponse({ ok: false, asleep: true }); return; }
     const saved = await lowcaRemember(tab.url, sender.url);
     await lowcaEnsureLektor(tab.id, tab.url);
     // [AGENT-EXP] 2026-10-25: cały plik HBO (z cenzora) — odbiorca LOWCA_AUTO_APPLY (lowca_auto.js, idempotentny) może jeszcze nie być w karcie
@@ -994,8 +1166,28 @@ async function lowcaResults(msg, sendResponse) {
     lowcaBroadcast(st);
     sendResponse({ ok: true, saved: selectors.length });
 }
+// [FIX 2026-11-02] Proxy Łowcy pobiera tylko publiczne adresy http(s). Prośba przychodzi przez window.postMessage strony,
+// więc bez tego dowolny skrypt strony mógł czytać przez rozszerzenie (bez CORS) serwery w sieci domowej / firmowej
+// i lokalne usługi (127.0.0.1 — także serwery TTS). Napisy i playlisty leżą na publicznych CDN-ach.
+function lowcaXhrAllowed(url) {
+    let u;
+    try { u = new URL(String(url || '')); } catch (e) { return false; }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (!h || h === 'localhost' || /\.(localhost|local|lan|internal|home|corp)$/.test(h)) return false;
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) {
+        const [a, b] = h.split('.').map(Number);
+        if (a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+            || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)) return false;
+    }
+    if (h.indexOf(':') >= 0) {   // IPv6: pętla zwrotna, sieci lokalne (fc00::/7, fe80::/10), adresy IPv4 w IPv6
+        if (h === '::1' || h === '::' || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || /^::ffff:/.test(h)) return false;
+    }
+    return true;
+}
 async function lowcaXhr(msg, sendResponse) {
     // Proxy GM_xmlhttpRequest z huntera (MAIN) - host *://*/* omija CORS.
+    if (!lowcaXhrAllowed(msg.url)) { sendResponse({ id: msg.id, ok: false, status: 0, error: 'adres niedozwolony (tylko publiczne http/https)' }); return; }
     const ctrl = new AbortController();
     const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 30000);
     try {
@@ -1115,6 +1307,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                 let tab = (msg.fromPage && _sender && _sender.tab) ? _sender.tab : null;
                 if (!tab) { const tabs = await chrome.tabs.query({ active: true, currentWindow: true }); tab = tabs && tabs[0]; }
                 if (!tab || tab.id == null) throw new Error('Brak aktywnej karty');
+                const listed = await domainListsAllow(tab.url).catch(() => '');   // [FIX 2026-11-02] 📋
                 await lowcaInject(tab.id);
                 if (msg.openPanel) {
                     await chrome.scripting.executeScript({
@@ -1124,7 +1317,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
                 }
                 const st = await lowcaStateSet({ on: true, host: '', containers: 0, items: [] });
                 lowcaBroadcast(st);
-                sendResponse({ ok: true });
+                sendResponse({ ok: true, listed });
                 return;
             }
             if (msg.action === 'LOWCA_STOP') {

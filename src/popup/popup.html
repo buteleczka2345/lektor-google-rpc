@@ -52,11 +52,22 @@
             <div class="lbl">
                 <b>Lektor</b>
                 <span>Włącz / wyłącz czytanie napisów</span>
+                <span id="lektorSourceLine" style="display:none;"></span><!-- [FIX 2026-11-02] „czytam z: …” -->
             </div>
             <label class="switch">
                 <input type="checkbox" id="enableToggle" checked>
                 <span class="slider"></span>
             </label>
+        </div>
+
+        <!-- [FIX 2026-11-02] 📋 lektor tylko na domenach z białej listy (domyślnie WŁ.) + stan aktywnej karty -->
+        <div class="card" data-mod="domeny">
+            <label class="check" title="Lektor uruchamia się tylko na stronach z białej listy (Ustawienia → 📋 Białe i czarne listy domen). Na innych stronach nie działa i nie zużywa procesora. Wyłączone = lektor wszędzie, gdzie się uruchomi."><input type="checkbox" id="domainListsCheck" checked> 📋 Tylko domeny z listy</label>
+            <div class="footnote" id="domainStateLine"></div>
+            <div class="btn-row" style="margin-top:6px;">
+                <button id="domainAddBtn" class="btn small" type="button" style="display:none;">➕ Dodaj tę stronę</button>
+                <button id="domainEditBtn" class="btn small" type="button">✏️ Edytuj listy</button>
+            </div>
         </div>
 
         <!-- [AGENT-EXP] 2026-10-17: wybór silnika mowy (ten sam klucz ttsEngine co w Ustawieniach) + kropka serwera -->
@@ -67,24 +78,32 @@
             </div>
             <select id="ttsEngineSelect">
                 <!-- [AGENT-EXP] 2026-10-24: Matcha 🌐 domyślna (na górze); Sherpa bez wbudowanego głosu — tylko pobrane/własne -->
+                <!-- [FIX 2026-11-02] dwie grupy: bez serwera / jeden silnik serwerowy (własny adres + gotowe ustawienia znanych serwerów) -->
+                <optgroup label="W przeglądarce — bez serwera">
                 <option value="matcha">Matcha-TTS-PL 🌐 — w przeglądarce (domyślny) lub serwer :9000</option>
                 <option value="sherpa">Sherpa / Piper — pobrane głosy (Języki świata)</option>
                 <!-- [AGENT-EXP] 2026-10-21: 🗣 Web Speech API (jak DubMog Standard) -->
                 <option value="browser">Głos przeglądarki (Google / Microsoft) — darmowy, bez serwera</option>
                 <option value="supertonic">Supertonic 3 (VoxNemesis) — wbudowany, CPU / GPU</option>
-                <option value="xtts">XTTS v2 (TTS2) — serwer :8000</option>
-                <option value="audio8">Audio8 ONNX INT8 — serwer :9300 (wolny)</option>
-                <option value="f5">Lektor Marek (F5-TTS) — serwer :9400</option>
-                <option value="pocket">Pocket-TTS-PL — serwer :9200</option>
-                <option value="omnivoice">OmniVoice — serwer :9100 (GPU)</option>
-                <option value="kokoro">Kokoro — serwer :9500 (GPU)</option>
+                </optgroup>
+                <optgroup label="Serwer lokalny (WebSocket)">
+                <option value="server">Serwer lokalny — własny adres</option>
+                <option value="xtts">XTTS v2 (TTS2) — :8000</option>
+                <option value="audio8">Audio8 ONNX INT8 — :9300 (wolny)</option>
+                <option value="f5">Lektor Marek (F5-TTS) — :9400</option>
+                <option value="pocket">Pocket-TTS-PL — :9200</option>
+                <option value="omnivoice">OmniVoice — :9100 (GPU)</option>
+                <option value="kokoro">Kokoro — :9500 (GPU)</option>
+                </optgroup>
             </select>
+            <div id="srvRow" class="field" style="display:none;">
+                <label class="field-label" for="serverUrlInput">Adres serwera (ws://…)</label>
+                <input type="text" id="serverUrlInput" class="text-input" placeholder="ws://127.0.0.1:9000" spellcheck="false">
+                <div class="footnote">Serwer dostaje JSON {text, voice, speed, pilne} i odsyła plik WAV — tak jak XTTS, Pocket czy Kokoro.</div>
+            </div>
             <div class="footnote" id="ttsEngineHint">Zielona kropka = serwer odpowiada. Najpierw uruchom serwer (np. start_xtts_auto.bat w folderze tts2).</div>
             <!-- [AGENT-EXP] 2026-10-17: głos dla wybranego silnika (przeniesione ze strony Ustawienia) -->
-            <!-- [AGENT-EXP] 2026-10-24: wariant Matcha w przeglądarce (głosy 🌐) — tylko 2 (test: reszta wolniejsza) -->
-            <div id="mwRows" class="field" style="display:none;">
-                <label class="field-label" for="mwTryb">Matcha 🌐 — wariant</label><select id="mwTryb"><option value="kombi">Kombinacja — koder i dekoder procesor INT8, wokoder karta (najszybszy)</option><option value="cpu_fp32">Wszystko na procesorze — FP32, naturalny rytm (sdp + t4 + fp32)</option></select>
-            </div>
+            <!-- [AGENT-EXP] 2026-11-02: lista „Matcha 🌐 — wariant” usunięta — wariant wybiera „Włącz” w „Języki świata” -->
             <div id="ttsVoiceRow" class="field" style="display:none;">
                 <label class="field-label" id="ttsVoiceLabel" for="ttsVoiceSelect">Głos</label>
                 <select id="ttsVoiceSelect"></select>
@@ -129,13 +148,15 @@
             <div class="card-head"><b>Prędkość lektora</b><span class="pill" id="speedVal">1.0x</span></div>
             <input type="range" id="speedRange" min="0.5" max="3.0" step="0.1" value="1.0">
             <!-- [AGENT-EXP] 2026-10-26: auto-nadrabianie (klucz autoCatchup, ten sam co w Ustawieniach) -->
-            <label class="check" title="Przyspiesza, gdy kwestia nie mieści się w czasie"><input type="checkbox" id="autoCatchupCheck" checked> Auto-nadrabianie (przyspiesza, gdy kwestia nie mieści się w czasie)</label>
+            <label class="check" title="Przyspiesza (najwyżej do 1,8×), gdy kwestia nie mieści się w czasie albo w kolejce czekają następne"><input type="checkbox" id="autoCatchupCheck" checked> Auto-nadrabianie (najwyżej 1,8×, gdy kwestia nie mieści się w czasie)</label>
         </div>
 
         <div class="card" data-mod="ducking">
             <div class="card-head"><b>Ducking (wyciszanie filmu)</b><span class="pill" id="duckVal">20%</span></div>
             <input type="range" id="duckRange" min="0" max="100" step="5" value="20">
             <div class="footnote">0 = całkowite wyciszenie · 100 = bez zmian</div>
+            <!-- [FIX 2026-11-02] 🔉 ściszanie tylko na czas mowy lektora (płynne przejścia) -->
+            <label class="check"><input type="checkbox" id="duckWhileCheck"> Ściszaj film tylko, gdy lektor mówi (płynnie, jak w telewizji)</label>
         </div>
 
         <div class="card" data-mod="glosnosc">
@@ -174,6 +195,9 @@
             <div class="footnote warn" id="fullSubsStatus">Działa na każdej stronie z filmem. Bez kliknięcia lektor czyta w locie i nic nie pobiera.</div>
             <button id="findSubsBtn" class="btn mt" type="button">🔍 Znajdź napisy na stronie (raz — zapisze w pamięci)</button>
             <div class="footnote info" id="findSubsStatus">Gdy lektor nie widzi napisów w locie: włącz film z napisami na ekranie i kliknij. Potem lektor patrzy tylko w to miejsce.</div>
+            <!-- [FIX 2026-11-02] eksport przetłumaczonych napisów (to, co czyta lektor) do .srt -->
+            <button id="exportSrtBtn" class="btn mt" type="button">💾 Zapisz napisy PL do pliku .srt</button>
+            <div class="footnote" id="exportSrtStatus">Zapisuje to, co lektor ma do przeczytania (tłumaczenie z czasami) — np. do odtwarzacza albo na później.</div>
         </div>
 
         <div class="card" data-mod="youtube">
@@ -246,7 +270,7 @@
         </div>
 
         <div class="card" data-mod="wlasnyglos">
-            <div class="card-head"><b>Własny głos (Sherpa/Piper z plików)</b></div>
+            <div class="card-head"><b>Własny głos (Sherpa/Piper lub Matcha z folderu)</b><!-- [AGENT-EXP] 2026-11-02 --></div>
             <input type="file" id="customVoiceInput" accept=".onnx,.txt,.json" multiple webkitdirectory style="display:none;">
             <div id="customVoiceList"></div>
             <button id="customVoiceBtn" class="btn mt" type="button">📂 Wskaż pliki własnego głosu (onnx + txt + json)</button>
@@ -275,17 +299,20 @@
             <div class="footnote">Model MMS ≈ 114 MB na język. Pobrany głos trafia na listę „Własny głos” i staje się aktywny. Źródło: HuggingFace (MMS: Meta, lic. CC-BY-NC; Piper: lic. MIT).</div>
         </div>
 
+        <!-- [FIX 2026-11-02] JEDEN cenzor (wcześniej dwa: mowa lektora tutaj, dźwięk filmu w Ustawieniach — z osobnymi listami) -->
         <div class="card" data-mod="cenzura">
-            <div class="card-head"><b>🤬 Cenzura przekleństw</b><span class="pill">wszystkie języki</span></div>
-            <button id="censorToggleBtn" class="btn ok" type="button">🤬 Cenzura: WŁĄCZONA</button>
+            <div class="card-head"><b>🤬 Cenzor przekleństw</b><span class="pill">jedna lista</span></div>
+            <button id="censorToggleBtn" class="btn ok" type="button">🗣 W mowie lektora: WŁĄCZONY</button>
             <select id="censorModeSelect" class="mt">
                 <option value="remove">Usuń słowo (cicho) — zalecane</option>
                 <option value="beep">[BEEP] (obcy głos wypowie na głos)</option>
                 <option value="replace">Gwiazdki (k****)</option>
             </select>
-            <input type="text" id="censorCustomWords" class="text-input mt" placeholder="Własne słowa po przecinku (każdy język)…">
+            <label class="check"><input type="checkbox" id="cenzorOnCheck"> 🔇 Wyciszaj w dźwięku filmu — z pobranych napisów (YouTube, Netflix, HBO Max)</label>
+            <label class="check"><input type="checkbox" id="cenzorLiveCheck"> 🔇 Wyciszaj w dźwięku filmu — na bieżąco (napisy z ekranu, inne strony)</label>
+            <input type="text" id="censorCustomWords" class="text-input mt" placeholder="Własne słowa po przecinku; -słowo = wyjątek…">
             <div class="footnote warn" id="censorStatus">—</div>
-            <div class="footnote" id="censorScopeNote">Działa dla WSZYSTKICH języków naraz (własne słowa + wbudowane listy). Ustawienia zapisują się na stałe.</div>
+            <div class="footnote" id="censorScopeNote">Jeden cenzor i jedna lista słów (wbudowane listy wielu języków + Twoje): wycina przekleństwa z mowy lektora i/lub wycisza je w oryginalnym dźwięku filmu. Czasy ciszy: Ustawienia → 🤬 Cenzor.</div>
         </div>
     </section>
 
@@ -373,6 +400,7 @@
     <div class="footnote app-foot">Ustawienia zapisują się automatycznie.</div>
 
     <!-- [AGENT-EXP] 2026-10-26: 🧩 układ modułów — zwykłe skrypty, działają przed modułem popup.js -->
+    <script src="../../assets/domain_lists.js"></script><!-- [FIX 2026-11-02] 📋 listy domen -->
     <script src="./layout_shared.js"></script>
     <script src="./popup_layout.js"></script>
 

@@ -120,19 +120,32 @@ if (!('__lektorBufPauza' in window)) {
         else duckRestoreWhenVideo();   // [AGENT-EXP] 2026-10-20
     });
 
+    // Włącz / wyłącz (popup) — też po zmianie listy domen (onSleep niżej); uśpiona domena zawsze = wyłączony.
+    function applyEnabled(v) {
+        enabled = !!v;
+        try { if (window.__LivedubOpts && window.__LivedubOpts.asleep()) enabled = false; } catch (e) {} // OPTIONS-PAGE
+        if (enabled) {
+            schedule();
+            applyDuck();
+        } else {
+            restoreVideo();
+            if (timer) clearInterval(timer);
+        }
+    }
+    // [FIX 2026-11-02] 📋 lista domen zmieniona na otwartej karcie — dawniej Netflix jej nie słuchał (działała po odświeżeniu),
+    // a raz uśpiony lektor nie wracał po dopisaniu domeny. Uśpienie czyści też kolejkę lektora tej karty.
+    try { if (window.__LivedubOpts && window.__LivedubOpts.onSleep) window.__LivedubOpts.onSleep(function (a) {
+        if (a) {
+            if (enabled) { try { chrome.runtime.sendMessage({ action: 'TTS_CLEAR_BUFFER' }, function () { void chrome.runtime.lastError; }); } catch (e) {} }
+            applyEnabled(false);
+            return;
+        }
+        chrome.storage.local.get('enabled', function (r) { applyEnabled(!r || r.enabled === undefined ? true : !!r.enabled); });
+    }); } catch (e) {}
+
     chrome.storage.onChanged.addListener(function (changes, area) {
         if (area !== 'local') return;
-        if (changes.enabled !== undefined) {
-            enabled = !!changes.enabled.newValue;
-            try { if (window.__LivedubOpts && window.__LivedubOpts.asleep()) enabled = false; } catch (e) {} // OPTIONS-PAGE
-            if (enabled) {
-                schedule();
-                applyDuck();
-            } else {
-                restoreVideo();
-                if (timer) clearInterval(timer);
-            }
-        }
+        if (changes.enabled !== undefined) applyEnabled(changes.enabled.newValue);
         if (changes.engine !== undefined) engine = changes.engine.newValue;
         if (changes.subtitleOffsetMs !== undefined) storageOffsetMs = Number(changes.subtitleOffsetMs.newValue) || 0;
         if (changes.onlineVoiceRemote !== undefined) remoteVoice = !!changes.onlineVoiceRemote.newValue;
@@ -172,14 +185,29 @@ if (!('__lektorBufPauza' in window)) {
             video.addEventListener('pause', function () {
                 if (enabled) chrome.runtime.sendMessage({ action: 'TTS_PAUSE', reason: 'pause' });   // [AGENT-EXP] 2026-10-22: „Czytaj zawsze do końca” → dokończ zdanie
                 preloaded.clear();   // [AGENT-EXP] 2026-10-17: preload jeszcze raz po wznowieniu (gotowe — z pamięci / dysku)
+                pausedAtMs = video.currentTime * 1000;   // [FIX 2026-11-02] do ponownego czytania przerwanej kwestii
             });
             video.addEventListener('volumechange', function () {
                 if (enabled) applyDuck();
             });
-            video.addEventListener('play', function () { if (!enabled && duckReady && duckMemGet() !== null) restoreVideo(); });   // [AGENT-EXP] 2026-10-20
+            video.addEventListener('play', function () {
+                if (!enabled && duckReady && duckMemGet() !== null) restoreVideo();   // [AGENT-EXP] 2026-10-20
+                if (enabled) rereadInterrupted();   // [FIX 2026-11-02]
+            });
             if (enabled) applyDuck();
         }
         return video;
+    }
+
+    // [FIX 2026-11-02] Kwestia przerwana pauzą filmu (bez „Czytaj zawsze do końca”) — po wznowieniu czytana od początku
+    // (wspólna funkcja harmonogramu). Wcześniej zostawała oznaczona jako przeczytana, więc jej reszta przepadała.
+    var pausedAtMs = -1;
+    function rereadInterrupted() {
+        var at = pausedAtMs;
+        pausedAtMs = -1;
+        var S = window.__LektorSched, v = getVideo();
+        if (!S || !v || S.readToEndOn()) return;   // „Czytaj zawsze do końca”: lektor dokończył zdanie mimo pauzy
+        S.rearmAfterPause(subtitles, played, null, at, v.currentTime * 1000, getOff());
     }
 
     // --- Ducking: ścisz wideo do duckLevel% ---
@@ -204,6 +232,7 @@ if (!('__lektorBufPauza' in window)) {
     var duckReady = false;
     function applyDuck() {
         if (!duckReady || !enabled) return;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
+        var LS = window.__LektorSched; if (LS && LS.duckAllowed && !LS.duckAllowed()) return;   // [FIX 2026-11-02] 🔉 ścisza dopiero, gdy lektor mówi
         var v = getVideo();
         if (!v) return;
         var target = duckLevel / 100;
@@ -214,21 +243,23 @@ if (!('__lektorBufPauza' in window)) {
         // Ustawiamy min(target, savedVolume), żeby nigdy nie przekroczyć pierwotnej
         // głośności ustawionej przez użytkownika.
         if (savedVolume !== null) {
-            v.volume = Math.min(target, savedVolume);
+            setV(v, Math.min(target, savedVolume));
         } else if (v.volume > target) {
-            v.volume = target;
+            setV(v, target);
         }
     }
+    function setV(v, x) { var S = window.__LektorSched; if (S && S.setVol) S.setVol(v, x); else v.volume = x; }   // [FIX 2026-11-02] płynnie w trybie „tylko gdy mówi”
 
     function restoreVideo() {
         var v = getVideo();
         if (v) duckOrig(v);   // [AGENT-EXP] 2026-10-20
         duckMemSet(null);
         if (v && savedVolume !== null) {
-            v.volume = savedVolume;
+            setV(v, savedVolume);
             savedVolume = null;
         }
     }
+    try { window.__LektorSched.onDuck(function () { if (enabled) applyDuck(); }, function () { restoreVideo(); }); } catch (e) {}   // [FIX 2026-11-02] 🔉
 
     // ===== „Co jest na ekranie" — lektor ma mówić to, co widzi użytkownik =====
     // Netflix renderuje własne napisy w .player-timedtext, a Immersive Translate dokłada
@@ -398,6 +429,7 @@ if (!('__lektorBufPauza' in window)) {
         return false;
     }
 
+    function liveSrc(n) { try { var S = window.__LektorSched, g = S && S.getSource(); if (S && (!g || g.name !== n)) S.setSource(n, 0); } catch (e) {} }   // [FIX 2026-11-02] „czytam z: …”
     function liveSpeak(text) {
         var t = stripCueBrackets(text);
         if (!t) return;
@@ -409,6 +441,7 @@ if (!('__lektorBufPauza' in window)) {
         liveLastAt = now;
         pushSpoken(t);
         spokenWords += t.split(/\s+/).filter(Boolean).length;
+        liveSrc('na żywo: napisy z ekranu Netflix');
         var v = getVideo();
         try {
             chrome.runtime.sendMessage({
@@ -480,49 +513,36 @@ if (!('__lektorBufPauza' in window)) {
             var v = getVideo();
             if (!v || subtitles.length === 0) return;
             var nowMs = v.currentTime * 1000;
-            var off = getOff();
-            var preloadBudget = (v.paused && window.__lektorBufPauza === false) ? 0
-                : document.visibilityState !== 'visible' ? (window.__lektorBufTlo === false ? 0 : 50) : 4;   // [AGENT-EXP] pauza / tło
-            // max nowe syntezy na tick (50 ms) — bez burstów obciążających Pipyera
             // [AGENT-EXP] 2026-10-20: film GRA na widocznej karcie → kwestie dalej niż PRELOAD_NEAR_MS idą do syntezy
             // najwyżej 1 na PRELOAD_FAR_GAP_MS. Po resecie (nowa partia napisów Netflixa, pauza) cały zapas (3 min)
             // leciał naraz, 6 wątków syntezy zajmowało procesor i obraz filmu gubił klatki („przeskakuje”).
             var farPaced = !v.paused && document.visibilityState === 'visible';
-            var farOk = !farPaced || Date.now() - lastFarPreloadAt >= PRELOAD_FAR_GAP_MS;
-            for (var i = 0; i < subtitles.length; i++) {
-                var sub = subtitles[i];
-                var startT = sub.startMs + off;
-                var endT = sub.endMs + off;
-                if (nowMs > endT + 1000) continue;
-                var far = startT > nowMs + PRELOAD_NEAR_MS;   // [AGENT-EXP]
-                if (!preloaded.has(sub.id) && startT >= nowMs && startT <= nowMs + LOOKAHEAD && preloadBudget > 0 && (!far || farOk)) {
-                    preloadBudget--;
-                    if (far && farPaced) { farOk = false; lastFarPreloadAt = Date.now(); }   // [AGENT-EXP]
-                    preloaded.add(sub.id);
-                    if (startT > recAheadMs) recAheadMs = startT;
-                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: sub.id, text: sub.text, startMs: startT, endMs: endT, nowMs: nowMs, platform: 'netflix' });   // [AGENT-EXP] 2026-10-25: nowMs = miejsce filmu (bramka zapasu w offscreen)
-                }
-                var pre = 0;
-                if (engine === 'online' && remoteVoice) pre = REMOTE_PREROLL;
-                if (!played.has(sub.id) && nowMs >= startT - pre && nowMs < endT) {
-                    played.add(sub.id);
+            // [FIX 2026-11-02] wspólny harmonogram (assets/lektor_scheduler.js): okno kwestii i tempo filmu (auto-nadrabianie),
+            // czytanie tylko gdy film gra na widocznej karcie (wcześniej po przewinięciu w pauzie lektor zaczynał mówić)
+            var S = window.__LektorSched;
+            var srcName = fileMode ? fileSrcName : 'napisy Netflix';
+            if (nfSrcSent !== srcName + subtitles.length) { nfSrcSent = srcName + subtitles.length; S.setSource(srcName, subtitles.length); }
+            S.tick({
+                list: subtitles, nowMs: nowMs, off: getOff(), rate: v.playbackRate || 1, lookaheadMs: LOOKAHEAD,
+                budget: S.budgetFor(v), canPlay: S.canPlay(v), preloaded: preloaded, played: played,
+                preroll: (engine === 'online' && remoteVoice) ? REMOTE_PREROLL : 0,
+                extra: { platform: 'netflix' },
+                allowPreload: function (c, i, st) {
+                    if (!farPaced || st <= nowMs + PRELOAD_NEAR_MS) return true;
+                    return Date.now() - lastFarPreloadAt >= PRELOAD_FAR_GAP_MS;
+                },
+                onPreload: function (c, i, st) {
+                    if (farPaced && st > nowMs + PRELOAD_NEAR_MS) lastFarPreloadAt = Date.now();   // [AGENT-EXP]
+                    if (st > recAheadMs) recAheadMs = st;
+                },
+                onPlay: function (sub) {
                     pushSpoken(sub.text);
                     spokenWords += (sub.words || 0);
                     recentSpoken.push({ t: sub.text, w: sub.words || 0 });
-                                         if (recentSpoken.length > 5) recentSpoken.shift();
-                     if (isBlockedPhrase(sub.text)) continue; // pomijamy blokowane frazy
-                     chrome.runtime.sendMessage({
-                        action: 'TTS_PLAY',
-                        id: sub.id,
-                        text: sub.text,
-                        durationMs: sub.endMs - sub.startMs,
-                        startMs: startT,
-                        endMs: endT,
-                        platform: 'netflix'
-                    });
+                    if (recentSpoken.length > 5) recentSpoken.shift();
+                    if (isBlockedPhrase(sub.text)) return false; // pomijamy blokowane frazy
                 }
-                if (startT > nowMs + LOOKAHEAD) break;
-            }
+            });
         }, 50); // Zero-Lag: szybszy cykl wyzwalania preload/play (50 ms zamiast 100 ms)
     }
 
@@ -566,12 +586,13 @@ if (!('__lektorBufPauza' in window)) {
         } catch (e) {}
     }, 2000);
 
-    // Mocne wulgaryzmy PL+EN (rdzenie łapią odmiany) — wycinane z mowy lektora.
-    var LIVEDUB_PROFANITY_RE = /(\b\p{L}*(?:kurw|chuj|huj|jeb|pizd|pierdol|pierdal|cipk|cip[aeęyiu]|dziwk|szmat|g[óo]wn|fuck|motherfuck|cunt|cocksuck|wank|whore|slut|pussy|shit)[^\s]*)/giu;
+    // [FIX 2026-11-02] Wulgaryzmy wycina teraz WYŁĄCZNIE jeden cenzor (assets/censor.js) zgodnie z ustawieniami
+    // (wł./wył., usuń / beep / gwiazdki, własne słowa). Ten stały wzorzec wycinał je zawsze — wbrew wyłączonemu cenzorowi,
+    // tryby beep / gwiazdki nie miały czego zamienić, a rdzenie łapały też niewinne słowa (np. „szmatka”).
 
     // --- Odbior napisów ze świata strony ---
     function stripCueBrackets(t) {
-        return String(t || '').replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' ').replace(LIVEDUB_PROFANITY_RE, ' ').replace(/\s{2,}/g, ' ').trim();
+        return String(t || '').replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' ').replace(/\s{2,}/g, ' ').trim();
     }
     // ===== Źródła napisów: czytamy TYLKO JEDEN plik napisów =====
     // Netflix potrafi wczytać naraz dwie ścieżki: natywną (wybraną w odtwarzaczu)
@@ -761,6 +782,7 @@ if (!('__lektorBufPauza' in window)) {
 
     // --- Napisy z pliku (popup: „📂 Wczytaj plik z napisami”) — nadpisują napisy ze strony ---
     var fileMode = false;
+    var fileSrcName = 'plik napisów', nfSrcSent = '';   // [FIX 2026-11-02] „czytam z: …”
     // [AGENT-EXP] 2026-10-17: 📊 pasek postępu lektora (assets/lektor_bar.js) — kwestie Netflix / pliku
     try {
         (window.__lektorBarProviders = window.__lektorBarProviders || {}).netflix = function () {
@@ -792,6 +814,7 @@ if (!('__lektorBufPauza' in window)) {
         fileForMe(function (f) {   // [AGENT-EXP] tylko plik tego filmu
             if (f && Array.isArray(f.cues) && f.cues.length) {
                 fileMode = true;
+                fileSrcName = /^🌐/.test(String(f.name || '')) ? 'bazy napisów: ' + String(f.name).replace(/^🌐\s*/, '') : 'plik napisów: ' + String(f.name || 'bez nazwy');   // [FIX 2026-11-02]
                 subtitles = f.cues.map(function (c, i) {
                     var t = stripCueBrackets(c.text);
                     if (!t || (window.__LIVEDUB_IS_BLOCKED__ && window.__LIVEDUB_IS_BLOCKED__(t))) return null;

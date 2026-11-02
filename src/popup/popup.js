@@ -433,6 +433,15 @@ async function init() {
     if (customBtn && customInput) {
         customBtn.addEventListener('click', () => customInput.click());
         customInput.addEventListener('change', async () => {
+            // [AGENT-EXP] 2026-11-02: folder Matchy rozpoznany sam (matchaImportFiles), reszta jak dotąd = Sherpa/Piper
+            if (customStatus) customStatus.textContent = 'Sprawdzam pliki…';
+            let mt = null;
+            try { mt = await matchaImportFiles(customInput.files); } catch (e) { mt = '⛔ Nie udało się zapisać Matchy: ' + ((e && e.message) || e); }
+            if (mt) {
+                if (customStatus) customStatus.textContent = mt;
+                customInput.value = '';
+                return;
+            }
             const { onnx, tokens, json } = classifyVoiceFiles(customInput.files);
             const err = !onnx ? 'Brak pliku .onnx (model głosu)'
                 : !tokens ? 'Brak pliku tokens.txt — wybrałeś tylko model.onnx? Wybierz cały folder lub wskaż też tokens.txt.'
@@ -613,14 +622,13 @@ async function init() {
             : CENSOR_STATUS_FALLBACK;
         const syncCensorUi = (on) => {
             censorToggle.dataset.on = on ? '1' : '0';
-            censorToggle.textContent = on ? '🤬 Cenzura: WŁĄCZONA' : '🤬 Cenzura: WYŁĄCZONA';
+            censorToggle.textContent = on ? '🗣 W mowie lektora: WŁĄCZONY' : '🗣 W mowie lektora: WYŁĄCZONY';
             censorToggle.className = 'btn ' + (on ? 'ok' : 'danger');   // [VOX] kolory z popup.css
-            censorModeSel.disabled = !on;
-            censorWords.disabled = !on;
+            censorModeSel.disabled = !on;   // lista słów działa też dla dźwięku filmu — zostaje dostępna
             if (censorStatus) {
                 censorStatus.textContent = on
                     ? censorActiveText()
-                    : 'Cenzura wyłączona — lektor czyta wszystko.';
+                    : 'W mowie lektora wyłączony — lektor czyta wszystko (wyciszanie dźwięku filmu działa osobno).';
             }
         };
         syncCensorUi(!!s.censorEnabled);
@@ -634,9 +642,9 @@ async function init() {
                 censorInfo = { languages: resp.languages, words: resp.words || 0 };
                 const scopeNote = $('censorScopeNote');
                 if (scopeNote) {
-                    scopeNote.textContent = 'Działa dla WSZYSTKICH języków naraz: '
-                        + resp.languages + ' języków, ' + (resp.words || 0) + ' słów + Twoje własne.'
-                        + ' Ustawienia zapisują się na stałe.';
+                    scopeNote.textContent = 'Jeden cenzor i jedna lista słów: '
+                        + resp.languages + ' języków, ' + (resp.words || 0) + ' słów + Twoje własne'
+                        + ' — w mowie lektora i/lub w dźwięku filmu. Czasy ciszy: Ustawienia → 🤬 Cenzor.';
                 }
                 if (censorToggle.dataset.on === '1'
                     && (!censorStatus || censorStatus.textContent === CENSOR_STATUS_FALLBACK
@@ -656,8 +664,21 @@ async function init() {
         });
         censorWords.addEventListener('input', debounce(() => {
             saveSettings({ censorCustomWords: censorWords.value });
-            if (censorStatus) censorStatus.textContent = '✓ Własne słowa zapisane (działają od następnej kwestii).';
+            if (censorStatus) censorStatus.textContent = '✓ Własne słowa zapisane (lektor: od następnej kwestii, dźwięk filmu: od razu).';
         }, 500));
+        // [FIX 2026-11-02] JEDEN cenzor: wyciszanie oryginalnego dźwięku filmu (dawniej osobny cenzor w Ustawieniach)
+        [['cenzorOnCheck', 'cenzorOn'], ['cenzorLiveCheck', 'cenzorLive']].forEach(([id, key]) => {
+            const box = $(id);
+            if (!box) return;
+            chrome.storage.local.get(key, (r) => { box.checked = !!(r && r[key]); });
+            box.addEventListener('change', () => {
+                saveSettings({ [key]: box.checked });
+                if (censorStatus) censorStatus.textContent = box.checked
+                    ? '✓ Wyciszanie dźwięku filmu włączone (ta sama lista słów co lektor).'
+                    : 'Wyciszanie dźwięku filmu wyłączone.';
+            });
+            chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch[key]) box.checked = !!ch[key].newValue; });
+        });
     }
     // Sklep głosów: katalog 1100+ języków (MMS + Piper) z pobieraniem w aplikacji.
     initLangStore();
@@ -685,6 +706,21 @@ async function init() {
     // NA ŻĄDANIE: pobierz całe napisy filmu w BIEŻĄCEJ karcie — dowolna strona z filmem.
     // 1) strona ze wsparciem (YouTube, iQIYI, WeTV, Viki, Bilibili) odpowiada na LOAD_FULL_SUBS;
     // 2) inaczej wstrzykujemy uniwersalny pobieracz (ścieżki napisów odtwarzacza HTML5) — tylko po kliknięciu.
+    // [FIX 2026-11-02] 💾 napisy PL → .srt (lektor_bar.js w ramce z filmem składa plik i go pobiera)
+    const srtBtn = $('exportSrtBtn');
+    if (srtBtn) srtBtn.addEventListener('click', () => {
+        const st = $('exportSrtStatus');
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            const tab = tabs && tabs[0];
+            if (!tab || tab.id == null) return;
+            chrome.tabs.sendMessage(tab.id, { action: 'LEKTOR_EXPORT_SRT' }, (r) => {
+                void chrome.runtime.lastError;
+                if (st) st.textContent = r && r.ok
+                    ? '✓ Zapisano ' + r.count + ' kwestii do pliku .srt (Pobrane).'
+                    : '⛔ Brak całych napisów na tej karcie — najpierw „⬇ Pobierz całe napisy”, plik albo bazy napisów.';
+            });
+        });
+    });
     const fullBtn = $('fullSubsBtn');
     const fullStatus = $('fullSubsStatus');
     function fullSet(t) { if (fullStatus) fullStatus.textContent = t; }
@@ -709,7 +745,7 @@ async function init() {
     async function fullGeneric(tab) {
         fullSet('Szukam napisów w odtwarzaczu…');
         try {
-            await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['assets/lektor_bar.js', 'assets/full_subs_ondemand.js'] });   // [AGENT-EXP] lektor_bar: 📊 pasek
+            await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['assets/lektor_bar.js', 'assets/lektor_scheduler.js', 'assets/full_subs_ondemand.js'] });   // [FIX 2026-11-02] + wspólny harmonogram   // [AGENT-EXP] lektor_bar: 📊 pasek
             const res = await chrome.scripting.executeScript({
                 target: { tabId: tab.id, allFrames: true },
                 func: () => (window.__lektorFullSubs ? window.__lektorFullSubs.start() : { found: false, reason: 'noscript' })
@@ -1354,7 +1390,7 @@ async function init() {
                 lastTelemetry = null;
                 return;
             }
-            chrome.storage.local.get('__recTelemetry_' + plat, (items) => {
+            chrome.storage.session.get('__recTelemetry_' + plat, (items) => {   // [FIX 2026-11-02] telemetria w storage.session
                 const t = items && items['__recTelemetry_' + plat];
                 if (!t || Date.now() - (t.ts || 0) > 10000) {
                     if (tEl) tEl.textContent = plat === 'netflix'
@@ -1401,7 +1437,7 @@ async function init() {
                             ? rec.map((r) => '• „' + String(r.t || '').slice(0, 40) + '” — ' + (r.w || 0) + ' wyrazów').join('\n')
                             : '—';
                         // Czarna skrzynka silnika: błędy startu/syntezy/odtwarzania (offscreen).
-                        chrome.storage.local.get(['__offscreenError', '__offscreenLog'], (d) => {
+                        Promise.all([chrome.storage.local.get('__offscreenError'), chrome.storage.session.get('__offscreenLog')]).then(([d1, d2]) => Object.assign({}, d1, d2)).catch(() => ({})).then((d) => {   // [FIX 2026-11-02] dziennik w storage.session
                             if (!logEl || !logEl.isConnected) return;
                             const lines = [];
                             if (d && d.__offscreenError) lines.push('⛔ SILNIK: ' + String(d.__offscreenError.msg || '').slice(0, 140));
@@ -1510,7 +1546,7 @@ const MATCHA_STORE = [
 // [AGENT-EXP] 2026-10-24: w „Językach świata” dwie pozycje na głos: INT8 (wariant 'kombi') i F32 (wariant 'cpu_fp32',
 // wszystko na procesorze), ok. 85 MB. Pliki obok INT8 ('matcha/<głos>/encoder_sdp.onnx' itd.), znacznik '_ok32'.
 // voices.json i wokoder są wspólne: F32 dociąga je, gdy ich brak (działa bez INT8), kasowanie zostawia je drugiemu.
-// Pobranie wariantu od razu go włącza; przy dwóch dostępnych przełącza „Włącz” (albo lista „Matcha 🌐 — wariant”).
+// Pobranie wariantu od razu go włącza; przy dwóch dostępnych przełącza „Włącz” (lista w popupie usunięta 2026-11-02).
 const MATCHA_SHARED = ['voices.json', 'vocoder.onnx'];
 const MATCHA_F32_FILES = ['voices.json', 'vocoder.onnx', 'encoder_sdp.onnx', 'decoder_t4.onnx'];
 const MATCHA_F32_STORE = MATCHA_STORE.map((e) => Object.assign({}, e, { id: e.id + '-f32', f32: true, sizeMb: 89,
@@ -1522,20 +1558,8 @@ function matchaSetTryb(t) {
     LANG_STORE.matchaTryb = t;
     return new Promise((res) => chrome.storage.local.set({ matchaWebTryb: t }, () => res()));
 }
-// plik modelu w paczce? HEAD, żeby nie ciągnąć 40 MB
-function matchaPkgHas(mv, f) {
-    const url = chrome.runtime.getURL('matcha_web/models/' + mv + '/' + f);
-    return fetch(url, { method: 'HEAD' }).then((r) => !!r.ok).catch(() => fetch(url).then((r) => {
-        try { if (r.body && r.body.cancel) r.body.cancel(); } catch (e) {}
-        return !!r.ok;
-    }).catch(() => false));
-}
-// stan głosu Matcha: 'pkg' (w paczce), 'idb' (pobrany), '' (brak)
+// stan głosu Matcha: 'idb' (pobrany), '' (brak). [AGENT-EXP] 2026-11-02: modeli nie ma już w paczce (bez stanu 'pkg')
 async function matchaStoreState(mv) {
-    try {
-        const r = await fetch(chrome.runtime.getURL('matcha_web/models/' + mv + '/voices.json'));
-        if (r.ok) return 'pkg';
-    } catch (e) { /* brak w paczce */ }
     try { if (await voiceGet('matcha/' + mv + '/_ok')) return 'idb'; } catch (e) {}
     return '';
 }
@@ -1543,10 +1567,9 @@ async function matchaRefreshState() {
     LANG_STORE.matchaTryb = await new Promise((res) => chrome.storage.local.get('matchaWebTryb', (d) => res(d && d.matchaWebTryb === 'cpu_fp32' ? 'cpu_fp32' : 'kombi')));
     LANG_STORE.matcha = {};
     for (const e of MATCHA_STORE) LANG_STORE.matcha[e.mv] = await matchaStoreState(e.mv);
-    for (const e of MATCHA_F32_STORE) {   // [AGENT-EXP] 2026-10-24: stan F32 (klucz = id wpisu): paczka / pobrany / brak
+    for (const e of MATCHA_F32_STORE) {   // [AGENT-EXP] 2026-10-24: stan F32 (klucz = id wpisu): pobrany / brak
         let st = '';
-        if (await matchaPkgHas(e.mv, 'encoder_sdp.onnx') && await matchaPkgHas(e.mv, 'decoder_t4.onnx')) st = 'pkg';
-        else try {   // bez voices.json/wokodera — ⬇ dociąga brakujące
+        try {   // bez voices.json/wokodera — ⬇ dociąga brakujące
             if (await voiceGet(matchaOkKey(e)) && await voiceGet('matcha/' + e.mv + '/voices.json') && await voiceGet('matcha/' + e.mv + '/vocoder.onnx')) st = 'idb';
         } catch (err) {}
         LANG_STORE.matcha[e.id] = st;
@@ -1582,6 +1605,32 @@ async function matchaDownload(entry) {
         await matchaRefreshState();
         langRender();
     }
+}
+// [AGENT-EXP] 2026-11-02: 📂 „Wskaż pliki własnego głosu” przyjmuje też folder Matchy (encoder_sdp*/decoder_t4*).
+// Głos = "default" z voices.json, wariant INT8/F32 = po nazwach plików; zapis jak przy pobieraniu z serwera.
+// Zwraca tekst statusu albo null, gdy to nie Matcha (wtedy folder idzie jako Sherpa/Piper).
+async function matchaImportFiles(files) {
+    const byName = {};
+    for (const f of Array.from(files || [])) byName[String(f.name || '').toLowerCase()] = f;
+    if (!Object.keys(byName).some((n) => /^(encoder_sdp|decoder_t4)/.test(n))) return null;
+    if (!byName['voices.json']) return '⛔ Folder Matchy bez voices.json — nie wiem, który to głos.';
+    let mv = '';
+    try { mv = String(JSON.parse(await byName['voices.json'].text()).default || ''); } catch (e) {}
+    const entries = MATCHA_STORE.concat(MATCHA_F32_STORE).filter((e) => e.mv === mv && matchaFiles(e).every((f) => byName[f]));
+    if (!entries.length) return '⛔ Matcha: znam tylko głosy ' + MATCHA_STORE.map((e) => e.mv).join(', ')
+        + ' z kompletem plików (voices.json, vocoder.onnx + encoder_sdp/decoder_t4 w wersji _int8 albo F32). W folderze: „' + (mv || '?') + '”.';
+    for (const e of entries) for (const f of matchaFiles(e)) {
+        const head = new Uint8Array(await byName[f].slice(0, 1).arrayBuffer());
+        if (/\.onnx$/.test(f) && !(byName[f].size > 1024 * 1024 && head[0] === 0x08)) return '⛔ ' + f + ' nie wygląda na model ONNX.';
+    }
+    for (const e of entries) {
+        for (const f of matchaFiles(e)) await voicePut('matcha/' + e.mv + '/' + f, byName[f]);
+        await voicePut(matchaOkKey(e), Date.now());
+    }
+    await matchaSetTryb(entries.some((e) => !e.f32) ? 'kombi' : 'cpu_fp32');
+    try { await matchaRefreshState(); langRender(); } catch (e) {}
+    return '✓ Matcha „' + mv + '” wczytana z folderu (' + entries.map((e) => e.f32 ? 'F32' : 'INT8').join(' + ')
+        + '). Wybierz silnik Matcha i głos 🌐 w ustawieniach lektora.';
 }
 async function matchaDelete(entry) {
     let other = false;   // [AGENT-EXP] 2026-10-24: INT8 i F32 osobno; wspólne pliki zostają, gdy drugi wariant jest pobrany
@@ -1761,11 +1810,7 @@ function langRender() {
                 row.appendChild(tb);
             }
             btn.className = 'mini' + (st === 'idb' ? ' danger' : '');
-            if (st === 'pkg') {
-                btn.textContent = '✓';
-                btn.disabled = true;
-                btn.title = 'Wbudowany w paczkę rozszerzenia — pobieranie niepotrzebne';
-            } else if (st === 'idb') {
+            if (st === 'idb') {   // [AGENT-EXP] 2026-11-02: bez stanu „wbudowany w paczkę”
                 btn.textContent = '🗑';
                 btn.title = 'Pobrany do pamięci rozszerzenia. Kliknij, aby wykasować.';
                 btn.addEventListener('click', () => matchaDelete(e));
@@ -1773,7 +1818,8 @@ function langRender() {
                 btn.textContent = LANG_STORE.busy[e.id] ? '⏳' : '⬇';
                 btn.disabled = !!LANG_STORE.busy[e.id];
                 btn.title = 'Pobierz z HuggingFace (machinekind/Matcha-TTS-PL-Edge-v2), ok. ' + e.sizeMb + ' MB'
-                    + (e.f32 ? ' — wariant F32, wszystko na procesorze (działa też bez INT8)' : '') + '; po pobraniu włącza się sam';   // [AGENT-EXP] 2026-10-24
+                    + (e.f32 ? ' — wariant F32, wszystko na procesorze (działa też bez INT8)' : '') + '; po pobraniu włącza się sam'   // [AGENT-EXP] 2026-10-24
+                    + (e.f32 ? '' : '. Lektor pobierze go też sam przy pierwszym czytaniu');   // [AGENT-EXP] 2026-11-02
                 btn.addEventListener('click', () => matchaDownload(e));
             }
             row.appendChild(btn);
@@ -2008,6 +2054,7 @@ function lowcaSend(action, busyMsg) {
         chrome.runtime.sendMessage({ action }, (resp) => {
             void chrome.runtime.lastError;
             if (resp && resp.state) lowcaRender(resp.state);
+            else if (resp && resp.listed && status) status.textContent = '📋 ' + resp.listed + ' — dopisana do białej listy domen. 🔍 Szukam napisów…';   // [FIX 2026-11-02]
             else if (resp && resp.ok === false && status) {
                 status.textContent = '⛔ ' + (resp.error || 'nie udało się uruchomić (strona systemowa?)');
             }
@@ -2044,7 +2091,18 @@ try {
     const dot = document.getElementById('ttsEngineDot');
     const txt = document.getElementById('ttsEngineText');
     if (!sel || !dot || !txt) return;
-    const WS = { matcha: 'ws://127.0.0.1:9000', xtts: 'ws://127.0.0.1:8000', audio8: 'ws://127.0.0.1:9300', f5: 'ws://127.0.0.1:9400', pocket: 'ws://127.0.0.1:9200', omnivoice: 'ws://127.0.0.1:9100', kokoro: 'ws://127.0.0.1:9500' };   // [AGENT-EXP] f5: lektor Marek; 2026-10-27: kokoro
+    const WS = { matcha: 'ws://127.0.0.1:9000', xtts: 'ws://127.0.0.1:8000', audio8: 'ws://127.0.0.1:9300', f5: 'ws://127.0.0.1:9400', pocket: 'ws://127.0.0.1:9200', omnivoice: 'ws://127.0.0.1:9100', kokoro: 'ws://127.0.0.1:9500', server: 'ws://127.0.0.1:9000' };   // [AGENT-EXP] f5: lektor Marek; 2026-10-27: kokoro; [FIX 2026-11-02] server = adres z pola
+    // [FIX 2026-11-02] „Serwer lokalny — własny adres”: pole adresu (widoczne przy tym silniku) + kropka sprawdza wpisany adres
+    const srvRow = document.getElementById('srvRow'), srvUrl = document.getElementById('serverUrlInput');
+    const srvShow = () => { if (srvRow) srvRow.style.display = sel.value === 'server' ? '' : 'none'; };
+    chrome.storage.local.get('serverUrl', (r) => { WS.server = (r && r.serverUrl) || 'ws://127.0.0.1:9000'; if (srvUrl) srvUrl.value = WS.server; });
+    if (srvUrl) srvUrl.addEventListener('change', () => {
+        const v = srvUrl.value.trim();
+        if (!/^wss?:\/\/[^\s]+$/i.test(v)) { srvUrl.value = WS.server; return; }   // tylko ws:// albo wss://
+        WS.server = v;
+        chrome.storage.local.set({ serverUrl: v });
+        probe();
+    });
     let probeNo = 0;
     // [AGENT-EXP] 2026-10-24: Matcha z głosem 🌐 'web:…' liczy w rozszerzeniu — nie sprawdzaj serwera :9000.
     let matchaWeb = true;
@@ -2077,12 +2135,13 @@ try {
     }
     chrome.storage.local.get('ttsEngine', (r) => {
         const v = r && r.ttsEngine;
-        sel.value = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'].indexOf(v) >= 0 ? v : 'matcha';   // [AGENT-EXP] 2026-10-24
+        sel.value = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'server', 'supertonic', 'browser'].indexOf(v) >= 0 ? v : 'matcha';   // [AGENT-EXP] 2026-10-24
+        srvShow();
         probe();
     });
-    sel.addEventListener('change', () => { chrome.storage.local.set({ ttsEngine: sel.value }); probe(); });
+    sel.addEventListener('change', () => { chrome.storage.local.set({ ttsEngine: sel.value }); srvShow(); probe(); });
     chrome.storage.onChanged.addListener((ch, area) => {
-        if (area === 'local' && ch.ttsEngine && ch.ttsEngine.newValue && ch.ttsEngine.newValue !== sel.value) { sel.value = ch.ttsEngine.newValue; probe(); }
+        if (area === 'local' && ch.ttsEngine && ch.ttsEngine.newValue && ch.ttsEngine.newValue !== sel.value) { sel.value = ch.ttsEngine.newValue; srvShow(); probe(); }
     });
     setInterval(() => { if (WS[sel.value] && !(sel.value === 'matcha' && matchaWeb)) probe(true); }, 4000);   // [AGENT-EXP] 2026-10-24
 })();
@@ -2114,6 +2173,7 @@ try {
         omnivoice: { k: 'omnivoiceVoice', def: 'male, young adult, moderate pitch', label: 'Głos OmniVoice', list: OMNI },
         kokoro: { k: 'kokoroVoice', def: 'pm_mateusz', label: 'Głos Kokoro', list: KOKORO },   // [AGENT-EXP] 2026-10-27
         audio8: { k: 'audio8Voice', def: 'default', label: 'Głos Audio8 (ID katalogu w voices\\)', text: true },
+        server: { k: 'serverVoice', def: '', label: 'Głos na serwerze (ID; puste = domyślny serwera)', text: true, allowEmpty: true },   // [FIX 2026-11-02]
         // [VOX] 2026-10-20: Supertonic 3 — 4 głosy wbudowane w model (VoxNemesis)
         supertonic: { k: 'supertonicVoice', def: 'Supertonic M1', label: 'Głos Supertonic', list: [['Supertonic M1', 'Męski 1'], ['Supertonic M2', 'Męski 2'], ['Supertonic F1', 'Żeński 1'], ['Supertonic F2', 'Żeński 2']] },
         // [AGENT-EXP] 2026-10-21: 🗣 głosy przeglądarki — lista z dokumentu lektora (BROWSER_TTS_VOICES), '' = automatycznie
@@ -2151,7 +2211,7 @@ try {
         });
     }
     sel.addEventListener('change', () => { if (cur && !cur.text) chrome.storage.local.set({ [cur.k]: sel.value }); });
-    txt.addEventListener('change', () => { if (cur && cur.text) chrome.storage.local.set({ [cur.k]: txt.value.trim() || cur.def }); });
+    txt.addEventListener('change', () => { if (cur && cur.text) chrome.storage.local.set({ [cur.k]: cur.allowEmpty ? txt.value.trim() : (txt.value.trim() || cur.def) }); });   // [FIX 2026-11-02] allowEmpty
     eng.addEventListener('change', render);
     chrome.storage.onChanged.addListener((ch, area) => {
         if (area === 'local' && (ch.ttsEngine || (cur && ch[cur.k]))) setTimeout(render, 0);
@@ -2168,6 +2228,15 @@ try {
     chrome.storage.onChanged.addListener((ch, area) => {
         if (area === 'local' && ch.preloadWhilePaused) chk.checked = ch.preloadWhilePaused.newValue !== false;
     });
+})();
+
+// [FIX 2026-11-02] 🔉 checkbox „Ściszaj film tylko, gdy lektor mówi” (duckWhileSpeaking, domyślnie wył.)
+(function () {
+    const chk = document.getElementById('duckWhileCheck');
+    if (!chk) return;
+    chrome.storage.local.get('duckWhileSpeaking', (r) => { chk.checked = !!(r && r.duckWhileSpeaking); });
+    chk.addEventListener('change', () => chrome.storage.local.set({ duckWhileSpeaking: chk.checked }));
+    chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.duckWhileSpeaking) chk.checked = !!ch.duckWhileSpeaking.newValue; });
 })();
 
 // [AGENT-EXP] 2026-10-26: checkbox „Auto-nadrabianie” (autoCatchup, domyślnie włączony — jak w Ustawieniach).
@@ -2353,18 +2422,54 @@ try {
     chrome.storage.local.get('ttsEngine', () => setTimeout(sync, 0));   // po ustawieniu eng.value przez blok „Silnik mowy”
 })();
 
-// [AGENT-EXP] 2026-10-24: wariant Matcha w przeglądarce (klucz matchaWebTryb: 'kombi' | 'cpu_fp32'), widoczny przy silniku Matcha.
+// [FIX 2026-11-02] „Czytam z: …” — skąd lektor bierze tekst na aktywnej karcie (odpowiada ramka, która ma źródło:
+// wspólny harmonogram assets/lektor_scheduler.js, czytanie na żywo, OCR). Odświeżane co 2 s, póki popup jest otwarty.
 (function () {
-    const eng = document.getElementById('ttsEngineSelect');
-    const rows = document.getElementById('mwRows');
-    const sel = document.getElementById('mwTryb');
-    if (!eng || !rows || !sel) return;
-    const show = () => { rows.style.display = eng.value === 'matcha' ? '' : 'none'; };
-    chrome.storage.local.get('matchaWebTryb', (r) => { sel.value = r && r.matchaWebTryb === 'cpu_fp32' ? 'cpu_fp32' : 'kombi'; show(); });
-    sel.addEventListener('change', () => chrome.storage.local.set({ matchaWebTryb: sel.value }, () => { if (LANG_STORE.catalog) matchaRefreshState().then(langRender); }));
-    chrome.storage.onChanged.addListener((ch, area) => {   // [AGENT-EXP] 2026-10-24: „Włącz” w Językach świata → lista się zgadza
-        if (area === 'local' && ch.matchaWebTryb) sel.value = ch.matchaWebTryb.newValue === 'cpu_fp32' ? 'cpu_fp32' : 'kombi';
+    const line = document.getElementById('lektorSourceLine');
+    if (!line) return;
+    const ask = () => chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs && tabs[0];
+        if (!tab || tab.id == null) return;
+        chrome.tabs.sendMessage(tab.id, { action: 'LEKTOR_SOURCE' }, (r) => {
+            void chrome.runtime.lastError;
+            if (!r || !r.source) { line.style.display = 'none'; return; }
+            line.textContent = '📍 Czytam z: ' + r.source + (r.cues ? ' (' + r.cues + ' kwestii)' : '');
+            line.style.display = '';
+        });
     });
-    eng.addEventListener('change', show);
-    setTimeout(show, 300);
+    ask();
+    setInterval(ask, 2000);
 })();
+
+// [FIX 2026-11-02] 📋 „Tylko domeny z listy” (domainListsOn, domyślnie WŁ.) — przełącznik, stan aktywnej karty
+// i „➕ Dodaj tę stronę”. Zasady list: assets/domain_lists.js (ten sam kod co w skryptach stron i w tle).
+(function () {
+    const DL = window.__LektorDomains;
+    const chk = document.getElementById('domainListsCheck'), line = document.getElementById('domainStateLine');
+    const addBtn = document.getElementById('domainAddBtn'), editBtn = document.getElementById('domainEditBtn');
+    if (!DL || !chk || !line || !addBtn) return;
+    let host = '';
+    function render(o) {
+        o = o || {};
+        chk.checked = o.domainListsOn !== false;
+        addBtn.style.display = 'none';
+        const st = DL.state(host, '', o);
+        if (st.why === 'off') line.textContent = '🌍 Wyłączone — lektor działa na każdej stronie, na której się uruchomi (listy czekają nieużywane).';
+        else if (st.why === 'empty') line.textContent = '🌍 Biała lista jest pusta — lektor działa wszędzie.';
+        else if (!host) line.textContent = 'Lektor działa tylko na stronach z białej listy.';
+        else if (st.why === 'black') line.textContent = '⛔ ' + host + ' — na czarnej liście: lektor tu milczy.';
+        else if (st.why === 'white') line.textContent = '✅ ' + host + ' — na białej liście: lektor działa.';
+        else { line.textContent = '💤 ' + host + ' — nie ma na białej liście: lektor tu śpi i nie zużywa procesora.'; addBtn.style.display = ''; }
+    }
+    const refresh = () => chrome.storage.local.get(DL.LIST_KEYS, render);
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => { host = DL.hostOf(tabs && tabs[0] && tabs[0].url); refresh(); });
+    chk.addEventListener('change', () => chrome.storage.local.set({ domainListsOn: chk.checked }));
+    addBtn.addEventListener('click', () => chrome.storage.local.get('domainWhitelist', (r) => {
+        const text = DL.addHost(r && r.domainWhitelist, host);
+        if (text) chrome.storage.local.set({ domainWhitelist: text });   // otwarta karta budzi lektora sama (options_hooks.js)
+    }));
+    if (editBtn) editBtn.addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('src/options/options.html#domeny') }));
+    chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && DL.LIST_KEYS.some((k) => ch[k])) refresh(); });
+})();
+
+// [AGENT-EXP] 2026-11-02: lista „Matcha 🌐 — wariant” usunięta — wariant (matchaWebTryb) przełącza „Włącz” w „Języki świata”.

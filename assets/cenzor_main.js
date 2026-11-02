@@ -28,17 +28,9 @@
 
     /* ---------------- ustawienia ---------------- */
 
-    var DEFAULT_WORDS = [
-        'kurw*', 'kurew*', 'nakurw*', 'wkurw*', 'zakurw*', 'rozkurw*', 'pokurw*', 'skurwysyn*', 'skurwi*',
-        'chuj*', 'huj*', 'pizd*', 'spizdz*', 'wypizdz*', 'przypizdz*', 'zapizdz*', 'popizdz*', 'podpizdz*',
-        'cip*', 'dziwk*', 'jeb*', 'wjeb*', 'podjeb*', 'przyjeb*', 'ujeb*',
-        'pierdol*', 'pierdal*', 'spierdol*', 'spierdal*', 'wypierdol*', 'wypierdal*',
-        'odpierdol*', 'odpierdal*', 'napierdal*', 'rozpierdal*', 'zapierdal*',
-        'przepierdal*', 'opierdal*', 'wpierdal*', 'dopierdol*', 'dopierdal*',
-        'przypierdol*', 'przypierdal*', 'podpierdol*', 'podpierdal*', 'popierdol*', 'popierdal*',
-        'zajeb*', 'dojeb*', 'pojeb*', 'najeb*', 'wyjeb*', 'odjeb*', 'rozjeb*', 'przejeb*',
-        'fuck*', 'motherfuck*', 'shit*', 'bitch*', 'cunt*'
-    ].join(', ');
+    // [FIX 2026-11-02] JEDEN cenzor: własna lista (DEFAULT_WORDS, „kurw*” itd.) usunięta — słowa rozpoznaje wspólny silnik
+    // assets/censor.js (ten sam, który wycina przekleństwa z mowy lektora; wczytany w świecie MAIN przed tym plikiem):
+    // wbudowane listy wielu języków + rdzenie + własne słowa użytkownika (censorCustomWords, „-słowo” = wyjątek).
 
     var opt = {
         cenzorOn: false,
@@ -49,7 +41,7 @@
         cenzorTextRate: 1,     // [AGENT-EXP] 2026-10-20: tempo tekstu (suwak), gdy cenzorTextAuto wył.
         cenzorTextAuto: true,  // [AGENT-EXP] 2026-10-20: tempo tekstu = tempo filmu (jak dotąd)
         cenzorAsrTag: true,
-        cenzorWords: '',
+        words: '',            // [FIX 2026-11-02] wspólne własne słowa cenzora (censorCustomWords)
         cenzorNfPl: true,      // Netflix: zawsze cały polski plik napisów
         cenzorYtPl: true,      // YouTube: zawsze polskie napisy (ręczne → auto → tłumaczenie YouTube)
         selectors: []          // Kreator napisów dla tej strony (z cenzor_bridge.js)
@@ -68,7 +60,7 @@
         opt.cenzorTextRate = num(o.cenzorTextRate, 0.25, 2.5, 1);   // [AGENT-EXP] 2026-10-20
         opt.cenzorTextAuto = o.cenzorTextAuto !== false;
         opt.cenzorAsrTag = o.cenzorAsrTag !== false;
-        opt.cenzorWords = typeof o.cenzorWords === 'string' ? o.cenzorWords : '';
+        opt.words = typeof o.censorCustomWords === 'string' ? o.censorCustomWords : '';   // [FIX 2026-11-02] jedna lista słów
         opt.cenzorNfPl = o.cenzorNfPl !== false;
         opt.cenzorYtPl = o.cenzorYtPl !== false;
         opt.selectors = Array.isArray(o.selectors) ? o.selectors.filter(function (s) { return typeof s === 'string' && s.trim(); }) : [];
@@ -788,36 +780,20 @@
     var VOWEL_RE = /[aąeęioóuy]/;
     var PUNCT_RE = /^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu;
     var ASR_TAG_RE = /\[\s*_{2,}\s*\]/g;
-    var wordRegex = null;
-
+    // [FIX 2026-11-02] rozpoznawanie słów = wspólny silnik cenzora (assets/censor.js → window.__lektorCensor)
+    var wordRegex = null;      // tu: „silnik ustawiony dla bieżących własnych słów” (nazwa zostaje dla zgodności)
+    var wordsApplied = null;
+    function engine() { return window.__lektorCensor || null; }
     function buildRegex() {
-        var src = opt.cenzorWords && opt.cenzorWords.trim() ? opt.cenzorWords : DEFAULT_WORDS;
-        var esc = function (s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); };
-        var parts = [];
-        String(src).split(/[\s,;\n]+/).forEach(function (w) {
-            w = w.trim().toLowerCase();
-            if (!w) return;
-            var wild = w.slice(-1) === '*';
-            var base = (wild ? w.slice(0, -1) : w).replace(PUNCT_RE, '');
-            if (base.length < 2) return;
-            var p = esc(base) + (wild ? '[\\p{L}\\p{N}]*' : '');
-            if (parts.indexOf(p) < 0) parts.push(p);
-        });
-        if (!parts.length) { wordRegex = null; return; }
-        var body = '(?:' + parts.join('|') + ')';
-        try { wordRegex = new RegExp('(?<![\\p{L}\\p{N}])' + body + '(?![\\p{L}\\p{N}])', 'giu'); }
-        catch (e) { wordRegex = new RegExp('\\b' + body + '\\b', 'gi'); }
+        var e = engine();
+        if (!e) { wordRegex = null; return; }
+        if (wordsApplied !== opt.words) { e.applySettings({ censorCustomWords: opt.words }); wordsApplied = opt.words; }
+        wordRegex = true;
     }
 
     function findMatches(flat) {
-        var out = [], m;
-        if (wordRegex) {
-            wordRegex.lastIndex = 0;
-            while ((m = wordRegex.exec(flat))) {
-                out.push({ word: m[0], index: m.index });
-                if (m.index === wordRegex.lastIndex) wordRegex.lastIndex++;
-            }
-        }
+        var out = [], m, e = engine();
+        if (e && e.findMatches) { if (!wordRegex || wordsApplied !== opt.words) buildRegex(); out = e.findMatches(flat); }
         if (opt.cenzorAsrTag) {
             ASR_TAG_RE.lastIndex = 0;
             while ((m = ASR_TAG_RE.exec(flat))) out.push({ word: m[0], index: m.index });

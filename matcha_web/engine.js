@@ -31,6 +31,60 @@ let lastWarm = null;   // opcje ostatniego warmUp — do wczytania drugiego work
 const queue = { urgent: [], normal: [] };
 let log = () => {};
 
+// [AGENT-EXP] 2026-11-02: modeli nie ma w paczce. Zanim workery zaczną liczyć, głos musi mieć w pamięci rozszerzenia
+// (IndexedDB 'lektorVoices'/'files', klucze 'matcha/<głos>/<plik>' jak popup „Języki świata”) komplet INT8 albo F32;
+// gdy nie ma żadnego, brakujące pliki INT8 (~27 MB) pobieramy RAZ z HuggingFace i stawiamy znacznik '_ok' (popup: 🗑).
+const REPO = 'https://huggingface.co/machinekind/Matcha-TTS-PL-Edge-v2/resolve/main/';
+const INT8_FILES = ['voices.json', 'encoder_sdp_int8.onnx', 'decoder_t4_int8.onnx', 'vocoder.onnx'];
+const F32_FILES = ['voices.json', 'vocoder.onnx', 'encoder_sdp.onnx', 'decoder_t4.onnx'];
+const ready = new Map();   // głos → true (komplet jest) | Promise (sprawdzanie / pobieranie w toku)
+function idb(mode, fn) {   // fn(store) → wynik po zakończeniu transakcji
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open('lektorVoices', 1);
+        req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains('files')) req.result.createObjectStore('files'); };
+        req.onerror = () => reject(req.error || new Error('IndexedDB niedostępna'));
+        req.onsuccess = () => {
+            const db = req.result;
+            try {
+                const tx = db.transaction('files', mode);
+                const out = fn(tx.objectStore('files'));
+                tx.oncomplete = () => { db.close(); resolve(out); };
+                tx.onerror = tx.onabort = () => { db.close(); reject(tx.error || new Error('IndexedDB: zapis nieudany')); };
+            } catch (e) { db.close(); reject(e); }
+        };
+    });
+}
+async function ensureModel(voice) {
+    const key = (f) => 'matcha/' + voice + '/' + f;
+    const keys = (await idb('readonly', (st) => st.getAllKeys(IDBKeyRange.bound(key(''), key('￿'))))).result.map(String);
+    const has = (f) => keys.includes(key(f));
+    if (INT8_FILES.every(has) || F32_FILES.every(has)) return;
+    const missing = INT8_FILES.filter((f) => !has(f));
+    for (let i = 0; i < missing.length; i++) {
+        const f = missing[i];
+        log('matcha-web-pobieranie', voice + '/' + f + ' (' + (i + 1) + '/' + missing.length + ') z HuggingFace…');
+        const r = await fetch(REPO + voice + '/' + f);
+        if (!r.ok) throw new Error(f + ': HTTP ' + r.status);
+        const data = new Uint8Array(await r.arrayBuffer());
+        if (/\.onnx$/.test(f) && !(data.length > 1024 * 1024 && data[0] === 0x08)) throw new Error(f + ' nie wygląda na model ONNX');
+        await idb('readwrite', (st) => st.put(data, key(f)));
+    }
+    await idb('readwrite', (st) => st.put(Date.now(), key('_ok')));
+    log('matcha-web-pobieranie', 'głos ' + voice + ' pobrany (INT8) — następnym razem z pamięci, także bez internetu');
+}
+// true = można liczyć; false = sprawdzanie / pobieranie w toku (potem pump() sam ruszy kolejkę)
+function modelReady(voice) {
+    const r = ready.get(voice);
+    if (r === true) return true;
+    if (!r) ready.set(voice, ensureModel(voice).then(() => { ready.set(voice, true); pump(); }, (err) => {
+        ready.delete(voice);   // następna kwestia spróbuje jeszcze raz
+        const m = 'nie ma głosu ' + voice + ' i nie udało się go pobrać (' + ((err && err.message) || err) + ') — sprawdź internet albo pobierz go w popupie („Języki świata”)';
+        log('matcha-web-pobieranie-fail', m);
+        cancelQueued(m);
+    }));
+    return false;
+}
+
 export function setLogger(fn) { if (typeof fn === 'function') log = fn; }
 
 function makeSlot() {
@@ -80,6 +134,7 @@ function pump() {
     for (;;) {
         const list = queue.urgent.length ? queue.urgent : queue.normal;
         if (!list.length) return;
+        if (!modelReady(list[0].msg.voice)) return;   // [AGENT-EXP] 2026-11-02: głos się pobiera — kolejka czeka
         // po przejściu na procesor: wolne workery zaczęte z kartą (ort.all — wolniejszy na procesorze) wymieniamy na nowe
         if (forceCpu) for (const s of pool.slice()) if (!s.running && !s.cpuOrt) killSlot(s);
         let slot = list[0].msg.nowy && pool.length < poolSize() ? null : pool.find((s) => !s.running);   // nowy: wczytanie modelu w NOWYM workerze
@@ -98,11 +153,24 @@ function pump() {
     }
 }
 
-function enqueue(msg, pilne) {
+function enqueue(msg, pilne, ticket) {
     return new Promise((resolve, reject) => {
-        (pilne ? queue.urgent : queue.normal).push({ msg, resolve, reject });
+        (pilne ? queue.urgent : queue.normal).push({ msg, resolve, reject, ticket: ticket || null });
         pump();
     });
+}
+
+// [FIX 2026-11-02] Awans: kwestia nagrywana do przodu właśnie ma być czytana — jej czekające części (ticket z opts.ticket)
+// przechodzą z kolejki zwykłej do pilnej (w tej samej kolejności). Części już liczone kończą się normalnie.
+export function promote(ticket) {
+    if (!ticket) return 0;
+    let n = 0;
+    for (let i = 0; i < queue.normal.length;) {
+        if (queue.normal[i].ticket === ticket) { queue.urgent.push(queue.normal.splice(i, 1)[0]); n++; }
+        else i++;
+    }
+    if (n) pump();
+    return n;
 }
 
 // opts: { voice: 'male_voxcpm_2' | 'female_voxcpm_2', steps: 2|4, temperature, lengthScale, style, pilne }
@@ -113,8 +181,8 @@ export function synthesizeWav(text, opts = {}) {
     const t0 = performance.now();
     const parts = poolSize() > 1 ? splitSentences(String(text || '')) : [String(text || '')];   // na karcie 1 worker — bez dzielenia
     const jobs = parts.length > 1
-        ? parts.map((p) => enqueue({ ...base, text: p, split: false, bezNormy: true }, opts.pilne))
-        : [enqueue({ ...base, text: String(text || '') }, opts.pilne)];
+        ? parts.map((p) => enqueue({ ...base, text: p, split: false, bezNormy: true }, opts.pilne, opts.ticket))
+        : [enqueue({ ...base, text: String(text || '') }, opts.pilne, opts.ticket)];
     return Promise.all(jobs).then((res) => {
         const sr = res[0].sampleRate;
         let out = res[0].samples;
@@ -148,6 +216,7 @@ export function reset(reason = 'zresetowany') {
     cancelQueued(reason);
     for (const s of pool.slice()) killSlot(s, new Error('Matcha w przeglądarce: ' + reason));
     forceCpu = false;
+    for (const [v, r] of ready) if (r === true) ready.delete(v);   // [AGENT-EXP] 2026-11-02: głos mógł zostać skasowany w popupie
 }
 
 // [AGENT-EXP] 2026-10-24: wczytanie modelu zawczasu (start lektora) — we wszystkich workerach puli naraz, żeby pierwsza

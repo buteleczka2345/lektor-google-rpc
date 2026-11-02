@@ -45,11 +45,11 @@ function matchaWebEngine() {
     return mwModP;
 }
 // Ustawienia jak głosy w serwer_matcha.py: zwykły temp 0.8 / długość 0.8, ':elegancki' 0.6 / 0.92 (speed 1 — tempo ustawia odtwarzacz).
-function matchaWebSynthesize(text, pilne) {
+function matchaWebSynthesize(text, pilne, ticket) {   // [FIX 2026-11-02] ticket: znacznik zadania (awans przez promote)
     const parts = matchaVoice.split(':');
     const voice = parts[1] === 'female_voxcpm_2' ? 'female_voxcpm_2' : 'male_voxcpm_2';
     const el = parts[2] === 'elegancki';
-    return matchaWebEngine().then((m) => m.synthesizeWav(text, { voice, steps: 4, temperature: el ? 0.6 : 0.8, lengthScale: el ? 0.92 : 0.8, pilne: !!pilne, tryb: matchaWebTryb }));
+    return matchaWebEngine().then((m) => m.synthesizeWav(text, { voice, steps: 4, temperature: el ? 0.6 : 0.8, lengthScale: el ? 0.92 : 0.8, pilne: !!pilne, tryb: matchaWebTryb, ticket: ticket || null }));
 }
 // [VOX] 2026-10-20: Supertonic — silnik przeniesiony z VoxNemesis (supertonic/engine.js). Liczy lokalnie,
 // na CPU (pula workerów) albo na karcie graficznej (WebGPU). Moduł ładowany dopiero przy pierwszym użyciu,
@@ -131,27 +131,37 @@ function poolSize() {
 let sherpaPool = [];          // elementy: { worker, ready, busy, pending, t0, lastUsed }
 const audioCache = new Map();
 const matchaSockets = new Set();
-// [AGENT-EXP] Śledzimy połączenia XTTS, aby pauza i zmiana silnika mogły przerwać oczekujące syntezy.
-const xttsSockets = new Set();
-// [AGENT-EXP] Żądania Audio8 również są anulowane przy pauzie i zmianie silnika/głosu.
-const audio8Sockets = new Set();
-// [AGENT-EXP] Pocket-TTS-PL — własne zestawy połączeń (czytane teraz / nagrywane do przodu).
-const pocketSockets = new Set(), pocketPreloadSockets = new Set();
-const omnivoiceSockets = new Set(), omnivoicePreloadSockets = new Set();   // [AGENT-EXP] OmniVoice
-const kokoroSockets = new Set(), kokoroPreloadSockets = new Set();   // [AGENT-EXP] 2026-10-27 Kokoro
 // [AGENT-EXP] 2026-10-17: osobne zestawy połączeń dla NAGRYWANIA DO PRZODU (preload). Pauza / przewinięcie /
 // TTS_CLEAR_BUFFER przerywają tylko syntezę „na gorąco”; preload przerywa dopiero zmiana silnika lub głosu.
 // Wcześniej pauza kasowała nagrane do przodu kwestie, a skrypty strony uważały je za nagrane → od tej chwili
 // wszystko syntezowane w chwili czytania (XTTS nie nadąża → lektor milknie).
-const matchaPreloadSockets = new Set(), xttsPreloadSockets = new Set(), audio8PreloadSockets = new Set();
+const matchaPreloadSockets = new Set();
+// [FIX 2026-11-02] JEDEN silnik serwerowy: połączenia każdego serwera w jednej tabeli — [czytane teraz, nagrywane do przodu]
+// (F5 dzieli zestaw z XTTS). Wcześniej osobne zmienne i osobne funkcje anulowania dla każdego z 7 serwerów.
+const REMOTE_SOCKETS = { xtts: [new Set(), new Set()], audio8: [new Set(), new Set()], pocket: [new Set(), new Set()],
+    omnivoice: [new Set(), new Set()], kokoro: [new Set(), new Set()], server: [new Set(), new Set()] };
 function cancelRemotePreloads() {
-    for (const set of [matchaPreloadSockets, xttsPreloadSockets, audio8PreloadSockets, pocketPreloadSockets, omnivoicePreloadSockets, kokoroPreloadSockets]) {
+    for (const set of [matchaPreloadSockets].concat(Object.keys(REMOTE_SOCKETS).map((k) => REMOTE_SOCKETS[k][1]))) {
         for (const socket of set) { try { socket.close(); } catch (e) {} }
         set.clear();
     }
     if (mwMod) mwMod.cancelQueued('anulowano', 'normal');   // [AGENT-EXP] 2026-10-24: Matcha w przeglądarce — nagrywanie do przodu
 }
 const player = document.getElementById('tts-player');
+// [FIX 2026-11-02] zwolnienie źródła BEZ błędu: player.src = '' kazało elementowi wczytać adres dokumentu jako dźwięk
+// → zdarzenie 'error' → fałszywy wpis „audio-error” w czarnej skrzynce przy każdej pauzie / przewinięciu.
+function playerReset() {
+    if (!player) return;
+    try { player.pause(); } catch (e) {}
+    try { player.removeAttribute('src'); player.load(); } catch (e) {}
+}
+// [FIX 2026-11-02] Pokolenie „na teraz”: rośnie przy pauzie / przewinięciu (TTS_PAUSE, TTS_CLEAR_BUFFER). Kwestia przyjęta
+// PRZED takim zdarzeniem, której synteza skończy się PO nim, nie wchodzi już do kolejki (wcześniej Matcha w przeglądarce
+// i Sherpa dograły po pauzie albo po przewinięciu jeszcze jedno, nieaktualne zdanie). Nagranie zostaje w pamięci na później.
+let liveGen = 0;
+// [FIX 2026-11-02] Karta, z której przyszło ostatnie TTS_PLAY — pauza / czyszczenie z INNEJ karty (np. film w tle,
+// który się skończył albo przewinął) nie ucina już lektora czytającego w bieżącej karcie.
+let lastPlayTab = '';
 if (player) player.addEventListener('error', () => {
     // Błąd elementu audio (np. uszkodzony/odwołany blob) — trafia do czarnej skrzynki,
     // którą widać w popupie przy „Ostatnie kwestie”.
@@ -268,15 +278,11 @@ function resumeAudioCtx() {
 function applySettings(s) {
     if (!s || typeof s !== 'object') return;
     if (s.ttsEngine !== undefined) {
-        const nextEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'].indexOf(s.ttsEngine) >= 0 ? s.ttsEngine : 'matcha';   // [AGENT-EXP] 2026-10-24
+        const nextEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'server', 'supertonic', 'browser'].indexOf(s.ttsEngine) >= 0 ? s.ttsEngine : 'matcha';   // [AGENT-EXP] 2026-10-24
         if (nextEngine !== ttsEngine) {
             ttsEngine = nextEngine;
             cancelMatchaRequests();
-            cancelXttsRequests();
-            cancelAudio8Requests();
-            cancelPocketRequests();
-            cancelOmnivoiceRequests();
-            cancelKokoroRequests();   // [AGENT-EXP] 2026-10-27
+            cancelRemoteLive();       // [FIX 2026-11-02] wszystkie serwery naraz
             cancelRemotePreloads();   // [AGENT-EXP]
             cancelSupertonicPreloads();   // [VOX]
             // [VOX] inny silnik → Supertonic zwalnia workery / kartę (model zostaje pobrany na dysku)
@@ -291,8 +297,8 @@ function applySettings(s) {
         const nextVoice = typeof s.tts2Voice === 'string' ? s.tts2Voice : '';
         if (nextVoice !== tts2Voice) {
             tts2Voice = nextVoice;
-            if (ttsEngine === 'xtts') {
-                cancelXttsRequests();
+            if (ttsEngine === 'xtts' || ttsEngine === 'f5') {   // [FIX 2026-11-02] F5 ma tę samą próbkę głosu
+                cancelRemoteLive('xtts');
                 cancelRemotePreloads();   // [AGENT-EXP]
                 clearTtsPlayback();
             }
@@ -306,8 +312,7 @@ function applySettings(s) {
         if (nextVoice !== audio8Voice) {
             audio8Voice = nextVoice;
             if (ttsEngine === 'audio8') {
-                cancelAudio8Requests();
-                cancelPocketRequests();
+                cancelRemoteLive('audio8');
                 cancelRemotePreloads();   // [AGENT-EXP]
                 clearTtsPlayback();
             }
@@ -321,7 +326,7 @@ function applySettings(s) {
         if (nextVoice !== pocketVoice) {
             pocketVoice = nextVoice;
             if (ttsEngine === 'pocket') {
-                cancelPocketRequests();
+                cancelRemoteLive('pocket');
                 cancelRemotePreloads();
                 clearTtsPlayback();
             }
@@ -335,7 +340,7 @@ function applySettings(s) {
         if (nextVoice !== kokoroVoice) {
             kokoroVoice = nextVoice;
             if (ttsEngine === 'kokoro') {
-                cancelKokoroRequests();
+                cancelRemoteLive('kokoro');
                 cancelRemotePreloads();
                 clearTtsPlayback();
             }
@@ -362,11 +367,27 @@ function applySettings(s) {
         if (nextVoice !== omnivoiceVoice) {
             omnivoiceVoice = nextVoice;
             if (ttsEngine === 'omnivoice') {
-                cancelOmnivoiceRequests();
+                cancelRemoteLive('omnivoice');
                 cancelRemotePreloads();
                 clearTtsPlayback();
             }
             offLogPush('omnivoice-voice', nextVoice || 'losowy');
+        }
+    }
+    // [FIX 2026-11-02] Serwer lokalny — własny adres (ws:// / wss://) i głos; zmiana czyści bufor poprzedniego serwera
+    if (s.serverUrl !== undefined || s.serverVoice !== undefined) {
+        const nu = s.serverUrl === undefined ? serverUrl
+            : (/^wss?:\/\/[^\s]+$/i.test(String(s.serverUrl || '').trim()) ? String(s.serverUrl).trim() : 'ws://127.0.0.1:9000');
+        const nv = s.serverVoice === undefined ? serverVoice : String(s.serverVoice || '').trim();
+        if (nu !== serverUrl || nv !== serverVoice) {
+            serverUrl = nu;
+            serverVoice = nv;
+            if (ttsEngine === 'server') {
+                cancelRemoteLive('server');
+                cancelRemotePreloads();
+                clearTtsPlayback();
+            }
+            offLogPush('server', nu + (nv ? ' · ' + nv : ''));
         }
     }
     // [VOX] Supertonic: zmiana głosu lub jakości czyści bufor poprzedniego głosu.
@@ -413,6 +434,18 @@ function applySettings(s) {
     }
 
     if (s.piperSpeed !== undefined) lectorSpeed = clampSpeed(s.piperSpeed);
+    // [FIX 2026-11-02] słownik wymowy: nowe reguły → nagrania w pamięci ze starą wymową wypadają (poza tym, co gra)
+    if (s.pronDict !== undefined) {
+        pronRules = pronParse(s.pronDict);
+        for (const [k, u] of [...audioCache]) {
+            if (playingUrls.has(u)) continue;
+            try { URL.revokeObjectURL(u); } catch (e) {}
+            audioCache.delete(k);
+            cacheSizeDrop(k);
+        }
+        offLogPush('wymowa', pronRules.length + ' reguł');
+    }
+    if (s.shortenLong !== undefined) shortenLong = !!s.shortenLong;   // [FIX 2026-11-02] ✂
     // OPTIONS-PAGE
     if (s.tempoMode !== undefined) tempoMode = ['A', 'B', 'C'].indexOf(s.tempoMode) >= 0 ? s.tempoMode : 'A';
     if (s.autoCatchup !== undefined) autoCatchup = !!s.autoCatchup;
@@ -469,67 +502,18 @@ function applySettings(s) {
     }
 
     // Cenzura przeklecstw (censor.js wczytany przed tym modulem).
-    if (window.Censor && window.Censor.applySettings) {
-        try { window.Censor.applySettings(s); } catch (e) { /* cenzura nie moze zabic lektora */ }
+    if (window.__lektorCensor && window.__lektorCensor.applySettings) {
+        try { window.__lektorCensor.applySettings(s); } catch (e) { /* cenzura nie moze zabic lektora */ }
     }
 }
 // Cenzura przeklecstw - censor.js jest wczytany przed tym modulem (offscreen.html).
 // Tekst kwestii czyszczony jest PRZED synteza, niezaleznie od jezyka glosu.
 // [AGENT-EXP] Matcha zwraca kompletny plik WAV binarnie; każde żądanie ma własne
 // połączenie, żeby odpowiedzi równoległych kwestii nie pomyliły się ze sobą.
-function matchaSynthesize(text, sockets = matchaSockets, pilne = false) {   // [AGENT-EXP] sockets: preload osobno; pilne: czytana TERAZ
-    if (/^web:/.test(matchaVoice)) return matchaWebSynthesize(text, pilne);   // [AGENT-EXP] 2026-10-24: w przeglądarce, bez WebSocketu
-    return new Promise((resolve, reject) => {
-        let socket;
-        let settled = false;
-        const finish = (error, blob) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            if (socket) {
-                sockets.delete(socket);
-                try { socket.close(); } catch (e) {}
-            }
-            if (error) reject(error);
-            else resolve(blob);
-        };
-        const limitMs = pilne ? 120000 : REMOTE_PRELOAD_TIMEOUT_MS;
-        const timer = setTimeout(() => finish(new Error('Matcha nie odpowiedział w ciągu ' + Math.round(limitMs / 1000) + ' s.')), limitMs);
-        try {
-            socket = new WebSocket(MATCHA_WS_URL);
-            sockets.add(socket);
-            socket.binaryType = 'arraybuffer';
-        } catch (err) {
-            finish(new Error('Nie można połączyć z lokalnym Matcha-TTS: ' + errMsg(err)));
-            return;
-        }
-        socket.onopen = () => {
-            try {
-                socket.send(JSON.stringify({ text, voice: matchaVoice, speed: 1, pilne: !!pilne }));   // [AGENT-EXP] 2026-10-17: głos z popupu (było na sztywno 'synthetic')
-            } catch (err) {
-                finish(new Error('Nie udało się wysłać tekstu do Matcha-TTS: ' + errMsg(err)));
-            }
-        };
-        socket.onmessage = (event) => {
-            if (typeof event.data === 'string') {
-                let response;
-                try { response = JSON.parse(event.data); }
-                catch (err) { finish(new Error('Serwer Matcha zwrócił nieprawidłową odpowiedź.')); return; }
-                finish(new Error(String((response && response.error) || 'Serwer Matcha nie zwrócił pliku WAV.')));
-                return;
-            }
-            const blob = event.data instanceof Blob ? event.data : new Blob([event.data], { type: 'audio/wav' });
-            if (blob.size < 44) {
-                finish(new Error('Serwer Matcha zwrócił pusty lub nieprawidłowy plik WAV.'));
-                return;
-            }
-            finish(null, blob);
-        };
-        socket.onerror = () => finish(new Error('Nie można połączyć z Matcha-TTS. Uruchom serwer serwer\\uruchom_serwer.bat.'));
-        socket.onclose = () => {
-            if (!settled) finish(new Error('Połączenie z Matcha-TTS zostało przerwane.'));
-        };
-    });
+function matchaSynthesize(text, sockets = matchaSockets, pilne = false, ticket = null) {   // [AGENT-EXP] sockets: preload osobno; pilne: czytana TERAZ
+    if (/^web:/.test(matchaVoice)) return matchaWebSynthesize(text, pilne, ticket);   // [AGENT-EXP] 2026-10-24: w przeglądarce, bez WebSocketu
+    // [FIX 2026-11-02] serwer Matcha (:9000) — ta sama funkcja co pozostałe serwery (wcześniej osobna kopia obsługi WebSocketu)
+    return synthesizeRemoteWav(MATCHA_WS_URL, sockets, { text, voice: matchaVoice, speed: 1, pilne: !!pilne }, 'Matcha-TTS', pilne ? 120000 : REMOTE_PRELOAD_TIMEOUT_MS);
 }
 
 // [AGENT-EXP] XTTS i Audio8 używają JSON WebSocket i zwracają kompletny plik WAV.
@@ -596,80 +580,42 @@ function synthesizeRemoteWav(url, sockets, payload, engineName, timeoutMs) {
     });
 }
 
-// [AGENT-EXP] TTS2 oczekuje JSON {text, voice, pilne}; kwestia czytana teraz czeka do 120 s, zapas do 1 h.
-function xttsSynthesize(text, voice, sockets = xttsSockets, pilne = false) {   // [AGENT-EXP] sockets: preload osobno
-    return synthesizeRemoteWav(
-        XTTS_WS_URL, sockets, { text, voice: voice || '', pilne: !!pilne }, 'XTTS', pilne ? 120000 : REMOTE_PRELOAD_TIMEOUT_MS
-    );
+// [FIX 2026-11-02] JEDEN silnik serwerowy (WebSocket: JSON {text, voice, …, pilne} → WAV) — tabela zamiast 7 kopii kodu.
+// pilne = kwestia czytana TERAZ (serwer liczy ją przed nagrywanymi do przodu); speed: 1, bo tempo ustawia odtwarzacz.
+// set: zestaw połączeń; split: długie kwestie dzielone na części ≤ 1900 znaków (limit serwerów 2000; XTTS i F5 dzielą same);
+// live / pre: ile czekać na kwestię czytaną teraz / nagrywaną do przodu (cały film może stać w kolejce serwera).
+// „server” = Serwer lokalny — własny adres (popup): dowolny serwer z tym samym protokołem, adres i głos do wpisania.
+let serverUrl = 'ws://127.0.0.1:9000', serverVoice = '';
+const REMOTE = {
+    xtts: { url: () => XTTS_WS_URL, name: 'XTTS', label: 'XTTS (TTS2)', set: 'xtts', split: false, live: 120000, pre: REMOTE_PRELOAD_TIMEOUT_MS,
+        body: (t) => ({ text: t, voice: tts2Voice || '' }) },
+    f5: { url: () => F5_WS_URL, name: 'F5-TTS (Marek)', label: 'F5-TTS (Marek)', set: 'xtts', split: false, live: 300000, pre: REMOTE_PRELOAD_TIMEOUT_MS,
+        body: (t) => ({ text: t, voice: tts2Voice || '' }) },
+    audio8: { url: () => AUDIO8_WS_URL, name: 'Audio8', label: 'Audio8 ONNX', set: 'audio8', split: true, live: AUDIO8_TIMEOUT_MS,
+        pre: 4 * REMOTE_PRELOAD_TIMEOUT_MS,   // wolny model (RTF 3–5 na CPU): cały film w kolejce może trwać godzinami
+        body: (t) => ({ text: t, voice: audio8Voice || 'default', speed: 1 }) },
+    pocket: { url: () => POCKET_WS_URL, name: 'Pocket-TTS-PL', label: 'Pocket-TTS-PL', set: 'pocket', split: true, live: 120000, pre: 60 * 60 * 1000,
+        body: (t) => ({ text: t, voice: pocketVoice || 'ref', speed: 1 }) },
+    omnivoice: { url: () => OMNIVOICE_WS_URL, name: 'OmniVoice', label: 'OmniVoice', set: 'omnivoice', split: true, live: 120000, pre: 60 * 60 * 1000,
+        // czas_ms = miejsce kwestii w filmie — serwer pokazuje je w terminalu (np. 20:05)
+        body: (t, msg) => { const b = { text: t, voice: omnivoiceVoice || '', speed: 1 }; const c = msg ? omnivoiceCzasMs(msg) : undefined;
+            if (typeof c === 'number' && c >= 0) b.czas_ms = Math.round(c); return b; } },
+    kokoro: { url: () => KOKORO_WS_URL, name: 'Kokoro', label: 'Kokoro', set: 'kokoro', split: true, live: 120000, pre: REMOTE_PRELOAD_TIMEOUT_MS,
+        body: (t) => ({ text: t, voice: kokoroVoice || 'pm_mateusz', speed: 1 }) },
+    server: { url: () => serverUrl, name: 'Serwer lokalny', label: 'Serwer lokalny', set: 'server', split: true, live: 120000, pre: REMOTE_PRELOAD_TIMEOUT_MS,
+        body: (t) => ({ text: t, voice: serverVoice || '', speed: 1 }) }
+};
+function remoteSynth(eng, text, pilne, msg) {
+    const c = REMOTE[eng], sets = REMOTE_SOCKETS[c.set];
+    return synthesizeRemoteWav(c.url(), pilne ? sets[0] : sets[1], Object.assign(c.body(text, msg), { pilne: !!pilne }), c.name, pilne ? c.live : c.pre);
 }
-
-// [AGENT-EXP] 2026-10-17: F5-TTS „Marek” — połączenia liczone razem z XTTS (te same zestawy do anulowania).
-function f5Synthesize(text, voice, sockets = xttsSockets, pilne = false) {   // voice: ta sama próbka co XTTS (tts2Voice)
-    // [AGENT-EXP] pilne: kwestia czytana TERAZ (TTS_PLAY) — serwer liczy ją przed nagrywanymi do przodu
-    return synthesizeRemoteWav(F5_WS_URL, sockets, { text, voice: voice || '', pilne: !!pilne }, 'F5-TTS (Marek)',
-        pilne ? 300000 : REMOTE_PRELOAD_TIMEOUT_MS);
-}
-
-// [AGENT-EXP] Audio8 ma podobny protokół, przyjmuje również speed; jego CPU-synteza jest wolniejsza.
-function audio8Synthesize(text, voice, sockets = audio8Sockets, pilne = false) {   // [AGENT-EXP] sockets: preload osobno
-    return synthesizeRemoteWav(
-        AUDIO8_WS_URL, sockets, { text, voice: voice || 'default', speed: 1, pilne: !!pilne }, 'Audio8',
-        pilne ? AUDIO8_TIMEOUT_MS : 4 * REMOTE_PRELOAD_TIMEOUT_MS   // wolny model: cały film w kolejce może trwać godzinami
-    );
-}
-
-// [AGENT-EXP] Pocket-TTS-PL. pilne = kwestia czytana TERAZ — serwer liczy ją przed nagrywanymi do przodu.
-// speed: 1, bo tempo ustawia odtwarzacz.
-function pocketSynthesize(text, voice, sockets = pocketSockets, pilne = false) {
-    return synthesizeRemoteWav(
-        POCKET_WS_URL, sockets, { text, voice: voice || 'ref', speed: 1, pilne: !!pilne }, 'Pocket-TTS-PL',
-        pilne ? 120000 : 60 * 60 * 1000   // zapas: cały film czeka w kolejce serwera (nawet ~300 kwestii)
-    );
-}
-
-// [AGENT-EXP] Zatrzymuje oczekujące żądania do Pocket-TTS-PL (tylko „na gorąco”, nie preload).
-function cancelPocketRequests() {
-    for (const socket of pocketSockets) {
-        try { socket.close(); } catch (e) {}
+// Zatrzymuje oczekujące żądania „na gorąco” (nie nagrywanie do przodu): jednego zestawu albo wszystkich serwerów.
+function cancelRemoteLive(set) {
+    for (const k of (set ? [set] : Object.keys(REMOTE_SOCKETS))) {
+        const live = REMOTE_SOCKETS[k][0];
+        for (const socket of live) { try { socket.close(); } catch (e) {} }
+        live.clear();
     }
-    pocketSockets.clear();
-}
-
-// [AGENT-EXP] OmniVoice (GPU, RTF ~1 na RTX 3050). pilne = kwestia czytana TERAZ — serwer liczy ją przed zapasem.
-// speed: 1, bo tempo ustawia odtwarzacz.
-// [AGENT-EXP] 2026-10-17: czas_ms = miejsce kwestii w filmie — serwer pokazuje je w terminalu (np. 20:05).
-function omnivoiceSynthesize(text, voice, sockets = omnivoiceSockets, pilne = false, czasMs) {
-    const payload = { text, voice: voice || '', speed: 1, pilne: !!pilne };
-    if (typeof czasMs === 'number' && czasMs >= 0) payload.czas_ms = Math.round(czasMs);
-    return synthesizeRemoteWav(
-        OMNIVOICE_WS_URL, sockets, payload, 'OmniVoice',
-        pilne ? 120000 : 60 * 60 * 1000   // zapas czeka w kolejce serwera (liczy jedną kwestię naraz)
-    );
-}
-
-// [AGENT-EXP] Zatrzymuje oczekujące żądania do OmniVoice (tylko „na gorąco”, nie preload).
-function cancelOmnivoiceRequests() {
-    for (const socket of omnivoiceSockets) {
-        try { socket.close(); } catch (e) {}
-    }
-    omnivoiceSockets.clear();
-}
-
-// [AGENT-EXP] 2026-10-27 Kokoro (GPU, ~15× szybciej niż mowa na RTX 3050). pilne = kwestia czytana TERAZ.
-// speed: 1, bo tempo ustawia odtwarzacz.
-function kokoroSynthesize(text, voice, sockets = kokoroSockets, pilne = false) {
-    return synthesizeRemoteWav(
-        KOKORO_WS_URL, sockets, { text, voice: voice || 'pm_mateusz', speed: 1, pilne: !!pilne }, 'Kokoro',
-        pilne ? 120000 : REMOTE_PRELOAD_TIMEOUT_MS
-    );
-}
-
-// [AGENT-EXP] Zatrzymuje oczekujące żądania do Kokoro (tylko „na gorąco”, nie preload).
-function cancelKokoroRequests() {
-    for (const socket of kokoroSockets) {
-        try { socket.close(); } catch (e) {}
-    }
-    kokoroSockets.clear();
 }
 
 function cancelMatchaRequests() {
@@ -680,33 +626,15 @@ function cancelMatchaRequests() {
     if (mwMod) mwMod.cancelQueued('anulowano', 'urgent');   // [AGENT-EXP] 2026-10-24: Matcha w przeglądarce
 }
 
-// [AGENT-EXP] Anulowanie żądań XTTS zatrzymuje oczekujące syntezy przy pauzie lub zmianie silnika.
-function cancelXttsRequests() {
-    for (const socket of xttsSockets) {
-        try { socket.close(); } catch (e) {}
-    }
-    xttsSockets.clear();
-}
-
-// [AGENT-EXP] Zatrzymuje oczekujące żądania do Audio8.
-function cancelAudio8Requests() {
-    for (const socket of audio8Sockets) {
-        try { socket.close(); } catch (e) {}
-    }
-    audio8Sockets.clear();
-}
-
 function clearTtsPlayback() {
+    // (liveGen celowo BEZ zmiany: zmiana silnika / głosu przychodzi też razem z TTS_PLAY — ta kwestia musi zagrać)
     if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
     playQueue.length = 0;
     ordReset();
     finishCurrent();
-    if (player) {
-        player.pause();
-        player.src = '';
-    }
+    playerReset();   // [FIX 2026-11-02] bez fałszywego „audio-error”
     for (const url of audioCache.values()) URL.revokeObjectURL(url);
-    audioCache.clear();
+    audioCache.clear(); cacheSizeReset();   // [FIX 2026-11-02] pamięć w MB
     playingUrls.clear();
 }
 
@@ -714,6 +642,7 @@ function clearTtsPlayback() {
 function cacheRemoteTtsBlob(id, blob, fromDisk) {
     const url = URL.createObjectURL(blob);
     audioCache.set(id, url);
+    cacheSizeSet(id, blob && blob.size);               // [FIX 2026-11-02] pamięć liczona w MB
     ttsCacheEvict();                                   // [AGENT-EXP] najpierw przeczytane
     if (!fromDisk) ttsDiskPut(ttsIdKey.get(id), blob); // [AGENT-EXP] 💾 na dysk (30 dni)
     return url;
@@ -729,7 +658,7 @@ const playedKeys = new Set();
 const ttsIdKey = new Map();   // id kwestii (z background: karta|id|skrót) → klucz dysku
 const ttsMeta = new Map();    // [AGENT-EXP] id kwestii → { text, startMs, endMs } (dla „Zapisz bufor filmu”)
 function ttsCacheEvict() {
-    while (audioCache.size > MAX_CACHE) {
+    while (audioCache.size > MAX_CACHE || audioCacheTotal > MAX_CACHE_BYTES) {   // [FIX 2026-11-02] + limit w MB
         let victim = null;
         for (const [k, u] of audioCache) {
             if (playingUrls.has(u)) continue;
@@ -739,6 +668,7 @@ function ttsCacheEvict() {
         if (victim === null) break;
         try { URL.revokeObjectURL(audioCache.get(victim)); } catch (e) {}
         audioCache.delete(victim);
+        cacheSizeDrop(victim);   // [FIX 2026-11-02]
         playedKeys.delete(victim);
         ttsIdKey.delete(victim);
     }
@@ -759,18 +689,21 @@ function ttsDisk() {
     return ttsDiskDb;
 }
 function ttsPersistKey(msg) {
-    const eng = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'].indexOf(msg.ttsEngine) >= 0 ? msg.ttsEngine : ttsEngine;
+    const eng = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'server', 'supertonic', 'browser'].indexOf(msg.ttsEngine) >= 0 ? msg.ttsEngine : ttsEngine;
     const voice = eng === 'supertonic' ? ((msg.supertonicVoice || supertonicVoice) + '@' + (msg.supertonicSteps || supertonicSteps))   // [VOX]
         : (eng === 'xtts' || eng === 'f5') ? (msg.tts2Voice !== undefined ? msg.tts2Voice : tts2Voice)
         : eng === 'audio8' ? (msg.audio8Voice || audio8Voice)
         : eng === 'pocket' ? (msg.pocketVoice || pocketVoice)
         : eng === 'omnivoice' ? (msg.omnivoiceVoice !== undefined ? msg.omnivoiceVoice : omnivoiceVoice)
         : eng === 'kokoro' ? (msg.kokoroVoice || kokoroVoice)   // [AGENT-EXP] 2026-10-27
+        : eng === 'server' ? ((msg.serverUrl || serverUrl) + '|' + (msg.serverVoice !== undefined ? msg.serverVoice : serverVoice))   // [FIX 2026-11-02]
         : eng === 'matcha' ? ((msg.matchaVoice || matchaVoice) + (/^web:/.test(msg.matchaVoice || matchaVoice) && (msg.matchaWebTryb || matchaWebTryb) === 'cpu_fp32' ? '@fp32' : ''))   // [AGENT-EXP] 2026-10-17: osobne nagrania dla każdego głosu; 2026-10-24: i dla wariantu fp32
-        : eng === 'sherpa' ? (msg.voiceId || voiceId) : '';
+        // [FIX 2026-11-02] Sherpa: klucz z ID własnego głosu (wcześniej zawsze ten sam voiceId — po zmianie głosu dysk
+        // oddawał kwestie starym głosem) i znacznikiem tempa 1× (stare nagrania mogły mieć tempo z syntezy).
+        : eng === 'sherpa' ? ((customVoice && customVoice.enabled ? 'cv:' + String(customVoice.id || customVoice.name || 'custom') : (msg.voiceId || voiceId)) + '@1x') : '';
     if (eng === 'browser') return '';   // [AGENT-EXP] 🗣 głos przeglądarki nie ma nagrań (pamięć / dysk)
-    const text = censoredText(msg.text || '');
-    return text && text.length >= 2 ? eng + '|' + voice + '|' + text : '';
+    const text = speechText(msg.text || '');
+    return text && text.length >= 2 ? eng + '|' + voice + '|' + text + (shortenLong ? '|skr' : '') : '';   // [FIX 2026-11-02] |skr: skrócone osobno
 }
 async function ttsDiskGet(key) {
     if (!key) return null;
@@ -806,9 +739,92 @@ setTimeout(async () => {
     } catch (e) {}
 }, 15000);
 
+// [FIX 2026-11-02] 🗣 Słownik wymowy (Ustawienia → „Tekst lektora”): „tekst => jak czytać” (imiona, nazwy, skróty).
+// Całe słowa, bez rozróżniania wielkości liter, # = komentarz. Po cenzorze, przed syntezą — każdy silnik; zmienia też klucz
+// nagrań na dysku, więc nowa wymowa nie miesza się ze starymi nagraniami.
+let pronRules = [];
+function pronParse(src) {
+    const out = [];
+    String(src || '').split(/\r?\n/).forEach((line) => {
+        const l = line.trim();
+        if (!l || l.charAt(0) === '#') return;
+        const m = l.match(/^(.+?)\s*(?:=>|->|→|=)\s*(.*)$/);
+        if (!m || !m[1].trim()) return;
+        const from = m[1].trim(), to = m[2].trim();
+        const esc = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+        const word = /[\p{L}\p{N}]/u;
+        const L = word.test(from.charAt(0)) ? '(?<![\\p{L}\\p{N}])' : '';
+        const R = word.test(from.charAt(from.length - 1)) ? '(?![\\p{L}\\p{N}])' : '';
+        try { out.push({ re: new RegExp(L + esc + R, 'giu'), to }); } catch (e) { /* zła reguła — pomijamy */ }
+    });
+    return out.slice(0, 500);
+}
+function pronApply(t) {
+    let s = String(t || '');
+    if (!pronRules.length) return s;
+    for (const r of pronRules) s = s.replace(r.re, () => r.to);
+    return s.replace(/\s{2,}/g, ' ').trim();
+}
+function speechText(t) { return pronApply(censoredText(t)); }
+
+// [FIX 2026-11-02] ✂ Skracanie za długich kwestii (Ustawienia → „Tekst lektora”, domyślnie wył.): gdy zdanie przy nagrywaniu
+// do przodu wyraźnie nie mieści się w oknie kwestii (szacunek > 1,3× okna), Gemini Nano wbudowany w Chrome (Prompt API,
+// lokalnie, bez klucza) skraca je jak lektor — zamiast przyspieszać mowę. Brak modelu / zły wynik → oryginał.
+let shortenLong = false;
+const shortCache = new Map();   // tekst → skrócony ('' = zostaje oryginał)
+let lmP = null, lmTimer = 0, lmFailUntil = 0;
+const SHORTEN_SYS = 'Jesteś polskim lektorem filmowym. Skracasz kwestie tak, jak robi to lektor: zostaw sens, imiona, liczby i ton, '
+    + 'usuń powtórzenia, wtrącenia i zbędne słowa. Odpowiadasz wyłącznie skróconą kwestią — bez cudzysłowów i komentarzy.';
+function lmSession() {
+    if (!lmP) {
+        lmP = (async () => {
+            if (typeof LanguageModel === 'undefined' || !LanguageModel.create) throw new Error('brak Prompt API (Chrome 138+)');
+            const av = String(await LanguageModel.availability());
+            if (av !== 'available') throw new Error('model Gemini Nano: ' + av + ' (pobierz go w Chrome — chrome://on-device-internals)');
+            return LanguageModel.create({ initialPrompts: [{ role: 'system', content: SHORTEN_SYS }] });
+        })();
+        lmP.catch(() => { lmP = null; });
+    }
+    clearTimeout(lmTimer);
+    lmTimer = setTimeout(async () => { const p = lmP; lmP = null; try { (await p).destroy(); } catch (e) {} }, 60000);   // GPU wraca do spoczynku
+    return lmP;
+}
+async function shortenText(text, maxChars) {
+    if (shortCache.has(text)) return shortCache.get(text) || text;
+    if (Date.now() < lmFailUntil) return text;
+    let out = '';
+    try {
+        const sess = await lmSession();
+        const one = sess.clone ? await sess.clone() : sess;   // każda kwestia osobno (bez narastającej rozmowy)
+        try {
+            const r = await Promise.race([one.prompt('Skróć do najwyżej ' + maxChars + ' znaków:\n' + text),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('limit czasu 8 s')), 8000))]);
+            out = String(r || '').split(/\n/)[0].replace(/^["'„”“«»\s]+|["'„”“«»\s]+$/g, '').trim();
+        } finally { if (one !== sess) { try { one.destroy(); } catch (e) {} } }
+    } catch (e) {
+        lmFailUntil = Date.now() + 5 * 60000;
+        offLogPush('skracanie', 'niedostępne: ' + errMsg(e));
+    }
+    // za krótki wynik = AI zgubiło sens: mniej niż 40% oryginału ALBO 60% docelowej długości (krótkie okno wymaga mocnego skrótu)
+    const ok = !!out && out.length < text.length && out.length >= Math.max(8, Math.round(Math.min(text.length * 0.4, maxChars * 0.6)));
+    shortCache.set(text, ok ? out : '');
+    if (shortCache.size > 3000) shortCache.delete(shortCache.keys().next().value);
+    if (ok) offLogPush('skracanie', text.length + ' → ' + out.length + ' znaków');
+    return ok ? out : text;
+}
+// Ile znaków zmieści się w oknie kwestii (0 = nie trzeba skracać). slotMs przy nagrywaniu do przodu podaje harmonogram stron.
+function shortenTarget(msg, text) {
+    if (!shortenLong || ttsEngine === 'browser') return 0;
+    const slot = Number(msg.slotMs) || (msg.endMs != null && msg.startMs != null ? Number(msg.endMs) - Number(msg.startMs) + 1000 : 0);
+    if (!(slot > 0)) return 0;
+    const speed = Math.max(0.5, lectorSpeed);
+    if (text.length / 14 * 1000 / speed <= slot * 1.3) return 0;
+    return Math.max(20, Math.floor(slot / 1000 * 14 * speed));
+}
+
 function censoredText(t) {
     try {
-        if (window.Censor && window.Censor.applyText) return window.Censor.applyText(t);
+        if (window.__lektorCensor && window.__lektorCensor.applyText) return window.__lektorCensor.applyText(t);
     } catch (e) { /* cenzura nie moze zabic lektora */ }
     return String(t || '');
 }
@@ -841,6 +857,19 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
         sendResponse({ keys: Array.from(audioCache.keys()) });
         return;
     }
+    if (msg.action === 'TTS_STATS') {   // [FIX 2026-11-02] 📊 pasek lektora: pominięte kwestie (10 min) i opóźnienie tej karty
+        const st = lekStats.get(String(msg.tab || 'x'));
+        const since = Date.now() - 10 * 60000;
+        const lags = st ? st.lags : [];
+        sendResponse({
+            skipped10m: st ? st.skips.filter((t) => t > since).length : 0,
+            lagMs: lags.length ? lags[lags.length - 1] : null,
+            lagAvgMs: lags.length ? Math.round(lags.reduce((a, b) => a + b, 0) / lags.length) : null,
+            played: st ? st.played : 0,
+            cacheMb: Math.round(audioCacheTotal / 1048576), cacheMaxMb: Math.round(MAX_CACHE_BYTES / 1048576)
+        });
+        return;
+    }
     if (msg.action === 'PING' || msg.action === 'GET_STATUS') {
         sendResponse({
             status: 'ok',
@@ -853,8 +882,8 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
             poolReady: sherpaPool.filter((w) => w.ready).length,
             // Statystyki cenzury (ile języków / słów) — popup pokazuje je na żywo,
             // żeby użytkownik widział faktyczny zasięg, a nie liczbę na sztywno.
-            censorLanguages: (window.Censor && window.Censor.langCount) ? window.Censor.langCount() : 0,
-            censorWords: (window.Censor && window.Censor.wordCount) ? window.Censor.wordCount() : 0
+            censorLanguages: (window.__lektorCensor && window.__lektorCensor.langCount) ? window.__lektorCensor.langCount() : 0,
+            censorWords: (window.__lektorCensor && window.__lektorCensor.wordCount) ? window.__lektorCensor.wordCount() : 0
         });
     }
     // [VOX] Stan silnika Supertonic dla popupu i strony Ustawień (sprzęt, karta, workery, pobieranie modelu).
@@ -899,7 +928,7 @@ function keepAliveOn() {
 }
 chrome.runtime.onMessage.addListener((msg) => {
     if (!msg || msg.target !== 'offscreen') return;
-    if (msg.action === 'PING' || msg.action === 'GET_STATUS' || msg.action === 'TTS_CACHE_KEYS' || msg.action === 'SUPERTONIC_STATUS' || msg.action === 'BROWSER_TTS_VOICES') return; // samo sprawdzenie stanu to nie praca
+    if (msg.action === 'PING' || msg.action === 'GET_STATUS' || msg.action === 'TTS_CACHE_KEYS' || msg.action === 'TTS_STATS' || msg.action === 'SUPERTONIC_STATUS' || msg.action === 'BROWSER_TTS_VOICES') return; // samo sprawdzenie stanu to nie praca
     lektorLastActivity = Date.now();
     keepAliveOn();
 });
@@ -922,7 +951,47 @@ let queueActive = false;
 let queueDone = null; // zamyka bieżący element (usuwa listenery)
 const MAX_QUEUE = 4; // ponad to pomijamy najstarsze, żeby lektor nie gonił
 const MAX_CACHE = 5000; // [AGENT-EXP] 2026-10-17: było 3000 (wcześniej 120, 50); użytkownik ma 32 GB RAM — cały film w RAM
+// [FIX 2026-11-02] limit pamięci nagrań w MB (wg RAM komputera; Chrome podaje najwyżej 8 GB): 8 GB+ → 600 MB, 4 GB → 300 MB,
+// mniej → 150 MB. Same sztuki (5000) przy 44 kHz to nawet kilka GB. Nagranie wyrzucone z pamięci zostaje na dysku (30 dni).
+const MAX_CACHE_BYTES = (() => { const gb = Number(navigator.deviceMemory) || 4; return (gb >= 8 ? 600 : gb >= 4 ? 300 : 150) * 1048576; })();
+const audioCacheBytes = new Map();   // klucz nagrania → bajty
+let audioCacheTotal = 0;
+// [FIX 2026-11-02] auto-nadrabianie najwyżej 1,8× (było 2,5× — polska mowa robiła się niezrozumiała); wyższa prędkość
+// ustawiona w popupie zostaje (to wybór użytkownika).
+const MAX_CATCHUP_RATE = 1.8;
 const playingUrls = new Set(); // URL-e aktualnie grane/w kolejce — eviction ich nie rusza
+// [FIX 2026-11-02] Liczniki dla paska 📊: pominięte kwestie (spóźnione / nadmiar w kolejce) i opóźnienie lektora
+// (od przyjścia kwestii do początku jej dźwięku) — osobno dla każdej karty. Wcześniej pomijanie było ciche.
+const lekStats = new Map();   // karta → { skips: [czas], lags: [ms], played }
+function statOf(tab) {
+    const k = String(tab || 'x');
+    let st = lekStats.get(k);
+    if (!st) { st = { skips: [], lags: [], played: 0 }; lekStats.set(k, st); if (lekStats.size > 50) lekStats.delete(lekStats.keys().next().value); }
+    return st;
+}
+function statSkip(tab, why) {
+    const st = statOf(tab);
+    st.skips.push(Date.now());
+    if (st.skips.length > 500) st.skips.shift();
+    offLogPush('skip', why);
+}
+function statLag(tab, ms) {
+    const st = statOf(tab);
+    st.played++;
+    st.lags.push(Math.max(0, Math.round(ms)));
+    if (st.lags.length > 20) st.lags.shift();
+}
+function cacheSizeSet(key, bytes) {
+    const prev = audioCacheBytes.get(key) || 0;
+    audioCacheTotal += (Number(bytes) || 0) - prev;
+    audioCacheBytes.set(key, Number(bytes) || 0);
+}
+function cacheSizeDrop(key) {
+    audioCacheTotal -= audioCacheBytes.get(key) || 0;
+    audioCacheBytes.delete(key);
+    if (audioCacheTotal < 0) audioCacheTotal = 0;
+}
+function cacheSizeReset() { audioCacheBytes.clear(); audioCacheTotal = 0; }
 
 function clampSpeed(s) {
     s = Number(s);
@@ -940,6 +1009,7 @@ function runQueue() {
     // Kwestia z osi czasu, której czas już minął (lektor nie nadążał) — pomijamy, żeby nie odstawał.
     while (next && next.expireAt && Date.now() > next.expireAt) {
         try { playingUrls.delete(next.url); } catch (e) {}
+        statSkip(next.tab, 'spóźniona o ' + Math.round((Date.now() - next.expireAt + 2500) / 100) / 10 + ' s');   // [FIX 2026-11-02]
         next = playQueue.shift();
     }
     if (!next) { playingGroup = null; playingNr = 0; }   // [AGENT-EXP] (+ playingNr 2026-10-22)
@@ -979,14 +1049,26 @@ function playNext(item) {
     const tempoMul = tempoMode === 'C' ? 1 : (tempoMode === 'B' ? (1 + (vr - 1) * 0.5) : vr);
     const baseRate = clampSpeed(lectorSpeed * tempoMul);
     player.playbackRate = baseRate;
-    if (item.slotMs > 0 && autoCatchup) {
-        player.onloadedmetadata = () => {
-            player.onloadedmetadata = null;
-            const dur = player.duration;
-            if (!Number.isFinite(dur) || dur <= 0) return;
-            const need = (dur * 1000) / item.slotMs;
-            if (need > baseRate) player.playbackRate = Math.min(2.5, need);
-        };
+    if (item.first && item.at) statLag(item.tab, Date.now() - item.at);   // [FIX 2026-11-02] opóźnienie lektora
+    if (item.tab && item.tab !== 'x') { try { chrome.runtime.sendMessage({ action: 'TTS_SPEAK', tab: item.tab }).catch(() => {}); } catch (e) {} }   // [FIX 2026-11-02] 🔉 ściszanie na czas mowy
+    if (autoCatchup) {
+        // [FIX 2026-11-02] Nadrabianie: (1) od ZALEGŁOŚCI — gdy w kolejce czekają kolejne kwestie, ta gra odrobinę szybciej
+        // (+8% za każdą, najwyżej 5); (2) od TERMINU kwestii — liczy się czas, który naprawdę został do końca jej okna
+        // (synteza i czekanie w kolejce już go zjadły), a nie całe okno jak dawniej. Najwyżej 1,8×.
+        const cap = Math.max(baseRate, MAX_CATCHUP_RATE);
+        const waiting = new Set(playQueue.filter((q) => q.group !== item.group).map((q) => q.group)).size;
+        const boost = waiting > 0 ? Math.min(cap, baseRate * (1 + 0.08 * Math.min(5, waiting))) : baseRate;
+        player.playbackRate = boost;
+        if (item.slotMs > 0) {
+            player.onloadedmetadata = () => {
+                player.onloadedmetadata = null;
+                const dur = player.duration;
+                if (!Number.isFinite(dur) || dur <= 0) return;
+                const left = item.deadline ? Math.max(300, item.deadline - Date.now() + 300) : item.slotMs;
+                const need = Math.min(cap, (dur * 1000) / left);
+                if (need > player.playbackRate) player.playbackRate = need;
+            };
+        }
     }
     player.play().catch((err) => {
         // [AGENT-EXP] 2026-10-24: czytelny błąd (wcześniej „[object DOMException]”). AbortError = play() przerwane nowym
@@ -1006,8 +1088,9 @@ function playNext(item) {
 // Wcześniej przy 5+ paczkach wypadały środkowe paczki → lektor urywał dłuższe zdanie w połowie.
 let playingGroup = null;
 let playingNr = 0, flushNr = 0;   // [AGENT-EXP] 2026-10-22: nr kwestii (ord) grającej / właśnie wkładanej przez ordFlush
-function enqueuePlay(url, durationMs, piperSpeed, rate, slotMs, noSkip, group) {
+function enqueuePlay(url, durationMs, piperSpeed, rate, slotMs, noSkip, group, meta) {
     const item = { url, durationMs, rate: Number(rate) || 1, slotMs: Number(slotMs) || 0, noSkip: !!noSkip, group: group || url, nr: flushNr };
+    if (meta) { item.tab = meta.tab; item.at = meta.at; item.first = !!meta.first; if (item.slotMs > 0 && meta.at) item.deadline = meta.at + item.slotMs; }   // [FIX 2026-11-02]
     if (item.slotMs > 0 && !item.noSkip) item.expireAt = Date.now() + item.slotMs + 2500;
     playQueue.push(item);
     for (;;) {
@@ -1017,14 +1100,27 @@ function enqueuePlay(url, durationMs, piperSpeed, rate, slotMs, noSkip, group) {
         // najstarsza kwestia, którą wolno pominąć (nie noSkip, nie bieżąca, nie ta właśnie dodana)
         const g = groups.find((gr) => gr !== item.group && !playQueue.some((q) => q.group === gr && q.noSkip));
         if (g === undefined) break;
+        let droppedTab = null;
         for (let i = playQueue.length - 1; i >= 0; i--) {
             if (playQueue[i].group !== g) continue;
             const dropped = playQueue.splice(i, 1)[0];
+            droppedTab = dropped.tab;
             try { playingUrls.delete(dropped.url); } catch (e) {}
         }
+        statSkip(droppedTab, 'za dużo kwestii w kolejce');   // [FIX 2026-11-02]
     }
     playingUrls.add(url);
     runQueue();
+}
+
+// [FIX 2026-11-02] karta przestała czytać (pauza / przewinięcie / zamknięcie), a gra inna: wyrzucamy tylko jej zaległe kwestie
+function dropTabItems(tab) {
+    const t = String(tab);
+    for (let i = playQueue.length - 1; i >= 0; i--) {
+        if (String(playQueue[i].tab) !== t) continue;
+        const dropped = playQueue.splice(i, 1)[0];
+        try { playingUrls.delete(dropped.url); } catch (e) {}
+    }
 }
 
 // noSkip (Dyktowanie): synteza idzie równolegle w puli, ale kwestie grają w KOLEJNOŚCI PRZYJŚCIA —
@@ -1079,7 +1175,7 @@ function resetVoice(nextId) {
     // budowę modelu w nieskończoność (build nigdy się nie kończy → timeout).
     sessionGen++;
     for (const u of audioCache.values()) URL.revokeObjectURL(u);
-    audioCache.clear();
+    audioCache.clear(); cacheSizeReset();   // [FIX 2026-11-02] pamięć w MB
     playingUrls.clear();
     voiceId = nextId;
     session = null;
@@ -1261,7 +1357,10 @@ function predictOnPool(text) {
             };
             item.pending = pending;
             try {
-                item.worker.postMessage({ type: 'generate', text: String(text || ''), sid: 0, speed: lectorSpeed });
+                // [FIX 2026-11-02] speed: 1 — tempo ustawia odtwarzacz (playNext: playbackRate = prędkość × film), jak
+                // w pozostałych silnikach. Wcześniej Sherpa dostawała też lectorSpeed, więc prędkość liczyła się DWA razy
+                // (1,5× → 2,25×), a nagranie w pamięci/na dysku miało tempo z chwili syntezy.
+                item.worker.postMessage({ type: 'generate', text: String(text || ''), sid: 0, speed: 1 });
             } catch (e) {
                 clearTimeout(pending.timer);
                 item.busy = false;
@@ -1391,10 +1490,18 @@ function errMsg(err) {
 
 // Czarna skrzynka: ostatnie zdarzenia silnika (diagnostyka zawieszeń w popupie)
 const offLog = [];
+// [FIX 2026-11-02] dziennik do storage najwyżej raz na sekundę (paczką). Wcześniej KAŻDY wpis = zapis
+// chrome.storage.local → zdarzenie onChanged we wszystkich kartach z lektorem (przy nagrywaniu do przodu — dziesiątki na sekundę).
+let offLogTimer = 0, offLogSentAt = 0;
+function offLogSend() {
+    offLogTimer = 0;
+    offLogSentAt = Date.now();
+    try { chrome.runtime.sendMessage({ action: 'OFFSCREEN_DIAG', kind: 'log', entries: offLog.slice() }).catch(() => {}); } catch (e) {}
+}
 function offLogPush(tag, msg) {
     offLog.push({ tag, msg: String(msg || '').slice(0, 300), ts: Date.now() });
     if (offLog.length > 12) offLog.shift();
-    try { chrome.runtime.sendMessage({ action: 'OFFSCREEN_DIAG', kind: 'log', entries: offLog.slice() }).catch(() => {}); } catch (e) {}
+    if (!offLogTimer) offLogTimer = setTimeout(offLogSend, Math.max(0, 1000 - (Date.now() - offLogSentAt)));
 }
 
 // Live-ustawienia lektora — background przesyła patch po każdej zmianie w popupie
@@ -1419,10 +1526,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // z aktualnym miejscem filmu tej karty (nowMs ze skryptu strony) i aktualnym suwakiem.
 const AHEAD_MIN_MS = 8000;   // suwak 0 = „na bieżąco”: najwyżej kilka sekund (jak full_subs_ondemand)
 const AHEAD_PAST_MS = 1000;  // kwestia skończyła się dawniej niż 1 s temu — nie liczymy
-const AHEAD_ENGINE_KEYS = ['ttsEngine', 'voiceId', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice',
+const AHEAD_ENGINE_KEYS = ['ttsEngine', 'voiceId', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice', 'serverUrl', 'serverVoice',
     'matchaWebTryb', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'];
 const aheadGate = { limitMs: 3 * 60000, tabs: new Map(), pending: new Map(), running: new Set(), max: 4, fields: {} };
 let aheadJob = null;   // obietnica syntezy ustawiana przez gałąź TTS_PRELOAD (koniec = wolne miejsce w bramce)
+// [FIX 2026-11-02] trwające nagrywanie do przodu: id kwestii → { promise, ticket }. TTS_PLAY tej samej kwestii (silniki
+// w przeglądarce: Sherpa, Matcha 🌐) czeka na nie zamiast liczyć ją drugi raz — przy 2 workerach Matchy podwójna synteza
+// zabierała połowę mocy dokładnie wtedy, gdy lektor nie nadążał (start filmu, przewinięcie).
+const aheadJobs = new Map();
+let aheadTicket = null;   // znacznik zadania Matchy 🌐 ustawiany razem z aheadJob (awans do kolejki pilnej)
+const AHEAD_WAIT_MAX_MS = 20000;
 function aheadLimitMs(min) {
     const m = Number(min);
     return Number.isFinite(m) && m > 0 ? Math.max(AHEAD_MIN_MS, m * 60000) : AHEAD_MIN_MS;
@@ -1472,18 +1585,28 @@ function aheadPump() {
         if (audioCache.has(msg.id)) continue;   // w międzyczasie policzone przez TTS_PLAY
         aheadGate.running.add(msg.id);
         aheadJob = null;
+        aheadTicket = null;
         try {
             ttsMainHandler(Object.assign({}, msg, aheadGate.fields, { __disk: true, __gated: true }), best.sender, () => {});
         } catch (e) { offLogPush('ahead-fail', errMsg(e)); }
-        const job = aheadJob;
+        const job = aheadJob, ticket = aheadTicket;
         aheadJob = null;
-        Promise.resolve(job).catch(() => {}).then(() => { aheadGate.running.delete(msg.id); aheadPump(); });
+        aheadTicket = null;
+        const entry = job ? { promise: job, ticket } : null;   // [FIX 2026-11-02] do podglądu przez TTS_PLAY
+        if (entry) aheadJobs.set(msg.id, entry);
+        Promise.resolve(job).catch(() => {}).then(() => {
+            aheadGate.running.delete(msg.id);
+            if (entry && aheadJobs.get(msg.id) === entry) aheadJobs.delete(msg.id);
+            aheadPump();
+        });
     }
 }
 // ===== koniec bramki zapasu =====
 
 function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany — ponowne wejście po sprawdzeniu dysku
     if (!msg || msg.target !== 'offscreen') return;
+    // [FIX 2026-11-02] pokolenie z chwili PRZYJŚCIA kwestii (sprawdzenie dysku jest asynchroniczne — pauza w tym czasie też się liczy)
+    if (msg.action === 'TTS_PLAY' && msg.__live === undefined) { msg.__live = liveGen; msg.__at = Date.now(); }
 
     // PING/GET_STATUS obsługuje wczesny listener na górze pliku (odpowiada zawsze).
 
@@ -1518,6 +1641,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.kokoroVoice !== undefined) applySettings({ kokoroVoice: msg.kokoroVoice });   // [AGENT-EXP] 2026-10-27
+        if (msg.serverUrl !== undefined || msg.serverVoice !== undefined) applySettings({ serverUrl: msg.serverUrl, serverVoice: msg.serverVoice });   // [FIX 2026-11-02]
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
         if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
@@ -1545,18 +1669,8 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 : { status: 'error', error: 'Głos przeglądarki: brak Web Speech API (speechSynthesis)' }));
             return true;
         }
-        // [AGENT-EXP] Nie inicjuj Sherpa, gdy wybrany jest serwer XTTS / F5.
-        if (ttsEngine === 'xtts' || ttsEngine === 'f5') {
-            sendResponse({ status: 'initialized', engine: ttsEngine });
-            return true;
-        }
-        // [AGENT-EXP] Audio8 działa jako osobny serwer i nie wymaga inicjalizacji Sherpa.
-        if (ttsEngine === 'audio8') {
-            sendResponse({ status: 'initialized', engine: 'audio8' });
-            return true;
-        }
-        // [AGENT-EXP] Pocket-TTS-PL, OmniVoice i Kokoro działają jako osobne serwery — bez inicjalizacji Sherpa.
-        if (ttsEngine === 'pocket' || ttsEngine === 'omnivoice' || ttsEngine === 'kokoro') {
+        // [FIX 2026-11-02] serwery lokalne (XTTS, F5, Audio8, Pocket, OmniVoice, Kokoro, własny adres) — bez inicjalizacji Sherpa
+        if (REMOTE[ttsEngine]) {
             sendResponse({ status: 'initialized', engine: ttsEngine });
             return true;
         }
@@ -1573,7 +1687,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
 
     if (msg.action === 'CLEAR_CACHE') {
         for (const u of audioCache.values()) URL.revokeObjectURL(u);
-        audioCache.clear();
+        audioCache.clear(); cacheSizeReset();   // [FIX 2026-11-02] pamięć w MB
         sendResponse({ status: 'cache_cleared' });
         return true;
     }
@@ -1588,6 +1702,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.kokoroVoice !== undefined) applySettings({ kokoroVoice: msg.kokoroVoice });   // [AGENT-EXP] 2026-10-27
+        if (msg.serverUrl !== undefined || msg.serverVoice !== undefined) applySettings({ serverUrl: msg.serverUrl, serverVoice: msg.serverVoice });   // [FIX 2026-11-02]
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
         if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
@@ -1597,9 +1712,25 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             sendResponse({ status: 'skipped', engine: 'browser' });
             return true;
         }
+        // [FIX 2026-11-02] ✂ za długa kwestia: najpierw skrócenie (AI), potem synteza skróconej — bramka czeka na całość
+        if (!msg.__short && shortenLong) {
+            const t0 = censoredText(msg.text);
+            const max = t0 && t0.length >= 2 ? shortenTarget(msg, t0) : 0;
+            if (max) {
+                sendResponse({ status: 'shortening' });
+                aheadJob = shortenText(t0, max).then((t2) => {
+                    aheadJob = null;
+                    ttsMainHandler(Object.assign({}, msg, { text: t2, __short: true }), _sender, () => {});
+                    const inner = aheadJob;
+                    aheadJob = null;
+                    return inner;
+                });
+                return true;
+            }
+        }
         // [VOX] Supertonic: nagrywanie do przodu w zwykłym priorytecie (kwestia czytana teraz ma pierwszeństwo).
         if (ttsEngine === 'supertonic') {
-            const text = censoredText(msg.text);
+            const text = speechText(msg.text);
             if (!text || text.length < 2) {
                 sendResponse({ status: 'muted' });
                 return true;
@@ -1610,7 +1741,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         }
         if (ttsEngine === 'matcha') {
             const { id } = msg;
-            const text = censoredText(msg.text);
+            const text = speechText(msg.text);
             if (!text || text.length < 2) {
                 sendResponse({ status: 'muted' });
                 return true;
@@ -1621,7 +1752,9 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 return true;
             }
             sendResponse({ status: 'preloading_matcha' });
-            aheadJob = matchaSynthesize(text, matchaPreloadSockets)   // [AGENT-EXP] preload: pauza go nie przerywa; aheadJob: bramka 2026-10-25
+            const ticket = /^web:/.test(matchaVoice) ? {} : null;   // [FIX 2026-11-02] TTS_PLAY może awansować to zadanie
+            aheadTicket = ticket;
+            aheadJob = matchaSynthesize(text, matchaPreloadSockets, false, ticket)   // [AGENT-EXP] preload: pauza go nie przerywa; aheadJob: bramka 2026-10-25
                 .then((blob) => {
                     cacheRemoteTtsBlob(id, blob);
                     recCapture(msg, blob).catch(() => {});
@@ -1633,130 +1766,36 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 });
             return true;
         }
-        // [AGENT-EXP] XTTS serwer sam dzieli długie teksty na bezpieczne fragmenty. F5 — tak samo.
-        if (ttsEngine === 'xtts' || ttsEngine === 'f5') {
-            const { id } = msg;
-            const text = censoredText(msg.text);
+        // [FIX 2026-11-02] serwery lokalne — jedna gałąź (wcześniej 5 kopii). XTTS / F5 dzielą długie teksty same;
+        // pozostałe mają limit 2000 znaków — dłuższa kwestia będzie liczona częściami przy czytaniu.
+        if (REMOTE[ttsEngine]) {
+            const eng = ttsEngine, c = REMOTE[eng];
+            const text = speechText(msg.text);
             if (!text || text.length < 2) {
                 sendResponse({ status: 'muted' });
                 return true;
             }
-            sendResponse({ status: 'preloading_' + ttsEngine });
-            aheadJob = (ttsEngine === 'f5' ? f5Synthesize(text, tts2Voice, xttsPreloadSockets) : xttsSynthesize(text, tts2Voice, xttsPreloadSockets))   // [AGENT-EXP] preload: pauza go nie przerywa
-                .then((blob) => {
-                    cacheRemoteTtsBlob(id, blob);
-                    recCapture(msg, blob).catch(() => {});
-                    offLogPush('xtts-preload', String(id || '').slice(0, 40));
-                })
-                .catch((err) => {
-                    console.error('[Offscreen] XTTS preload:', err);
-                    offLogPush('xtts-preload-fail', errMsg(err));
-                });
-            return true;
-        }
-        // [AGENT-EXP] OmniVoice: nagrywanie do przodu (limit serwera 2000 znaków).
-        if (ttsEngine === 'omnivoice') {
-            const text = censoredText(msg.text);
-            if (!text || text.length < 2) {
-                sendResponse({ status: 'muted' });
-                return true;
-            }
-            if (text.length > 1900) {
-                offLogPush('omnivoice-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
+            if (c.split && text.length > 1900) {
+                offLogPush(eng + '-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
                 sendResponse({ status: 'preload_skipped_long' });
                 return true;
             }
-            sendResponse({ status: 'preloading_omnivoice' });
-            aheadJob = omnivoiceSynthesize(text, omnivoiceVoice, omnivoicePreloadSockets, false, omnivoiceCzasMs(msg))   // [AGENT-EXP] aheadJob: bramka; preload: pauza go nie przerywa
+            sendResponse({ status: 'preloading_' + eng });
+            aheadJob = remoteSynth(eng, text, false, msg)   // aheadJob: bramka zapasu; preload: pauza go nie przerywa
                 .then((blob) => {
                     cacheRemoteTtsBlob(msg.id, blob);
                     recCapture(msg, blob).catch(() => {});
-                    offLogPush('omnivoice-preload', String(msg.id || '').slice(0, 40));
+                    offLogPush(eng + '-preload', String(msg.id || '').slice(0, 40));
                 })
                 .catch((err) => {
-                    console.error('[Offscreen] OmniVoice preload:', err);
-                    offLogPush('omnivoice-preload-fail', errMsg(err));
-                });
-            return true;
-        }
-        // [AGENT-EXP] 2026-10-27 Kokoro: nagrywanie do przodu (serwer sam dzieli na zdania, limit 2000 znaków).
-        if (ttsEngine === 'kokoro') {
-            const text = censoredText(msg.text);
-            if (!text || text.length < 2) {
-                sendResponse({ status: 'muted' });
-                return true;
-            }
-            if (text.length > 1900) {
-                offLogPush('kokoro-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
-                sendResponse({ status: 'preload_skipped_long' });
-                return true;
-            }
-            sendResponse({ status: 'preloading_kokoro' });
-            aheadJob = kokoroSynthesize(text, kokoroVoice, kokoroPreloadSockets)   // aheadJob: bramka; preload: pauza go nie przerywa
-                .then((blob) => {
-                    cacheRemoteTtsBlob(msg.id, blob);
-                    recCapture(msg, blob).catch(() => {});
-                    offLogPush('kokoro-preload', String(msg.id || '').slice(0, 40));
-                })
-                .catch((err) => {
-                    console.error('[Offscreen] Kokoro preload:', err);
-                    offLogPush('kokoro-preload-fail', errMsg(err));
-                });
-            return true;
-        }
-        // [AGENT-EXP] Pocket-TTS-PL: nagrywanie do przodu (serwer sam dzieli na zdania, limit 2000 znaków).
-        if (ttsEngine === 'pocket') {
-            const text = censoredText(msg.text);
-            if (!text || text.length < 2) {
-                sendResponse({ status: 'muted' });
-                return true;
-            }
-            if (text.length > 1900) {
-                offLogPush('pocket-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
-                sendResponse({ status: 'preload_skipped_long' });
-                return true;
-            }
-            sendResponse({ status: 'preloading_pocket' });
-            aheadJob = pocketSynthesize(text, pocketVoice, pocketPreloadSockets)   // [AGENT-EXP] aheadJob: bramka; preload: pauza go nie przerywa
-                .then((blob) => {
-                    cacheRemoteTtsBlob(msg.id, blob);
-                    recCapture(msg, blob).catch(() => {});
-                    offLogPush('pocket-preload', String(msg.id || '').slice(0, 40));
-                })
-                .catch((err) => {
-                    console.error('[Offscreen] Pocket preload:', err);
-                    offLogPush('pocket-preload-fail', errMsg(err));
-                });
-            return true;
-        }
-        // [AGENT-EXP] Długie kwestie dzielimy przy odtwarzaniu, aby nie przekroczyć limitu 2000 znaków serwera.
-        if (ttsEngine === 'audio8') {
-            const text = censoredText(msg.text);
-            if (!text || text.length < 2) {
-                sendResponse({ status: 'muted' });
-                return true;
-            }
-            if (text.length > 1900) {
-                offLogPush('audio8-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
-                sendResponse({ status: 'preload_skipped_long' });
-                return true;
-            }
-            sendResponse({ status: 'preloading_audio8' });
-            aheadJob = audio8Synthesize(text, audio8Voice, audio8PreloadSockets)   // [AGENT-EXP] aheadJob: bramka; preload: pauza go nie przerywa
-                .then((blob) => {
-                    cacheRemoteTtsBlob(msg.id, blob);
-                    recCapture(msg, blob).catch(() => {});
-                    offLogPush('audio8-preload', String(msg.id || '').slice(0, 40));
-                })
-                .catch((err) => {
-                    console.error('[Offscreen] Audio8 preload:', err);
-                    offLogPush('audio8-preload-fail', errMsg(err));
+                    console.error('[Offscreen] ' + c.name + ' preload:', err);
+                    offLogPush(eng + '-preload-fail', errMsg(err));
                 });
             return true;
         }
         resetVoice(msg.voiceId);
         const { id } = msg;
-        const text = censoredText(msg.text);
+        const text = speechText(msg.text);
         if (!text || text.length < 2) {
             // Cala kwestia to bylo przeklecstwo - nie syntetyzujemy (cisza).
             sendResponse({ status: 'muted' });
@@ -1775,6 +1814,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
     }
 
     if (msg.action === 'TTS_PLAY') {
+        { const t = aheadTab(msg.id); if (t !== 'x') lastPlayTab = t; }   // [FIX 2026-11-02] karta, która teraz czyta
         if (readToEnd) msg.noSkip = true;   // [AGENT-EXP] 2026-10-22: „Czytaj zawsze do końca” — bez pomijania spóźnionych / nadmiarowych
         if (msg.ttsEngine) applySettings({ ttsEngine: msg.ttsEngine });
         if (msg.tts2Voice !== undefined) applySettings({ tts2Voice: msg.tts2Voice });
@@ -1782,6 +1822,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.kokoroVoice !== undefined) applySettings({ kokoroVoice: msg.kokoroVoice });   // [AGENT-EXP] 2026-10-27
+        if (msg.serverUrl !== undefined || msg.serverVoice !== undefined) applySettings({ serverUrl: msg.serverUrl, serverVoice: msg.serverVoice });   // [FIX 2026-11-02]
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
         if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
@@ -1789,7 +1830,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         // [AGENT-EXP] 2026-10-21: 🗣 głos przeglądarki — własna kolejka speechSynthesis (max MAX_QUEUE czekających,
         // spóźnione kwestie z osi czasu pomijane jak w playQueue); tempo jak w playNext (popup × film wg tempoMode).
         if (ttsEngine === 'browser') {
-            const btext = censoredText(msg.text);
+            const btext = speechText(msg.text);
             if (!btext || btext.length < 2) { sendResponse({ status: 'muted' }); return true; }
             const vr = Number(msg.rate) || 1;
             const tempoMul = tempoMode === 'C' ? 1 : (tempoMode === 'B' ? (1 + (vr - 1) * 0.5) : vr);
@@ -1797,8 +1838,9 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             const slotMs = Number(msg.slotMs) || 0;
             if (slotMs > 0 && autoCatchup) {   // szacunek długości (14 znaków/s) zamiast duration z <audio>
                 const need = (btext.length / 14 * 1000) / slotMs;
-                if (need > rate) rate = Math.min(2.5, need);
+                if (need > rate) rate = Math.min(Math.max(rate, MAX_CATCHUP_RATE), need);   // [FIX 2026-11-02] było 2,5×
             }
+            { const tb = aheadTab(msg.id); if (tb !== 'x') { try { chrome.runtime.sendMessage({ action: 'TTS_SPEAK', tab: tb }).catch(() => {}); } catch (e) {} } }   // [FIX 2026-11-02] 🔉
             browserTtsGet().speak(btext, {
                 clearQueue: false, rate, volume: lectorVolume, maxQueue: MAX_QUEUE, noSkip: !!msg.noSkip,
                 expireAt: slotMs > 0 && !msg.noSkip ? Date.now() + slotMs + 2500 : 0
@@ -1811,7 +1853,18 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (ttsEngine === 'sherpa') resetVoice(msg.voiceId);
         // noSkip: numer nadany przy przyjściu — gra w tej kolejności (patrz ordFlush)
         const nr = msg.noSkip ? ++ord.last : 0;
-        const put = nr ? (...a) => ordPart(nr, a) : enqueuePlay;
+        const putNow = nr ? (...a) => ordPart(nr, a) : enqueuePlay;
+        // [FIX 2026-11-02] synteza skończona po pauzie / przewinięciu — nie gramy (patrz liveGen)
+        const myLive = msg.__live !== undefined ? msg.__live : liveGen;
+        // [FIX 2026-11-02] meta: karta (liczniki, czyszczenie z innej karty), chwila przyjścia (opóźnienie, termin kwestii)
+        const meta0 = { tab: aheadTab(msg.id), at: msg.__at || Date.now() };
+        let firstPut = true;
+        const put = (url, durationMs, piperSpeed, rate, slotMs, noSkip, group) => {
+            if (myLive !== liveGen) { offLogPush('play-stale', String(msg.id || '').slice(0, 40)); return; }
+            const meta = Object.assign({ first: firstPut }, meta0);
+            firstPut = false;
+            putNow(url, durationMs, piperSpeed, rate, slotMs, noSkip, group, meta);
+        };
         const end = () => { if (nr) ordEnd(nr); };
         const cached = audioCache.get(msg.id);
         if (cached) {
@@ -1821,7 +1874,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             sendResponse({ status: 'playing' });
             return true;
         }
-        const ctext = censoredText(msg.text);
+        const ctext = speechText(msg.text);
         if (!ctext || ctext.length < 2) {
             // Kwestia po cenzurze pusta - milczymy (nie ma czego grac).
             end();
@@ -1829,132 +1882,96 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             return true;
         }
         msg.text = ctext;
-        // [VOX] Supertonic: gotowy WAV do wspólnej kolejki (tempo, nagrywanie), jak Pocket.
-        if (ttsEngine === 'supertonic') {
-            playSupertonicStream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'supertonic' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] Supertonic playback:', err);
-                    offLogPush('supertonic-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'Supertonic: ' + errMsg(err) });
-                });
+        const synthNow = () => {
+            // [VOX] Supertonic: gotowy WAV do wspólnej kolejki (tempo, nagrywanie), jak Pocket.
+            if (ttsEngine === 'supertonic') {
+                playSupertonicStream(msg, put)
+                    .then(() => {
+                        end();
+                        sendResponse({ status: 'playing', engine: 'supertonic' });
+                    })
+                    .catch((err) => {
+                        end();
+                        console.error('[Offscreen] Supertonic playback:', err);
+                        offLogPush('supertonic-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: 'Supertonic: ' + errMsg(err) });
+                    });
+                return true;
+            }
+            if (ttsEngine === 'matcha') {
+                playMatchaStream(msg, put)
+                    .then(() => {
+                        end();
+                        sendResponse({ status: 'playing', engine: 'matcha' });
+                    })
+                    .catch((err) => {
+                        end();
+                        console.error('[Offscreen] Matcha playback:', err);
+                        offLogPush('matcha-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: 'Matcha-TTS: ' + errMsg(err) });
+                    });
+                return true;
+            }
+            // [FIX 2026-11-02] serwery lokalne — jedna gałąź (wcześniej 6 kopii): gotowy WAV do wspólnej kolejki (tempo, nagrywanie)
+            if (REMOTE[ttsEngine]) {
+                const eng = ttsEngine, c = REMOTE[eng];
+                playRemoteStream(msg, put, eng)
+                    .then(() => {
+                        end();
+                        sendResponse({ status: 'playing', engine: eng });
+                    })
+                    .catch((err) => {
+                        end();
+                        console.error('[Offscreen] ' + c.name + ' playback:', err);
+                        offLogPush(eng + '-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: c.label + ': ' + errMsg(err) });
+                    });
+                return true;
+            }
+            sendResponse({ status: 'predicting_and_playing' });
+            // gdyby synteza zawisła — po 30 s kolejka idzie dalej (inaczej lektor zamilkłby na dobre)
+            const guard = nr ? setTimeout(() => { offLogPush('order-timeout', String(msg.text).slice(0, 40)); end(); }, 30000) : 0;
+            getSession()
+                .then((s) => predictStream(s, msg, put))
+                .catch((err) => { console.error('[Offscreen] play predict:', err); offLogPush('play-fail', errMsg(err)); })
+                .finally(() => { clearTimeout(guard); end(); });
+            return true;
+        };
+        // [FIX 2026-11-02] Ta kwestia właśnie nagrywa się do przodu w silniku w przeglądarce (Sherpa, Matcha 🌐) → czekamy
+        // na nią (Matcha: awans do kolejki pilnej) zamiast liczyć ją drugi raz; gotowa → z pamięci, nieudana → synteza jak zwykle.
+        const ahead = aheadJobs.get(msg.id);
+        if (ahead && (ttsEngine === 'sherpa' || (ttsEngine === 'matcha' && /^web:/.test(matchaVoice)))) {
+            if (ahead.ticket && mwMod && typeof mwMod.promote === 'function') mwMod.promote(ahead.ticket);
+            offLogPush('play-wait', String(msg.id || '').slice(0, 40) + ' (czekam na nagrywanie do przodu)');
+            let waitTimer = 0;
+            Promise.race([
+                Promise.resolve(ahead.promise).catch(() => {}),
+                new Promise((r) => { waitTimer = setTimeout(r, AHEAD_WAIT_MAX_MS); })
+            ]).then(() => {
+                clearTimeout(waitTimer);
+                if (myLive !== liveGen) { end(); sendResponse({ status: 'stale' }); return; }
+                const ready = audioCache.get(msg.id);
+                if (!ready) { synthNow(); return; }
+                put(ready, msg.durationMs, msg.piperSpeed, msg.rate, msg.slotMs, msg.noSkip);
+                end();
+                offLogPush('play', String(msg.id || '').slice(0, 40) + ' (z nagrywania do przodu)');
+                sendResponse({ status: 'playing' });
+            });
             return true;
         }
-        if (ttsEngine === 'matcha') {
-            playMatchaStream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'matcha' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] Matcha playback:', err);
-                    offLogPush('matcha-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'Matcha-TTS: ' + errMsg(err) });
-                });
-            return true;
-        }
-        // [AGENT-EXP] Odtwarzaj WAV z XTTS / F5 przez tę samą kolejkę, tempo i nagrywanie co Sherpa/Piper.
-        if (ttsEngine === 'xtts' || ttsEngine === 'f5') {
-            const isF5 = ttsEngine === 'f5';
-            playXttsStream(msg, put, isF5)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: ttsEngine });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] ' + (isF5 ? 'F5' : 'XTTS') + ' playback:', err);
-                    offLogPush((isF5 ? 'f5' : 'xtts') + '-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: (isF5 ? 'F5-TTS (Marek): ' : 'XTTS (TTS2): ') + errMsg(err) });
-                });
-            return true;
-        }
-        // [AGENT-EXP] Pocket-TTS-PL: jak XTTS — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
-        if (ttsEngine === 'pocket') {
-            playPocketStream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'pocket' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] Pocket playback:', err);
-                    offLogPush('pocket-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'Pocket-TTS-PL: ' + errMsg(err) });
-                });
-            return true;
-        }
-        // [AGENT-EXP] 2026-10-27 Kokoro: jak Pocket — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
-        if (ttsEngine === 'kokoro') {
-            playKokoroStream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'kokoro' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] Kokoro playback:', err);
-                    offLogPush('kokoro-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'Kokoro: ' + errMsg(err) });
-                });
-            return true;
-        }
-        // [AGENT-EXP] OmniVoice: jak Pocket — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
-        if (ttsEngine === 'omnivoice') {
-            playOmnivoiceStream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'omnivoice' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] OmniVoice playback:', err);
-                    offLogPush('omnivoice-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'OmniVoice: ' + errMsg(err) });
-                });
-            return true;
-        }
-        // [AGENT-EXP] Audio8 ma RTF 3–5 na CPU; czekamy do 15 min i gramy przez wspólną kolejkę.
-        if (ttsEngine === 'audio8') {
-            playAudio8Stream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'audio8' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] Audio8 playback:', err);
-                    offLogPush('audio8-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'Audio8 ONNX: ' + errMsg(err) });
-                });
-            return true;
-        }
-        sendResponse({ status: 'predicting_and_playing' });
-        // gdyby synteza zawisła — po 30 s kolejka idzie dalej (inaczej lektor zamilkłby na dobre)
-        const guard = nr ? setTimeout(() => { offLogPush('order-timeout', String(msg.text).slice(0, 40)); end(); }, 30000) : 0;
-        getSession()
-            .then((s) => predictStream(s, msg, put))
-            .catch((err) => { console.error('[Offscreen] play predict:', err); offLogPush('play-fail', errMsg(err)); })
-            .finally(() => { clearTimeout(guard); end(); });
-        return true;
+        return synthNow();
     }
 
     if (msg.action === 'TTS_PAUSE') {
+        // [FIX 2026-11-02] pauza z karty, która teraz NIE czyta (np. film w tle się skończył) — nie ucinamy lektora
+        if (msg.tab != null && lastPlayTab && String(msg.tab) !== lastPlayTab) { dropTabItems(msg.tab); sendResponse({ status: 'other_tab' }); return true; }
         // [AGENT-EXP] 2026-10-22: pauza filmu przy „Czytaj zawsze do końca” — lektor dokańcza bieżące zdanie
         if (readToEnd && msg.reason === 'pause' && softStop()) { sendResponse({ status: 'finishing' }); return true; }
+        liveGen++;   // [FIX 2026-11-02] kwestie liczone teraz (każdy silnik) nie wejdą już do kolejki
         stLiveGen++;   // [VOX] Supertonic: kwestie liczone „na teraz” już nie wejdą do kolejki
         if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
         cancelMatchaRequests();
-        cancelXttsRequests();
-        cancelAudio8Requests();
-        cancelPocketRequests();
-        cancelOmnivoiceRequests();
-        cancelKokoroRequests();   // [AGENT-EXP] 2026-10-27
+        cancelRemoteLive();   // [FIX 2026-11-02] wszystkie serwery lokalne
         ordReset();
         playQueue.length = 0;
         finishCurrent();
@@ -1964,23 +1981,19 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
     }
 
     if (msg.action === 'TTS_CLEAR_BUFFER') {
+        // [FIX 2026-11-02] czyszczenie z karty, która teraz NIE czyta (np. przewinięcie / koniec filmu w tle) — pomijamy
+        if (msg.tab != null && lastPlayTab && String(msg.tab) !== lastPlayTab) { dropTabItems(msg.tab); sendResponse({ status: 'other_tab' }); return true; }
         // [AGENT-EXP] 2026-10-22: pauza filmu przy „Czytaj zawsze do końca” — lektor dokańcza bieżące zdanie
         if (readToEnd && msg.reason === 'pause' && softStop()) { sendResponse({ status: 'finishing' }); return true; }
+        liveGen++;   // [FIX 2026-11-02] kwestie liczone teraz (każdy silnik) nie wejdą już do kolejki
         stLiveGen++;   // [VOX] Supertonic: kwestie liczone „na teraz” już nie wejdą do kolejki
         if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
         cancelMatchaRequests();
-        cancelXttsRequests();
-        cancelAudio8Requests();
-        cancelPocketRequests();
-        cancelOmnivoiceRequests();
-        cancelKokoroRequests();   // [AGENT-EXP] 2026-10-27
+        cancelRemoteLive();   // [FIX 2026-11-02] wszystkie serwery lokalne
         ordReset();
         playQueue.length = 0;
         finishCurrent();
-        if (player) {
-            player.pause();
-            player.src = '';
-        }
+        playerReset();   // [FIX 2026-11-02] bez fałszywego „audio-error”
         // [AGENT-EXP] 2026-10-17: nagrania ZOSTAJĄ (klucze są per karta + tekst, więc nic się nie pomyli) —
         // wcześniej czyszczenie kasowało cały zapas do przodu przy każdej pauzie / przewinięciu / ukryciu karty
         sendResponse({ status: 'cleared' });
@@ -2305,13 +2318,19 @@ async function playMatchaStream(msg, put) {
     }
 }
 
-// [AGENT-EXP] XTTS dostarcza jeden WAV dla całej kwestii, a prędkość ustawia odtwarzacz.
-async function playXttsStream(msg, put, isF5) {   // [AGENT-EXP] isF5: lektor Marek (F5-TTS)
-    const blob = isF5 ? await f5Synthesize(msg.text, tts2Voice, xttsSockets, true) : await xttsSynthesize(msg.text, tts2Voice, xttsSockets, true);
-    const url = cacheRemoteTtsBlob(msg.id, blob);
-    put(url, msg.durationMs, msg.piperSpeed, msg.rate, msg.slotMs, msg.noSkip);
-    recCapture(msg, blob).catch(() => {});
-    offLogPush('xtts-play', String(msg.id || '').slice(0, 40));
+// [FIX 2026-11-02] Serwery lokalne: kwestia czytana teraz idzie z flagą pilne; długie teksty (poza XTTS / F5, które dzielą
+// same) częściami ≤ 1900 znaków — każda część gra, gdy jest gotowa. Wcześniej 5 osobnych kopii tej funkcji.
+async function playRemoteStream(msg, put, eng) {
+    const c = REMOTE[eng];
+    const chunks = c.split ? splitForRemoteTts(msg.text, 1900) : [msg.text];
+    for (let i = 0; i < chunks.length; i++) {
+        const blob = await remoteSynth(eng, chunks[i], true, msg);
+        const single = chunks.length === 1;
+        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
+        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
+        recCapture(msg, blob).catch(() => {});
+        offLogPush(eng + '-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
+    }
 }
 
 // ===== [VOX] 2026-10-20: SUPERTONIC (silnik z VoxNemesis) =====
@@ -2406,63 +2425,11 @@ async function playSupertonicStream(msg, put) {
     }
 }
 
-// [AGENT-EXP] Pocket-TTS-PL: kwestia czytana teraz idzie z flagą pilne; długie teksty partiami (limit 2000).
-async function playPocketStream(msg, put) {
-    const chunks = splitForRemoteTts(msg.text, 1900);
-    for (let i = 0; i < chunks.length; i++) {
-        const blob = await pocketSynthesize(chunks[i], pocketVoice, pocketSockets, true);
-        const single = chunks.length === 1;
-        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
-        recCapture(msg, blob).catch(() => {});
-        offLogPush('pocket-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
-    }
-}
-
-// [AGENT-EXP] 2026-10-27 Kokoro: kwestia czytana teraz idzie z flagą pilne; długie teksty partiami (limit 2000).
-async function playKokoroStream(msg, put) {
-    const chunks = splitForRemoteTts(msg.text, 1900);
-    for (let i = 0; i < chunks.length; i++) {
-        const blob = await kokoroSynthesize(chunks[i], kokoroVoice, kokoroSockets, true);
-        const single = chunks.length === 1;
-        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id);
-        recCapture(msg, blob).catch(() => {});
-        offLogPush('kokoro-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
-    }
-}
-
 // [AGENT-EXP] 2026-10-17: czas kwestii w filmie (Netflix: startMs z napisów, inne: moment czytania).
 function omnivoiceCzasMs(msg) {
     if (typeof msg.startMs === 'number' && msg.startMs >= 0) return msg.startMs;
     if (typeof msg.videoTimeMs === 'number' && msg.videoTimeMs >= 0) return msg.videoTimeMs;
     return undefined;
-}
-
-// [AGENT-EXP] OmniVoice: kwestia czytana teraz idzie z flagą pilne; długie teksty partiami (limit 2000).
-async function playOmnivoiceStream(msg, put) {
-    const chunks = splitForRemoteTts(msg.text, 1900);
-    for (let i = 0; i < chunks.length; i++) {
-        const blob = await omnivoiceSynthesize(chunks[i], omnivoiceVoice, omnivoiceSockets, true, omnivoiceCzasMs(msg));
-        const single = chunks.length === 1;
-        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
-        recCapture(msg, blob).catch(() => {});
-        offLogPush('omnivoice-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
-    }
-}
-
-// [AGENT-EXP] Audio8 ogranicza wejście do 2000 znaków; serializujemy fragmenty i odtwarzamy po kolei.
-async function playAudio8Stream(msg, put) {
-    const chunks = splitForRemoteTts(msg.text, 1900);
-    for (let i = 0; i < chunks.length; i++) {
-        const blob = await audio8Synthesize(chunks[i], audio8Voice, audio8Sockets, true);
-        const single = chunks.length === 1;
-        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
-        recCapture(msg, blob).catch(() => {});
-        offLogPush('audio8-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
-    }
 }
 
 // Jedna ponowna próba — chwilowy błąd workera nie może zjeść zdania.
@@ -2496,6 +2463,8 @@ async function predictStream(session, msg, put = enqueuePlay) {
         if (!blob) continue;
         const url = URL.createObjectURL(blob);
         audioCache.set(msg.id + '#' + i, url);
+        cacheSizeSet(msg.id + '#' + i, blob.size);   // [FIX 2026-11-02] pamięć w MB
+        ttsCacheEvict();
         put(url, 0, msg.piperSpeed, msg.rate, 0, msg.noSkip, grp); // [AGENT-EXP] paczki = jedna kwestia (group)
         offLogPush('play', 'paczka ' + (i + 1) + '/' + chunks.length + ' (stream)');
     }
