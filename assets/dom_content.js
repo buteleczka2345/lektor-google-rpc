@@ -187,10 +187,14 @@ if (!('__lektorBufPauza' in window)) {
         '[class*="immersive-translate"]'
     ];
     var IT_GROUP = IT_SELECTORS.join(', ');
+    // [FIX 2026-11-02] własne źródła z Kreatora osobno: ich linie jednego napisu czytamy RAZEM (customHits → customJoined),
+    // a obcojęzyczne przy tłumaczeniu sieciowym idą do tłumacza (dawniej czytana była tylko ostatnia linia napisu,
+    // a angielski z własnego źródła był pomijany nawet z włączonym tłumaczeniem)
+    var CUSTOM_GROUP = '', customHits = [];
     // OPTIONS-PAGE: selektory z Kreatora napisów + listy domen (white/black) z options_hooks.js
     function optAsleep() { try { return !!(window.__LivedubOpts && window.__LivedubOpts.asleep()); } catch (e) { return false; } }
     try { if (window.__LivedubOpts) window.__LivedubOpts.onChange(function () {
-        try { IT_GROUP = IT_SELECTORS.concat(window.__LivedubOpts.customSelectors()).join(', '); } catch (e) {}
+        try { var cs = window.__LivedubOpts.customSelectors(); IT_GROUP = IT_SELECTORS.concat(cs).join(', '); CUSTOM_GROUP = cs.join(', '); } catch (e) {}
         try { if (optAsleep() && typeof enabled !== 'undefined' && enabled) { enabled = false; if (typeof stopSpeech === 'function') stopSpeech(); } } catch (e) {}
     }); } catch (e) {}
     // [FIX 2026-11-02] 📋 lista domen zmieniona na otwartej karcie: uśpij albo obudź ze stanem z popupu (dawniej raz uśpiony
@@ -661,8 +665,11 @@ if (!('__lektorBufPauza' in window)) {
                 if (node.querySelector && node.querySelector(IT_GROUP)) continue; // tylko liście
                 var text = cleanTranslationJunk((node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim());
                 if (text.length >= 2 && !isSystemPrompt(text)) {
-                    if (looksEnglish(text)) continue; // oryginał EN (IT) — nigdy nie czytamy
+                    var own = false;
+                    if (CUSTOM_GROUP) { try { own = node.matches(CUSTOM_GROUP); } catch (e) {} }
+                    if (looksEnglish(text) && !(own && netTr)) continue; // oryginał EN (IT) — nigdy nie czytamy (własne źródło: po tłumaczeniu)
                     results.push(text);
+                    if (own) customHits.push(text);
                     subFoundNode = node;
                 }
             }
@@ -845,7 +852,7 @@ if (!('__lektorBufPauza' in window)) {
     //   (wbudowane to oryginał EN/CN; fallback czytał angielskie zdania).
     // - Prime Video: wg ustawienia primeSubtitleSource ('both' domyślnie = IT + wbudowane).
     function getCurrentCaption() {
-        var itTexts = collectIT(document, []);
+        var itTexts = collectITJoined();
         var natTexts = collectNative(document, [], itTexts);
 
         var useIT = true;
@@ -1010,8 +1017,24 @@ if (!('__lektorBufPauza' in window)) {
     // ===== Tłumaczenie sieciowe na żywo (iq.com, Prime, Dailymotion, Rumble…) =====
     // Gdy w ustawieniach wybrany jest silnik sieciowy: polski napis (np. z Immersive Translate)
     // czytamy od razu, a napis w innym języku tłumaczy service worker wybranym silnikiem.
+    // [FIX 2026-11-02] własne źródło złapane linia po linii (≥2 trafienia) = jeden napis: linie w kolejności na stronie
+    function customText(min) {
+        var u = [];
+        for (var i = 0; i < customHits.length; i++) if (u.indexOf(customHits[i]) === -1) u.push(customHits[i]);
+        return u.length >= (min || 1) ? u.join(' ') : '';
+    }
+    function customJoined() { return customText(2); }
+    function collectITJoined() {
+        customHits = [];
+        var it = collectIT(document, []);
+        var joined = customJoined();
+        if (joined) { it = it.filter(function (t) { return customHits.indexOf(t) === -1; }); it.push(joined); }
+        return it;
+    }
     function getNetCaption() {
-        var itTexts = collectIT(document, []);
+        var itTexts = collectITJoined();
+        var own = customText(1);   // [FIX 2026-11-02] własne źródło z Kreatora ma pierwszeństwo (cały napis, obcy → tłumacz)
+        if (own) return { text: own, needTr: !(looksPolish(own) || PL_WORDS_RE.test(own)) };
         var natTexts = collectNative(document, [], itTexts);
         var all = itTexts.concat(natTexts);
         for (var i = all.length - 1; i >= 0; i--) {

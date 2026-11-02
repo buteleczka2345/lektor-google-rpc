@@ -258,13 +258,24 @@ function findTargetTab() {
 function tabHost(tab) {
   try { return new URL(tab.url).hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { return ''; }
 }
+// [FIX 2026-11-02] karta, na której ostatnio wskazywano / testowano — do „💾 Dodaj” (KREATOR_SITE w tle)
+let kTabId = null, kPickTop = '';
+const KREATOR_FILES = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/domain_lists.js', 'assets/options_hooks.js'];
 function sendToTab(msg) {
   return findTargetTab().then((tab) => new Promise((resolve) => {
-    if (!tab) { resolve({ error: 'Brak otwartej karty ze wspieranej strony (YouTube, Netflix, Prime…).' }); return; }
-    chrome.tabs.sendMessage(tab.id, msg, (resp) => {
-      if (chrome.runtime.lastError || !resp) resolve({ error: 'Karta nie odpowiada — odśwież ją (F5) po przeładowaniu rozszerzenia.', host: tabHost(tab) });
-      else resolve(Object.assign({ host: tabHost(tab) }, resp));
+    if (!tab) { resolve({ error: 'Brak otwartej karty ze stroną www — otwórz film w karcie obok.' }); return; }
+    kTabId = tab.id;
+    const ask = (retry) => chrome.tabs.sendMessage(tab.id, msg, (resp) => {
+      if (!chrome.runtime.lastError && resp) { resolve(Object.assign({ host: tabHost(tab) }, resp)); return; }
+      // [FIX 2026-11-02] strona bez lektora (nie z listy serwisów ani Łowcy): dokładamy narzędzia Kreatora i pytamy jeszcze raz
+      if (retry) {
+        chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: KREATOR_FILES })
+          .then(() => ask(false), () => resolve({ error: 'Ta strona nie pozwala na Kreatora (strona systemowa albo sklep Chrome).', host: tabHost(tab) }));
+        return;
+      }
+      resolve({ error: 'Karta nie odpowiada — odśwież ją (F5) po przeładowaniu rozszerzenia.', host: tabHost(tab) });
     });
+    ask(true);
   }));
 }
 
@@ -306,16 +317,23 @@ function addSelector() {
   const host = $('kHost').value.trim().toLowerCase().replace(/^www\./, '');
   const sel = $('kSel').value.trim();
   if (!host || !sel) { setStatus('Podaj domenę i selektor', 'err'); return; }
+  // [FIX 2026-11-02] błędny selektor nie trafia do zapisu (wyłączałby czytanie napisów na tej domenie)
+  try { document.createDocumentFragment().querySelector(sel); } catch (e) { setStatus('❌ Błędny selektor CSS: ' + sel, 'err'); return; }
   const l = customSources[host] || (customSources[host] = []);
   if (l.indexOf(sel) === -1) l.push(sel);
   if (customSourcesOn[host] === undefined) customSourcesOn[host] = true;
   save({ customSources, customSourcesOn });
   $('kSel').value = '';
   renderKreatorList(); renderKreatorAll();
+  // [FIX 2026-11-02] strona bez wbudowanego lektora: lektor startuje tam sam (jak na stronie Łowcy) + biała lista domen
+  chrome.runtime.sendMessage({ action: 'KREATOR_SITE', host, tabId: kTabId, top: kPickTop }, (r) => {
+    void chrome.runtime.lastError;
+    if (r && r.ok && (r.listed || r.remembered)) $('kResult').textContent = '💾 Zapisano. Lektor będzie czytał z tego miejsca na ' + host + '.' + (r.listed ? '\nDopisano do białej listy domen: ' + r.listed : '');
+  });
 }
 
 function buildKreator() {
-  const s = section('🧪 Kreator napisów — własne źródła', 'Własny selektor CSS kontenera napisów dla wybranej domeny (czytany obok wbudowanych). Działa na stronach, na których działa rozszerzenie (YouTube, Netflix, Prime, iQ, Dailymotion, Rumble). Testy i wskazywanie działają na ostatnio używanej takiej karcie.', true);
+  const s = section('🧪 Kreator napisów — własne źródła', 'Gdy lektor nie widzi napisów na stronie, pokaż mu je: „🎯 Wskaż myszką” → na karcie z filmem niebieska ramka pokazuje, co lektor złapie (z podglądem tekstu); kółkiem myszy albo strzałkami ↑ ↓ poszerzasz / zawężasz ramkę, klikiem wybierasz. Potem „💾 Dodaj”. Działa na każdej stronie z filmem (strony z czytaniem z ekranu: Prime, iQIYI, Dailymotion, Rumble, Viki, WeTV, Bilibili, YouTube i strony Łowcy; Netflix czyta napisy z pliku, nie z ekranu). Narzędzia działają na ostatnio używanej karcie ze stroną www. Napisy obcojęzyczne lektor czyta po przetłumaczeniu — przy włączonym tłumaczeniu sieciowym.', true);
   const r1 = el('div', { class: 'row', style: 'border-top:none;' });
   r1.appendChild(el('input', { type: 'text', id: 'kHost', placeholder: 'domena, np. youtube.com', style: 'max-width:240px;flex:none;' }));
   r1.appendChild(el('input', { type: 'text', id: 'kSel', placeholder: '.selektor-kontenera-napisow', spellcheck: 'false' }));
@@ -335,7 +353,8 @@ function buildKreator() {
   const pick = el('button', { class: 'btn' }, '🎯 Wskaż myszką');
   pick.addEventListener('click', async () => {
     const r = await sendToTab({ action: 'KREATOR_PICK' });
-    $('kResult').textContent = r.error ? '❌ ' + r.error : '🎯 Przełącz się na kartę z filmem i kliknij w napisy (Esc = anuluj).';
+    kPickTop = '';
+    $('kResult').textContent = r.error ? '❌ ' + r.error : '🎯 Przełącz się na kartę z filmem (' + (r.host || '?') + ') i najedź myszką na napisy — niebieska ramka pokaże, co lektor złapie. Kółko myszy albo ↑ ↓ — szerzej / węziej, klik — wybierz, Esc — anuluj. Film stoi na czas wskazywania.';
     if (r.host && !$('kHost').value) { $('kHost').value = r.host; renderKreatorList(); }
   });
   const viewAll = el('button', { class: 'btn' }, '📋 Podgląd wszystkich domen');
@@ -1291,10 +1310,13 @@ chrome.storage.local.get(null, (all) => {
 
 // wynik „Wskaż myszką" z karty
 chrome.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.action === 'KREATOR_PICK_CANCEL') { $('kResult').textContent = '⏹ Wskazywanie anulowane.'; return; }
   if (!msg || msg.action !== 'KREATOR_PICKED') return;
   $('kSel').value = msg.selector || '';
   if (msg.host) $('kHost').value = msg.host;
-  $('kResult').textContent = '🎯 Wskazano: ' + (msg.selector || '?') + (msg.text ? '\n„' + msg.text + '"' : '');
+  kPickTop = msg.top || '';
+  $('kResult').textContent = '🎯 Wskazano: ' + (msg.selector || '?') + (msg.count ? '  (pasuje: ' + msg.count + ')' : '')
+    + (msg.text ? '\n„' + msg.text + '”' : '') + '\nSprawdź tekst i kliknij „💾 Dodaj”.';
   renderKreatorList();
 });
 

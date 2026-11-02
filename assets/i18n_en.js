@@ -1495,5 +1495,24 @@ self.ML_I18N_EN = {
     "✔ Wszystkie domeny lektora już są na liście.": "✔ All of the narrator's domains are already on the list.",
     "➕ Dopisano: ": "➕ Added: ",
     "Zmiana działa od razu na otwartych kartach. Domena z czarnej listy zawsze wygrywa z białą. Liczy się strona z paska adresu — odtwarzacz w ramce z innej domeny działa razem z nią. Nową stronę dopiszesz też w popupie („📋 ➕ Dodaj tę stronę”); „🔍 Szukaj napisów” i „🌐 bazy napisów” dopisują ją same. Pusta biała lista = lektor wszędzie.": "Changes apply immediately to open tabs. A blocked domain always wins over an allowed one. What counts is the site in the address bar — a player in a frame from another domain works together with it. You can also add a new site in the popup (“📋 ➕ Add this site”); “🔍 Search subtitles” and “🌐 subtitle databases” add it by themselves. Empty allow list = the narrator works everywhere.",
-    "Tej strony nie ma na liście domen lektora — dopisz ją w popupie (📋 ➕ Dodaj tę stronę) albo wyłącz „Tylko domeny z listy”.": "This site is not on the narrator's domain list — add it in the popup (📋 ➕ Add this site) or turn off “Only domains from the list”."
+    "Tej strony nie ma na liście domen lektora — dopisz ją w popupie (📋 ➕ Dodaj tę stronę) albo wyłącz „Tylko domeny z listy”.": "This site is not on the narrator's domain list — add it in the popup (📋 ➕ Add this site) or turn off “Only domains from the list”.",
+    // [FIX 2026-11-02]
+    "✅ Lektor złapie:": "✅ The narrator will catch:",
+    "⚠ Tu nie ma tekstu napisów": "⚠ No subtitle text here",
+    "poziom": "level",
+    "⚠ pasuje też poza napisem:": "⚠ also matches outside the subtitle:",
+    "(pomarańczowe ramki) — zawęź albo poszerz": "(orange frames) — narrow or widen",
+    "🖱 Kółko myszy albo ↑ ↓ — szerzej / węziej · Klik albo Enter — wybierz · Esc — anuluj": "🖱 Mouse wheel or ↑ ↓ — wider / narrower · Click or Enter — choose · Esc — cancel",
+    "🎯 Najedź myszką na napisy — niebieska ramka pokazuje, co lektor złapie. Kółko myszy / ↑ ↓: szerzej / węziej · klik: wybierz · Esc: anuluj": "🎯 Hover over the subtitles — the blue frame shows what the narrator will catch. Mouse wheel / ↑ ↓: wider / narrower · click: choose · Esc: cancel",
+    "Gdy lektor nie widzi napisów na stronie, pokaż mu je: „🎯 Wskaż myszką” → na karcie z filmem niebieska ramka pokazuje, co lektor złapie (z podglądem tekstu); kółkiem myszy albo strzałkami ↑ ↓ poszerzasz / zawężasz ramkę, klikiem wybierasz. Potem „💾 Dodaj”. Działa na każdej stronie z filmem (strony z czytaniem z ekranu: Prime, iQIYI, Dailymotion, Rumble, Viki, WeTV, Bilibili, YouTube i strony Łowcy; Netflix czyta napisy z pliku, nie z ekranu). Narzędzia działają na ostatnio używanej karcie ze stroną www. Napisy obcojęzyczne lektor czyta po przetłumaczeniu — przy włączonym tłumaczeniu sieciowym.": "When the narrator does not see the subtitles on a page, show them to it: “🎯 Pick with the mouse” → on the video tab a blue frame shows what the narrator will catch (with a text preview); widen / narrow the frame with the mouse wheel or the ↑ ↓ arrows, click to choose. Then “💾 Add”. Works on any page with a video (sites read from the screen: Prime, iQIYI, Dailymotion, Rumble, Viki, WeTV, Bilibili, YouTube and Hunter sites; Netflix reads subtitles from a file, not from the screen). The tools work on the most recently used tab with a web page. The narrator reads foreign-language subtitles after translating them — with network translation on.",
+    "🎯 Przełącz się na kartę z filmem (": "🎯 Switch to the video tab (",
+    ") i najedź myszką na napisy — niebieska ramka pokaże, co lektor złapie. Kółko myszy albo ↑ ↓ — szerzej / węziej, klik — wybierz, Esc — anuluj. Film stoi na czas wskazywania.": ") and hover over the subtitles — the blue frame will show what the narrator will catch. Mouse wheel or ↑ ↓ — wider / narrower, click — choose, Esc — cancel. The video is paused while you pick.",
+    "⏹ Wskazywanie anulowane.": "⏹ Picking cancelled.",
+    "(pasuje:": "(matches:",
+    "Sprawdź tekst i kliknij „💾 Dodaj”.": "Check the text and click “💾 Add”.",
+    "❌ Błędny selektor CSS:": "❌ Invalid CSS selector:",
+    "💾 Zapisano. Lektor będzie czytał z tego miejsca na": "💾 Saved. The narrator will read from this place on",
+    "Dopisano do białej listy domen:": "Added to the domain allow list:",
+    "Brak otwartej karty ze stroną www — otwórz film w karcie obok.": "No open tab with a web page — open a video in another tab.",
+    "Ta strona nie pozwala na Kreatora (strona systemowa albo sklep Chrome).": "This page does not allow the Creator (system page or Chrome Web Store)."
 };

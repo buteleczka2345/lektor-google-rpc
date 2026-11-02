@@ -91,11 +91,16 @@
         lastAsleep = a;
         sleepCbs.forEach(function (f) { try { f(a); } catch (e) {} });
     }
+    // [FIX 2026-11-02] błędny selektor odrzucamy tutaj — w dom_content.js selektory idą jedną listą (a, b, c),
+    // więc jeden zły wpis wyłączał czytanie WSZYSTKICH napisów Immersive Translate na tej domenie
+    function validSelector(sel) {
+        try { document.createDocumentFragment().querySelector(sel); return true; } catch (e) { return false; }
+    }
     function customSelectors() {
         var h = host();
         if (o.customSourcesOn && o.customSourcesOn[h] === false) return [];
         var l = o.customSources && o.customSources[h];
-        return Array.isArray(l) ? l.filter(function (s) { return typeof s === 'string' && s.trim(); }) : [];
+        return Array.isArray(l) ? l.filter(function (s) { return typeof s === 'string' && s.trim() && validSelector(s); }) : [];
     }
 
     window.__LivedubOpts = {
@@ -111,12 +116,125 @@
     };
 
     // ---------------- Kreator napisów: polecenia ze strony opcji ----------------
-    function cssPath(el) {
+    // [FIX 2026-11-02] 🎯 „Wskaż myszką” od nowa. Dawniej klik brał element pod kursorem: gdy warstwa napisów nie
+    // przyjmuje kliknięć (pointer-events: none — tak ma większość odtwarzaczy), łapał się sam film (#v) i lektor nic nie
+    // czytał; gdy przyjmuje — łapała się JEDNA linia (span.linia), a selektor pasował też do tekstów obok napisów.
+    // Teraz: niebieska RAMKA pokazuje pod kursorem, co lektor złapie (z podglądem tekstu) — napis szukany jest po
+    // położeniu tekstu na ekranie, więc działa też przez warstwy bez kliknięć i w ramkach odtwarzaczy (wskazywanie
+    // rusza we wszystkich ramkach karty). Domyślnie ramka obejmuje cały napis (wszystkie linie). Kółko myszy albo ↑ ↓
+    // — szerzej / węziej, klik albo Enter — wybierz, Esc — anuluj. Selektor jest zawężany przodkami, aż przestanie
+    // pasować do tekstów poza napisem; jeśli dalej pasuje gdzie indziej, te miejsca mają pomarańczowe ramki.
+    // Na czas wskazywania film w tej ramce stoi (pauza), żeby napis nie znikał; potem gra dalej.
+    function txt(el) { return String((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim(); }
+    function stableId(id) { return !!id && id.length <= 40 && !/\d{3,}/.test(id); }
+    function stableClasses(el) {
+        var cls = typeof el.className === 'string' ? el.className : ((el.getAttribute && el.getAttribute('class')) || '');
+        return cls.split(/\s+/).filter(function (c) {
+            return c && c.length <= 40 && !/\d{3,}/.test(c) && !/^(css|sc|jsx|svelte|emotion)-/i.test(c)
+                && !/^(is-|has-)?(active|hover|focus|focused|visible|hidden|show|shown|open|selected|playing|paused)$/i.test(c);
+        });
+    }
+    function cssPath(el) {   // jeden poziom: #id albo znacznik.klasa.klasa
         if (!el || el.nodeType !== 1) return '';
-        if (el.id && !/\d{3,}/.test(el.id)) return '#' + CSS.escape(el.id);
-        var cls = (typeof el.className === 'string' ? el.className : '').split(/\s+/)
-            .filter(function (c) { return c && !/\d{3,}/.test(c); }).slice(0, 2);
-        return el.tagName.toLowerCase() + (cls.length ? '.' + cls.map(function (c) { return CSS.escape(c); }).join('.') : '');
+        if (stableId(el.id)) return '#' + CSS.escape(el.id);
+        return el.tagName.toLowerCase() + stableClasses(el).slice(0, 2).map(function (c) { return '.' + CSS.escape(c); }).join('');
+    }
+    function rootOf(el) { var r = el.getRootNode ? el.getRootNode() : document; return r && r.querySelectorAll ? r : document; }
+    function lca(a, b) {
+        var up = [];
+        for (var x = a; x; x = x.parentElement) up.push(x);
+        for (var y = b; y; y = y.parentElement) if (up.indexOf(y) !== -1) return y;
+        return null;
+    }
+    function depthTo(el, anc) { var d = 0; for (var x = el; x && x !== anc; x = x.parentElement) d++; return d; }
+    // linie jednego napisu: wspólny przodek najwyżej 2 poziomy wyżej
+    function sameBlock(a, b) { var c = lca(a, b); return !!c && depthTo(a, c) <= 2 && depthTo(b, c) <= 2; }
+    function partOfPick(m, el) { return m === el || el.contains(m) || m.contains(el) || sameBlock(m, el); }
+    function matchesOf(sel, el) { try { return Array.prototype.slice.call(rootOf(el).querySelectorAll(sel)); } catch (e) { return []; } }
+    // Selektor wskazanego miejsca: od samego elementu w górę (przodkowie z klasą / id), aż pasuje tylko do napisu.
+    function buildSelector(el) {
+        var parts = [], cur = el, best = '';
+        for (var depth = 0; cur && cur.nodeType === 1 && depth < 7; depth++) {
+            var p = cssPath(cur);
+            if (depth === 0 || p.indexOf('.') !== -1 || p.charAt(0) === '#') {   // goły znacznik przodka (div) nic nie zawęża
+                parts.unshift(p);
+                best = parts.join(' ');
+                var m = matchesOf(best, el);
+                if (m.length && m.every(function (x) { return partOfPick(x, el); })) return best;
+                if (p.charAt(0) === '#') break;
+            }
+            cur = cur.parentElement;
+            if (!cur || cur === document.body || cur === document.documentElement) break;
+        }
+        return best;
+    }
+    function visibleRect(el) {
+        if (!el || el.nodeType !== 1) return null;
+        var cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) return null;
+        var r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 ? r : null;
+    }
+    // Tekst pod punktem — po położeniu (Range), nie po kliknięciu: działa też przez pointer-events: none.
+    var pickRange = null;
+    function textAt(root, x, y, budget) {
+        var best = null, bestArea = Infinity, seen = 0;
+        function walk(r) {
+            var w;
+            try { w = document.createTreeWalker(r, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT); } catch (e) { return; }
+            var n;
+            while ((n = w.nextNode()) && seen < budget) {
+                if (n.nodeType === 1) { if (n.shadowRoot) walk(n.shadowRoot); continue; }
+                seen++;
+                if (!n.nodeValue || !n.nodeValue.trim() || !n.parentElement) continue;
+                pickRange = pickRange || document.createRange();
+                pickRange.selectNodeContents(n);
+                var rs = pickRange.getClientRects();
+                for (var i = 0; i < rs.length; i++) {
+                    var q = rs[i];
+                    if (x < q.left - 2 || x > q.right + 2 || y < q.top - 2 || y > q.bottom + 2) continue;
+                    var a = q.width * q.height, pe = n.parentElement;
+                    if (a < bestArea && !(pe.closest && pe.closest('[data-lektor-pick]')) && visibleRect(pe)) { best = pe; bestArea = a; }
+                }
+            }
+        }
+        walk(root);
+        return best;
+    }
+    function hitAt(x, y) {
+        var stack = [];
+        try { stack = document.elementsFromPoint(x, y) || []; } catch (e) {}
+        for (var i = 0, tried = 0; i < stack.length && tried < 6; i++) {
+            var el = stack[i];
+            if (el === document.documentElement || el === document.body) break;
+            if (el.closest && el.closest('[data-lektor-pick]')) continue;
+            tried++;
+            var t = textAt(el, x, y, 3000);
+            if (t) return t;
+        }
+        return textAt(document.body || document.documentElement, x, y, 8000);
+    }
+    function chainFor(el) {
+        var chain = [], cur = el;
+        while (cur && cur.nodeType === 1 && cur !== document.body && cur !== document.documentElement && chain.length < 12) {
+            chain.push(cur);
+            cur = cur.parentElement;
+        }
+        return chain;
+    }
+    // Domyślna ramka: najniższy przodek z CAŁYM napisem (wszystkie linie) — bez odtwarzacza, przycisków i dużych bloków.
+    function autoLevel(chain) {
+        var vh = window.innerHeight || 800, best = 0, bestLen = txt(chain[0]).length;
+        for (var i = 1; i < chain.length; i++) {
+            var p = chain[i];
+            if (p.querySelector('video, canvas, iframe, button, input, select, textarea')) break;
+            var r = p.getBoundingClientRect();
+            if (r.height > vh * 0.4) break;
+            var len = txt(p).length;
+            if (len > 400) break;
+            if (len > bestLen) { best = i; bestLen = len; }
+        }
+        return best;
     }
     function flash(el) {
         try {
@@ -125,44 +243,171 @@
             setTimeout(function () { el.style.outline = old; }, 3000);
         } catch (e) {}
     }
-    var picking = null;
-    function stopPick() {
-        if (!picking) return;
-        document.removeEventListener('click', picking.onClick, true);
-        document.removeEventListener('keydown', picking.onKey, true);
-        try { picking.hint.remove(); } catch (e) {}
-        picking = null;
+
+    var pick = null;
+    function pickBox(color, solid) {
+        var b = document.createElement('div');
+        b.setAttribute('data-lektor-pick', '1');
+        b.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;box-sizing:border-box;border-radius:4px;display:none;'
+            + 'border:' + (solid ? '3px solid ' : '2px dashed ') + color + ';background:' + (solid ? 'rgba(77,163,255,.14)' : 'transparent') + ';';
+        (document.body || document.documentElement).appendChild(b);
+        return b;
     }
-    function startPick() {
-        stopPick();
-        var hint = document.createElement('div');
-        hint.textContent = '🎯 Kliknij w napisy na ekranie (Esc = anuluj)';
-        hint.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#4da3ff;color:#08131f;font:bold 13px system-ui,sans-serif;padding:6px 14px;border-radius:6px;';
-        (document.body || document.documentElement).appendChild(hint);
-        var onClick = function (ev) {
-            ev.preventDefault(); ev.stopPropagation();
-            var el = ev.target;
-            var sel = cssPath(el);
+    function placeBox(b, r) {
+        if (!r) { b.style.display = 'none'; return; }
+        b.style.display = 'block';
+        b.style.left = (r.left - 3) + 'px'; b.style.top = (r.top - 3) + 'px';
+        b.style.width = (r.width + 6) + 'px'; b.style.height = (r.height + 6) + 'px';
+    }
+    function pickRender() {
+        if (!pick) return;
+        var el = pick.chain[pick.level];
+        var r = el && el.isConnected ? el.getBoundingClientRect() : null;
+        placeBox(pick.box, r);
+        if (!r) {
+            pick.others.forEach(function (b) { placeBox(b, null); });
+            pick.label.style.display = 'none';
+            return;
+        }
+        if (pick.selFor !== el) {
+            pick.selFor = el;
+            pick.sel = buildSelector(el);
+            pick.matches = matchesOf(pick.sel, el);
+        }
+        var inside = 0, outside = [];
+        pick.matches.forEach(function (m) { if (partOfPick(m, el)) inside++; else outside.push(m); });
+        pick.others.forEach(function (b, i) {
+            var m = outside[i];
+            b.style.borderColor = '#ff9f43';
+            placeBox(b, m ? m.getBoundingClientRect() : null);
+        });
+        var t = txt(el);
+        pick.lText.textContent = t ? '„' + (t.length > 140 ? t.slice(0, 140) + '…' : t) + '”' : '—';
+        pick.lHead.textContent = t ? '✅ Lektor złapie:' : '⚠ Tu nie ma tekstu napisów';
+        pick.lSel.textContent = '🎯 ' + pick.sel + '  ·  poziom ' + (pick.level + 1) + ' / ' + pick.chain.length
+            + (outside.length ? '  ·  ⚠ pasuje też poza napisem: ' + outside.length + ' (pomarańczowe ramki) — zawęź albo poszerz' : '');
+        var L = pick.label;
+        L.style.display = 'block';
+        var lh = L.offsetHeight || 70, top = r.top - lh - 10;
+        if (top < 4) top = Math.min(r.bottom + 10, (window.innerHeight || 800) - lh - 4);
+        L.style.top = Math.max(4, top) + 'px';
+        L.style.left = Math.max(4, Math.min(r.left, (window.innerWidth || 1000) - L.offsetWidth - 4)) + 'px';
+    }
+    function pickUpdate() {
+        if (!pick) return;
+        pick.raf = 0;
+        var el = hitAt(pick.x, pick.y);
+        if (el !== pick.hit) {
+            pick.hit = el;
+            pick.chain = el ? chainFor(el) : [];
+            pick.level = el ? autoLevel(pick.chain) : 0;
+            pick.selFor = null;
+        }
+        pickRender();
+    }
+    function pickFinish(chosen) {
+        if (!pick) return;
+        var el = chosen ? pick.chain[pick.level] : null;
+        if (el) {
+            var sel = pick.selFor === el ? pick.sel : buildSelector(el);
+            var count = matchesOf(sel, el).length;
             flash(el);
-            try { chrome.runtime.sendMessage({ action: 'KREATOR_PICKED', host: host(), selector: sel, text: String(el.innerText || el.textContent || '').trim().slice(0, 120) }); } catch (e) {}
-            stopPick();
-        };
-        var onKey = function (ev) { if (ev.key === 'Escape') stopPick(); };
-        document.addEventListener('click', onClick, true);
-        document.addEventListener('keydown', onKey, true);
-        picking = { onClick: onClick, onKey: onKey, hint: hint };
+            try { chrome.runtime.sendMessage({ action: 'KREATOR_PICKED', host: host(), top: topHost(), selector: sel, text: txt(el).slice(0, 160), count: count }); } catch (e) {}
+        } else if (!chosen) {
+            try { chrome.runtime.sendMessage({ action: 'KREATOR_PICK_CANCEL' }); } catch (e) {}
+        }
+        stopPick();
+    }
+    function stopPick() {
+        if (!pick) return;
+        var p = pick;
+        pick = null;
+        p.off.forEach(function (f) { f(); });
+        [p.box, p.label, p.bar].concat(p.others).forEach(function (n) { try { if (n) n.remove(); } catch (e) {} });
+        clearTimeout(p.timer);
+        if (p.raf) cancelAnimationFrame(p.raf);
+        p.paused.forEach(function (v) { try { var pr = v.play(); if (pr && pr.catch) pr.catch(function () {}); } catch (e) {} });
+    }
+    function startPick(isTop) {
+        stopPick();
+        var p = { x: -1, y: -1, hit: null, chain: [], level: 0, sel: '', selFor: null, matches: [], raf: 0, off: [], paused: [], others: [] };
+        p.box = pickBox('#4da3ff', true);
+        for (var i = 0; i < 6; i++) p.others.push(pickBox('#ff9f43', false));
+        var L = document.createElement('div');
+        L.setAttribute('data-lektor-pick', '1');
+        L.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;display:none;max-width:min(560px,92vw);background:#0b1726;color:#e8f1ff;'
+            + 'font:13px/1.35 system-ui,sans-serif;padding:7px 10px;border-radius:8px;border:2px solid #4da3ff;box-shadow:0 4px 18px rgba(0,0,0,.5);white-space:normal;';
+        p.lHead = document.createElement('b'); L.appendChild(p.lHead);
+        L.appendChild(document.createTextNode(' '));
+        p.lText = document.createElement('span'); p.lText.setAttribute('data-noi18n', '1'); L.appendChild(p.lText);
+        p.lSel = document.createElement('div'); p.lSel.style.cssText = 'margin-top:4px;color:#9fc3ff;font-size:12px;word-break:break-all;'; L.appendChild(p.lSel);
+        var keys = document.createElement('div');
+        keys.style.cssText = 'margin-top:3px;color:#c9d6e8;font-size:12px;';
+        keys.textContent = '🖱 Kółko myszy albo ↑ ↓ — szerzej / węziej · Klik albo Enter — wybierz · Esc — anuluj';
+        L.appendChild(keys);
+        (document.body || document.documentElement).appendChild(L);
+        p.label = L;
+        if (isTop) {
+            var bar = document.createElement('div');
+            bar.setAttribute('data-lektor-pick', '1');
+            bar.textContent = '🎯 Najedź myszką na napisy — niebieska ramka pokazuje, co lektor złapie. Kółko myszy / ↑ ↓: szerzej / węziej · klik: wybierz · Esc: anuluj';
+            bar.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:2147483647;pointer-events:none;background:#4da3ff;color:#08131f;font:bold 13px system-ui,sans-serif;padding:6px 14px;border-radius:6px;max-width:94vw;text-align:center;';
+            (document.body || document.documentElement).appendChild(bar);
+            p.bar = bar;
+        }
+        try { if (self.MLi18n && self.MLi18n.watch) { self.MLi18n.watch(L); if (p.bar) self.MLi18n.watch(p.bar); } } catch (e) {}
+        // film stoi na czas wskazywania (napis nie znika)
+        try { Array.prototype.forEach.call(document.querySelectorAll('video'), function (v) { if (!v.paused) { v.pause(); p.paused.push(v); } }); } catch (e) {}
+        function on(type, f, opts) { window.addEventListener(type, f, opts); p.off.push(function () { window.removeEventListener(type, f, opts); }); }
+        var CAP = { capture: true, passive: false };
+        function block(ev) { ev.preventDefault(); ev.stopPropagation(); if (ev.stopImmediatePropagation) ev.stopImmediatePropagation(); }
+        function move(ev) {
+            if (!pick) return;
+            if (Math.abs(ev.clientX - pick.x) < 3 && Math.abs(ev.clientY - pick.y) < 3) return;
+            pick.x = ev.clientX; pick.y = ev.clientY;
+            if (!pick.raf) pick.raf = requestAnimationFrame(pickUpdate);
+        }
+        function step(d) {
+            if (!pick || !pick.chain.length) return;
+            pick.level = Math.max(0, Math.min(pick.chain.length - 1, pick.level + d));
+            pickRender();
+        }
+        on('mousemove', move, CAP);
+        on('pointermove', move, CAP);
+        on('wheel', function (ev) { if (!pick || !pick.chain.length) return; block(ev); step(ev.deltaY < 0 ? 1 : -1); }, CAP);
+        ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'dblclick', 'contextmenu', 'touchstart'].forEach(function (t) { on(t, block, CAP); });
+        on('click', function (ev) {
+            block(ev);
+            if (!pick) return;
+            pick.x = ev.clientX; pick.y = ev.clientY;
+            if (!pick.chain.length) pickUpdate();
+            if (pick.chain.length) pickFinish(true);
+        }, CAP);
+        on('keydown', function (ev) {
+            if (!pick) return;
+            if (ev.key === 'Escape') { block(ev); pickFinish(false); }
+            else if (ev.key === 'ArrowUp' || ev.key === '+') { block(ev); step(1); }
+            else if (ev.key === 'ArrowDown' || ev.key === '-') { block(ev); step(-1); }
+            else if (ev.key === 'Enter') { block(ev); if (pick.chain.length) pickFinish(true); }
+        }, CAP);
+        on('scroll', function () { if (pick) pickRender(); }, { capture: true, passive: true });
+        on('resize', function () { if (pick) pickRender(); }, { passive: true });
+        p.timer = setTimeout(stopPick, 180000);   // bezpiecznik: 3 min bez wyboru — koniec wskazywania
+        pick = p;
     }
 
     try {
         chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
             if (!msg || typeof msg.action !== 'string' || msg.action.indexOf('KREATOR_') !== 0) return;
             var isTop = (window === window.top);
-            if (msg.action === 'KREATOR_PICK') { if (isTop) { startPick(); sendResponse({ ok: true, host: host() }); } return; }
+            // wskazywanie rusza we WSZYSTKICH ramkach (napisy bywają w ramce odtwarzacza); odpowiada główna ramka
+            if (msg.action === 'KREATOR_PICK') { startPick(isTop); if (isTop) sendResponse({ ok: true, host: host() }); return; }
+            if (msg.action === 'KREATOR_STOP') { stopPick(); return; }   // wybrano / anulowano w innej ramce (tło rozsyła)
             if (msg.action === 'KREATOR_TEST') {
                 var nodes = [];
                 try { nodes = Array.prototype.slice.call(document.querySelectorAll(msg.selector)); } catch (e) { if (isTop) sendResponse({ ok: false, error: 'Błędny selektor', host: host() }); return; }
                 var samples = nodes.slice(0, 3).map(function (n) { return String(n.innerText || n.textContent || '').trim().slice(0, 100); });
-                if (nodes.length) flash(nodes[0]);
+                nodes.slice(0, 10).forEach(flash);   // [FIX 2026-11-02] podświetl wszystkie trafienia, nie tylko pierwsze
                 if (nodes.length || isTop) {
                     var reply = function () { sendResponse({ ok: true, count: nodes.length, samples: samples, host: host() }); };
                     if (nodes.length) reply(); else setTimeout(reply, 400);
@@ -178,7 +423,7 @@
                 for (var i = 0; i < all.length && found.length < 6; i++) {
                     var n = all[i];
                     var own = Array.prototype.filter.call(n.childNodes, function (c) { return c.nodeType === 3; }).map(function (c) { return c.nodeValue; }).join(' ').toLowerCase();
-                    if (own.indexOf(needle) !== -1) found.push({ selector: cssPath(n), tag: n.tagName.toLowerCase(), id: n.id || '', cls: typeof n.className === 'string' ? n.className : '', text: own.trim().slice(0, 80) });
+                    if (own.indexOf(needle) !== -1) found.push({ selector: buildSelector(n), tag: n.tagName.toLowerCase(), id: n.id || '', cls: typeof n.className === 'string' ? n.className : '', text: own.trim().slice(0, 80) });   // [FIX 2026-11-02] selektor zawężony jak przy wskazywaniu
                     if (found.length === 1 && own.indexOf(needle) !== -1) flash(n);
                 }
                 if (found.length || isTop) {
@@ -189,4 +434,7 @@
             }
         });
     } catch (e) {}
+
+    // dla testów (tests/kreator_pick.cjs): te same funkcje, których używa wskazywanie
+    window.__LivedubOpts.kreator = { buildSelector: buildSelector, hitAt: hitAt, chainFor: chainFor, autoLevel: autoLevel };
 })();

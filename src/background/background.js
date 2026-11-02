@@ -1008,6 +1008,35 @@ async function lowcaEnsureLektor(tabId, tabUrl) {
         await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: LOWCA_LEKTOR_TOP }).catch(() => {});
     }
 }
+// [FIX 2026-11-02] 🧪 Kreator napisów. Wskazywanie myszką rusza we wszystkich ramkach karty — wybór albo Esc w jednej
+// ramce kończy je w pozostałych (KREATOR_STOP). Zapisany selektor (KREATOR_SITE) na stronie bez wbudowanego lektora =
+// lektor startuje tam sam, jak na stronie Łowcy (od razu w otwartej karcie), a przy „Tylko domeny z listy” strona
+// z paska adresu trafia na białą listę.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (!msg) return;
+    if ((msg.action === 'KREATOR_PICKED' || msg.action === 'KREATOR_PICK_CANCEL') && sender && sender.tab && sender.tab.id != null) {
+        chrome.tabs.sendMessage(sender.tab.id, { action: 'KREATOR_STOP' }, () => { void chrome.runtime.lastError; });
+        return;
+    }
+    if (msg.action !== 'KREATOR_SITE') return;
+    (async () => {
+        const h = DL.norm(msg.host);
+        if (!h) return { ok: false };
+        const tab = msg.tabId != null ? await chrome.tabs.get(msg.tabId).catch(() => null) : null;
+        const top = tab && tab.url ? lowcaHostOf(tab.url) : '';
+        // selektor z tej karty (sama strona albo ramka odtwarzacza w niej) — liczy się strona z paska adresu
+        const fromTab = !!top && (DL.matches(h, [top]) || DL.matches(top, [h]) || DL.norm(msg.top) === top);
+        const pageUrl = fromTab ? tab.url : 'https://' + h + '/';
+        const listed = await domainListsAllow(pageUrl).catch(() => '');
+        let remembered = '';
+        if (!LOWCA_BUILTIN.test(h)) {
+            remembered = await lowcaRemember(pageUrl, fromTab && h !== top ? 'https://' + h + '/' : '').catch(() => '');
+            if (fromTab) await lowcaEnsureLektor(tab.id, tab.url).catch(() => {});
+        }
+        return { ok: true, listed, remembered };
+    })().then(sendResponse, (e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
+    return true;
+});
 // ===== Bazy napisów (popup „🌐 Szukaj w bazach napisów”, subs_db.js) =====
 // Wynik trafia do fileSubs (jak plik z dysku). Napisy nie po polsku tłumaczymy tu, w tle, od miejsca
 // filmu — fileSubs odświeżane co kilka paczek, więc lektor czyta już przetłumaczone kwestie.
