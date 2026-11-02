@@ -146,9 +146,21 @@ async function extTrGoogleRpc(src, tgt, texts) {
     const full = extTrPickGoogleTranslation(outer, inner, q, minLen);
     if (!full || !full.trim()) throw new Error('Google RPC: puste tlumaczenie');
     const parts = String(full).split('///').map((s) => s.trim());
-    const out = texts.map((_, i) => (parts[i] !== undefined ? parts[i] : ''));
+    const out = extTrSepParts(parts, texts, 'Google RPC');   // [FIX 2026-11-02] bez przesunięć kwestii
     if (!out.some(Boolean)) throw new Error('Google RPC: puste tlumaczenie po podziale');
     return out;
+}
+// [FIX 2026-11-02] Odpowiedź sklejona separatorem ' /// ' → tablica 1:1 z kwestiami. Gdy tłumacz zgubił / przestawił /
+// dodał separator, liczba części się nie zgadza — wcześniej tłumaczenia przesuwały się na SĄSIEDNIE kwestie (lektor czytał
+// cudze zdanie), a ostatnie dostawały pusty tekst. Teraz błąd z sepMismatch → extTrGoogle dzieli paczkę na pół i ponawia.
+function extTrSepParts(parts, texts, who) {
+    if (texts.length === 1) return [parts.filter(Boolean).join(' ')];
+    if (parts.length !== texts.length) {
+        const e = new Error(who + ': separator zgubiony (' + parts.length + ' != ' + texts.length + ' czesci)');
+        e.sepMismatch = true;
+        throw e;
+    }
+    return parts;
 }
 // [AGENT-EXP] === koniec bloku Google RPC ===
 
@@ -263,12 +275,25 @@ async function extTrAi(src, tgt, texts) {
 // [AGENT-EXP] === koniec bloku AI ===
 
 async function extTrGoogle(src, tgt, texts) {
+    // [FIX 2026-11-02] separator zgubiony → paczka na pół i jeszcze raz (pojedyncza kwestia nie może się przesunąć)
+    try { return await extTrGoogleOnce(src, tgt, texts); }
+    catch (e) {
+        if (!e || !e.sepMismatch || texts.length < 2) throw e;
+        console.warn('[LiveDub SW] Google:', e.message, '— dzielę paczkę');
+        const mid = Math.ceil(texts.length / 2);
+        const a = await extTrGoogle(src, tgt, texts.slice(0, mid));
+        const b = await extTrGoogle(src, tgt, texts.slice(mid));
+        return a.concat(b);
+    }
+}
+async function extTrGoogleOnce(src, tgt, texts) {
     // [AGENT-EXP] Checkbox „Google RPC": najpierw metoda RPC. Jej adres
     // (translate.googleapis.com/_/TranslateWebserverUi/data/batchexecute) odpowiada dziś 404 — po porażce
     // przez 10 min idzie od razu zwykłe gtx, zamiast odpadać całym silnikiem Google.
     if (Date.now() >= extTrRpcDeadUntil && await extTrGoogleRpcOn()) {
         try { return await extTrGoogleRpc(src, tgt, texts); }
         catch (e) {
+            if (e && e.sepMismatch) throw e;   // [FIX 2026-11-02] RPC działa — tylko paczka do podziału
             extTrRpcDeadUntil = Date.now() + 10 * 60000;
             console.warn('[LiveDub SW] Google RPC nie działa — zwykłe Google (gtx):', String((e && e.message) || e));
         }
@@ -287,7 +312,7 @@ async function extTrGoogleGtx(src, tgt, texts) {
     let flat = '';
     if (Array.isArray(data[0])) for (const part of data[0]) { if (Array.isArray(part) && part[0]) flat += part[0]; }
     const parts = String(flat).split('///').map((s) => s.trim());
-    const out = texts.map((_, i) => (parts[i] !== undefined ? parts[i] : ''));
+    const out = extTrSepParts(parts, texts, 'Google');   // [FIX 2026-11-02] bez przesunięć kwestii
     if (!out.some(Boolean)) throw new Error('Google: puste tlumaczenie');
     return out;
 }
@@ -326,12 +351,21 @@ async function extTrBing(src, tgt, texts) {
     const data = JSON.parse(raw);
     const html = String((data[0] && data[0].translations && data[0].translations[0] && data[0].translations[0].text) || '');
     if (!html) throw new Error('Bing: pusta odpowiedz');
-    const parts = [];
+    const byId = new Map();
     const re = /<b(\d+)>([\s\S]*?)<\/b\1>/g;
     let m;
-    while ((m = re.exec(html)) !== null) parts.push({ id: +m[1], text: extTrBingUnescape(m[2].replace(/\s*<br\s*\/?>\s*/gi, '\n')).trim() });   // [AGENT-EXP] <br> → nowa linia
-    parts.sort((a, b) => a.id - b.id);
-    const out = texts.map((_, i) => (parts[i] ? parts[i].text : ''));
+    while ((m = re.exec(html)) !== null) byId.set(+m[1], extTrBingUnescape(m[2].replace(/\s*<br\s*\/?>\s*/gi, '\n')).trim());   // [AGENT-EXP] <br> → nowa linia
+    // [FIX 2026-11-02] po NUMERZE znacznika (b10, b11…), nie po kolejności: gdy Bing zgubił jeden znacznik, wszystkie dalsze
+    // tłumaczenia przesuwały się o jedną kwestię. Zgubione kwestie tłumaczymy jeszcze raz osobną (mniejszą) paczką.
+    const out = texts.map((_, i) => (byId.has(10 + i) ? byId.get(10 + i) : ''));
+    const miss = [];
+    texts.forEach((t, i) => { if (!byId.has(10 + i) && String(t || '').trim()) miss.push(i); });
+    if (miss.length && miss.length < texts.length) {
+        try {
+            const again = await extTrBing(src, tgt, miss.map((i) => texts[i]));
+            miss.forEach((i, j) => { out[i] = again[j] || ''; });
+        } catch (e) { /* zostają puste — lepiej niż cudze zdanie */ }
+    }
     if (!out.some(Boolean)) throw new Error('Bing: puste tlumaczenie');
     return out;
 }
@@ -353,6 +387,12 @@ async function extTrDeepl(src, tgt, texts) {
     const data = JSON.parse(raw);
     const tr = data && data.translations;
     if (!Array.isArray(tr) || !tr.length || !tr[0].text) throw new Error('DeepL: pusta odpowiedz');
+    // [FIX 2026-11-02] DeepL oddaje tłumaczenie dla KAŻDEGO tekstu z tablicy — wtedy 1:1. Wcześniej brane było tylko
+    // pierwsze i rozkładane na wszystkie kwestie według liczby słów (zdania cięte w połowie, reszta tłumaczeń ginęła).
+    if (tr.length === texts.length && tr.length > 1) {
+        const all = tr.map((x) => String((x && x.text) || '').trim());
+        if (all.some(Boolean)) return all;
+    }
     const flat = String(tr[0].text);
     if (texts.length === 1) return [flat.trim()];
     const words = flat.split(/\s+/).filter(Boolean);

@@ -35,7 +35,7 @@ const SCHEMA = [
   ]},
   { sec: '📺 YouTube i filtry', sub: 'Wykrywanie polskiego dubbingu i filtrowanie wstawek.', items: [
     { k: 'detectYTPolish', t: 'bool', def: true, label: 'Wyłącz przy polskim dubbingu', hint: 'Gdy wybrana jest polska ścieżka audio' },
-    { k: 'detectYTPolishChannel', t: 'bool', def: true, label: 'Wyłącz na polskich filmach/kanałach', hint: 'Język audio PL lub ręczne polskie napisy' },
+    { k: 'detectYTPolishChannel', t: 'bool', def: true, label: 'Wyłącz na polskich filmach/kanałach', hint: 'Język audio PL lub automatyczne polskie napisy (mowa po polsku)' },
     { k: 'soundCuesFilter', t: 'bool', def: true, label: 'Pomijaj wstawki dźwiękowe', hint: '(wiatr), [muzyka], ♪' }
   ]},
   { sec: '🌐 Tłumaczenie sieciowe (eksperyment)', sub: 'Osobny tryb: porcje o różnej wielkości, rzadkie zapytania, rotacja silników. Lokalne tłumaczenie Chrome działa bez zmian.', items: [

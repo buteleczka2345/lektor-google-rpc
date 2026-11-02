@@ -528,7 +528,7 @@ self.ML_I18N_EN = {
     "Wyłącz przy polskim dubbingu": "Turn off with Polish dubbing",
     "Gdy wybrana jest polska ścieżka audio": "When a Polish audio track is selected",
     "Wyłącz na polskich filmach/kanałach": "Turn off on Polish videos/channels",
-    "Język audio PL lub ręczne polskie napisy": "Polish audio language or manual Polish subtitles",
+    "Język audio PL lub automatyczne polskie napisy (mowa po polsku)": "Polish audio language or automatic Polish captions (Polish speech)",
     "Pomijaj wstawki dźwiękowe": "Skip sound cues",
     "(wiatr), [muzyka], ♪": "(wind), [music], ♪",
 

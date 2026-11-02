@@ -173,8 +173,9 @@ if (!('__lektorBufPauza' in window)) {
         't[lł]umaczen\\w*\\s+za\\s+pomoc'
     ].join('|') + ')', 'i');
 
-    // Mocne wulgaryzmy PL+EN — wycinane z mowy lektora.
-    var LIVEDUB_PROFANITY_RE = /(\b\p{L}*(?:kurw|chuj|huj|jeb|pizd|pierdol|pierdal|cipk|cip[aeęyiu]|dziwk|szmat|g[óo]wn|fuck|motherfuck|cunt|cocksuck|wank|whore|slut|pussy|shit)[^\s]*)/giu;
+    // [FIX 2026-11-02] Wulgaryzmy wycina teraz WYŁĄCZNIE cenzor lektora (src/offscreen/censor.js) zgodnie z ustawieniami
+    // (wł./wył., usuń / beep / gwiazdki, własne słowa). Ten stały wzorzec wycinał je zawsze — wbrew wyłączonemu cenzorowi,
+    // tryby beep / gwiazdki nie miały czego zamienić, a rdzenie łapały też niewinne słowa (np. „szmatka”).
 
     var IMMT_POLL_MS = 250, DEBOUNCE_MS = 30; // poll to tylko zapas — zmiany łapie MutationObserver
 
@@ -363,7 +364,7 @@ if (!('__lektorBufPauza' in window)) {
         if (IS_EMBED) return;
         if (!duckReady || !enabled) return;   // [AGENT-EXP] 2026-10-20: nie ściszaj filmu, zanim wczytamy ustawienia (start z enabled=true) ani przy wyłączonym lektorze
         var v = getVideo(); if (!v) return;
-        if (isPolishVideo()) { if (savedVolume !== null || duckMemGet() !== null) restoreVolume(); return; }   // [AGENT-EXP] 2026-10-27: film po polsku → lektor milczy, więc nie ściszamy (i oddajemy głośność)
+        if (!fileSubs.length && isPolishVideo()) { if (savedVolume !== null || duckMemGet() !== null) restoreVolume(); return; }   // [AGENT-EXP] 2026-10-27: film po polsku → lektor milczy, więc nie ściszamy (i oddajemy głośność); [FIX 2026-11-02] wgrany plik napisów czyta zawsze — wtedy ściszamy
         var target = duckLevel / 100;
         duckOrig(v);   // [AGENT-EXP] 2026-10-20
         if (savedVolume === null && v.volume > target) savedVolume = v.volume;
@@ -453,7 +454,6 @@ if (!('__lektorBufPauza' in window)) {
         text = text.replace(/\s+/g, ' ').trim();
         if (opt('soundCuesFilter', true)) text = text.replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' ').replace(/（[^）]*）/g, ' ').replace(/【[^】]*】/g, ' ').replace(/\s{2,}/g, ' ').trim();
         if (text && LIVEDUB_HARD_BLOCK_RE.test(text)) return '';
-        text = text.replace(LIVEDUB_PROFANITY_RE, ' ').replace(/\s{2,}/g, ' ').trim();
         for (var i = 0; i < JUNK_PHRASES.length; i++) {
             var esc = JUNK_PHRASES[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             text = text.replace(new RegExp(esc, 'gi'), ' ');
@@ -1738,6 +1738,7 @@ if (!('__lektorBufPauza' in window)) {
     }
 
     var lastTtTime = -1, ttResync = false;
+    var ttPolishStop = false;   // [FIX 2026-11-02] film po polsku: lektor uciszony (jednorazowo)
     function startTtLoop() {
         if (ttTimer) return;
         ttTimer = setInterval(function () {
@@ -1749,6 +1750,15 @@ if (!('__lektorBufPauza' in window)) {
             if (!v) return;
             var ttPauza = v.paused || __embedPausedByUser;   // [AGENT-EXP] pauza: tylko buforowanie, bez czytania
             if (ttPauza && window.__lektorBufPauza === false) return;
+            // [FIX 2026-11-02] film po polsku (ścieżka audio / mowa) — lektor milczy także przy całych napisach. Wcześniej
+            // sprawdzał to tylko skan „na żywo”, więc przy pełnych napisach (domyślnie WŁ.) lektor czytał polskie napisy
+            // na polskiej mowie, a od 2026-10-28 dodatkowo bez ściszania filmu.
+            if (!IS_EMBED && isPolishVideo()) {
+                if (!ttPolishStop) { ttPolishStop = true; stopSpeechSilently(); }   // raz: ucisz to, co już zaczęło grać
+                if (savedVolume !== null || duckMemGet() !== null) restoreVolume();
+                return;
+            }
+            ttPolishStop = false;
             var nowMs = v.currentTime * 1000;
             // Przewinięcie / wznowienie po pauzie / skok >1.5 s → czytamy od nowa od bieżącej pozycji.
             if (ttResync || (lastTtTime >= 0 && Math.abs(nowMs - lastTtTime) > 1500)) { ttPlayed.clear(); ttPreloaded.clear(); ttResync = false; ttLastList = null; }

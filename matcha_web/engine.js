@@ -98,11 +98,24 @@ function pump() {
     }
 }
 
-function enqueue(msg, pilne) {
+function enqueue(msg, pilne, ticket) {
     return new Promise((resolve, reject) => {
-        (pilne ? queue.urgent : queue.normal).push({ msg, resolve, reject });
+        (pilne ? queue.urgent : queue.normal).push({ msg, resolve, reject, ticket: ticket || null });
         pump();
     });
+}
+
+// [FIX 2026-11-02] Awans: kwestia nagrywana do przodu właśnie ma być czytana — jej czekające części (ticket z opts.ticket)
+// przechodzą z kolejki zwykłej do pilnej (w tej samej kolejności). Części już liczone kończą się normalnie.
+export function promote(ticket) {
+    if (!ticket) return 0;
+    let n = 0;
+    for (let i = 0; i < queue.normal.length;) {
+        if (queue.normal[i].ticket === ticket) { queue.urgent.push(queue.normal.splice(i, 1)[0]); n++; }
+        else i++;
+    }
+    if (n) pump();
+    return n;
 }
 
 // opts: { voice: 'male_voxcpm_2' | 'female_voxcpm_2', steps: 2|4, temperature, lengthScale, style, pilne }
@@ -113,8 +126,8 @@ export function synthesizeWav(text, opts = {}) {
     const t0 = performance.now();
     const parts = poolSize() > 1 ? splitSentences(String(text || '')) : [String(text || '')];   // na karcie 1 worker — bez dzielenia
     const jobs = parts.length > 1
-        ? parts.map((p) => enqueue({ ...base, text: p, split: false, bezNormy: true }, opts.pilne))
-        : [enqueue({ ...base, text: String(text || '') }, opts.pilne)];
+        ? parts.map((p) => enqueue({ ...base, text: p, split: false, bezNormy: true }, opts.pilne, opts.ticket))
+        : [enqueue({ ...base, text: String(text || '') }, opts.pilne, opts.ticket)];
     return Promise.all(jobs).then((res) => {
         const sr = res[0].sampleRate;
         let out = res[0].samples;

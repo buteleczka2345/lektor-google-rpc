@@ -45,11 +45,11 @@ function matchaWebEngine() {
     return mwModP;
 }
 // Ustawienia jak głosy w serwer_matcha.py: zwykły temp 0.8 / długość 0.8, ':elegancki' 0.6 / 0.92 (speed 1 — tempo ustawia odtwarzacz).
-function matchaWebSynthesize(text, pilne) {
+function matchaWebSynthesize(text, pilne, ticket) {   // [FIX 2026-11-02] ticket: znacznik zadania (awans przez promote)
     const parts = matchaVoice.split(':');
     const voice = parts[1] === 'female_voxcpm_2' ? 'female_voxcpm_2' : 'male_voxcpm_2';
     const el = parts[2] === 'elegancki';
-    return matchaWebEngine().then((m) => m.synthesizeWav(text, { voice, steps: 4, temperature: el ? 0.6 : 0.8, lengthScale: el ? 0.92 : 0.8, pilne: !!pilne, tryb: matchaWebTryb }));
+    return matchaWebEngine().then((m) => m.synthesizeWav(text, { voice, steps: 4, temperature: el ? 0.6 : 0.8, lengthScale: el ? 0.92 : 0.8, pilne: !!pilne, tryb: matchaWebTryb, ticket: ticket || null }));
 }
 // [VOX] 2026-10-20: Supertonic — silnik przeniesiony z VoxNemesis (supertonic/engine.js). Liczy lokalnie,
 // na CPU (pula workerów) albo na karcie graficznej (WebGPU). Moduł ładowany dopiero przy pierwszym użyciu,
@@ -152,6 +152,20 @@ function cancelRemotePreloads() {
     if (mwMod) mwMod.cancelQueued('anulowano', 'normal');   // [AGENT-EXP] 2026-10-24: Matcha w przeglądarce — nagrywanie do przodu
 }
 const player = document.getElementById('tts-player');
+// [FIX 2026-11-02] zwolnienie źródła BEZ błędu: player.src = '' kazało elementowi wczytać adres dokumentu jako dźwięk
+// → zdarzenie 'error' → fałszywy wpis „audio-error” w czarnej skrzynce przy każdej pauzie / przewinięciu.
+function playerReset() {
+    if (!player) return;
+    try { player.pause(); } catch (e) {}
+    try { player.removeAttribute('src'); player.load(); } catch (e) {}
+}
+// [FIX 2026-11-02] Pokolenie „na teraz”: rośnie przy pauzie / przewinięciu (TTS_PAUSE, TTS_CLEAR_BUFFER). Kwestia przyjęta
+// PRZED takim zdarzeniem, której synteza skończy się PO nim, nie wchodzi już do kolejki (wcześniej Matcha w przeglądarce
+// i Sherpa dograły po pauzie albo po przewinięciu jeszcze jedno, nieaktualne zdanie). Nagranie zostaje w pamięci na później.
+let liveGen = 0;
+// [FIX 2026-11-02] Karta, z której przyszło ostatnie TTS_PLAY — pauza / czyszczenie z INNEJ karty (np. film w tle,
+// który się skończył albo przewinął) nie ucina już lektora czytającego w bieżącej karcie.
+let lastPlayTab = '';
 if (player) player.addEventListener('error', () => {
     // Błąd elementu audio (np. uszkodzony/odwołany blob) — trafia do czarnej skrzynki,
     // którą widać w popupie przy „Ostatnie kwestie”.
@@ -477,8 +491,8 @@ function applySettings(s) {
 // Tekst kwestii czyszczony jest PRZED synteza, niezaleznie od jezyka glosu.
 // [AGENT-EXP] Matcha zwraca kompletny plik WAV binarnie; każde żądanie ma własne
 // połączenie, żeby odpowiedzi równoległych kwestii nie pomyliły się ze sobą.
-function matchaSynthesize(text, sockets = matchaSockets, pilne = false) {   // [AGENT-EXP] sockets: preload osobno; pilne: czytana TERAZ
-    if (/^web:/.test(matchaVoice)) return matchaWebSynthesize(text, pilne);   // [AGENT-EXP] 2026-10-24: w przeglądarce, bez WebSocketu
+function matchaSynthesize(text, sockets = matchaSockets, pilne = false, ticket = null) {   // [AGENT-EXP] sockets: preload osobno; pilne: czytana TERAZ
+    if (/^web:/.test(matchaVoice)) return matchaWebSynthesize(text, pilne, ticket);   // [AGENT-EXP] 2026-10-24: w przeglądarce, bez WebSocketu
     return new Promise((resolve, reject) => {
         let socket;
         let settled = false;
@@ -697,14 +711,12 @@ function cancelAudio8Requests() {
 }
 
 function clearTtsPlayback() {
+    // (liveGen celowo BEZ zmiany: zmiana silnika / głosu przychodzi też razem z TTS_PLAY — ta kwestia musi zagrać)
     if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
     playQueue.length = 0;
     ordReset();
     finishCurrent();
-    if (player) {
-        player.pause();
-        player.src = '';
-    }
+    playerReset();   // [FIX 2026-11-02] bez fałszywego „audio-error”
     for (const url of audioCache.values()) URL.revokeObjectURL(url);
     audioCache.clear();
     playingUrls.clear();
@@ -767,7 +779,9 @@ function ttsPersistKey(msg) {
         : eng === 'omnivoice' ? (msg.omnivoiceVoice !== undefined ? msg.omnivoiceVoice : omnivoiceVoice)
         : eng === 'kokoro' ? (msg.kokoroVoice || kokoroVoice)   // [AGENT-EXP] 2026-10-27
         : eng === 'matcha' ? ((msg.matchaVoice || matchaVoice) + (/^web:/.test(msg.matchaVoice || matchaVoice) && (msg.matchaWebTryb || matchaWebTryb) === 'cpu_fp32' ? '@fp32' : ''))   // [AGENT-EXP] 2026-10-17: osobne nagrania dla każdego głosu; 2026-10-24: i dla wariantu fp32
-        : eng === 'sherpa' ? (msg.voiceId || voiceId) : '';
+        // [FIX 2026-11-02] Sherpa: klucz z ID własnego głosu (wcześniej zawsze ten sam voiceId — po zmianie głosu dysk
+        // oddawał kwestie starym głosem) i znacznikiem tempa 1× (stare nagrania mogły mieć tempo z syntezy).
+        : eng === 'sherpa' ? ((customVoice && customVoice.enabled ? 'cv:' + String(customVoice.id || customVoice.name || 'custom') : (msg.voiceId || voiceId)) + '@1x') : '';
     if (eng === 'browser') return '';   // [AGENT-EXP] 🗣 głos przeglądarki nie ma nagrań (pamięć / dysk)
     const text = censoredText(msg.text || '');
     return text && text.length >= 2 ? eng + '|' + voice + '|' + text : '';
@@ -1261,7 +1275,10 @@ function predictOnPool(text) {
             };
             item.pending = pending;
             try {
-                item.worker.postMessage({ type: 'generate', text: String(text || ''), sid: 0, speed: lectorSpeed });
+                // [FIX 2026-11-02] speed: 1 — tempo ustawia odtwarzacz (playNext: playbackRate = prędkość × film), jak
+                // w pozostałych silnikach. Wcześniej Sherpa dostawała też lectorSpeed, więc prędkość liczyła się DWA razy
+                // (1,5× → 2,25×), a nagranie w pamięci/na dysku miało tempo z chwili syntezy.
+                item.worker.postMessage({ type: 'generate', text: String(text || ''), sid: 0, speed: 1 });
             } catch (e) {
                 clearTimeout(pending.timer);
                 item.busy = false;
@@ -1391,10 +1408,18 @@ function errMsg(err) {
 
 // Czarna skrzynka: ostatnie zdarzenia silnika (diagnostyka zawieszeń w popupie)
 const offLog = [];
+// [FIX 2026-11-02] dziennik do storage najwyżej raz na sekundę (paczką). Wcześniej KAŻDY wpis = zapis
+// chrome.storage.local → zdarzenie onChanged we wszystkich kartach z lektorem (przy nagrywaniu do przodu — dziesiątki na sekundę).
+let offLogTimer = 0, offLogSentAt = 0;
+function offLogSend() {
+    offLogTimer = 0;
+    offLogSentAt = Date.now();
+    try { chrome.runtime.sendMessage({ action: 'OFFSCREEN_DIAG', kind: 'log', entries: offLog.slice() }).catch(() => {}); } catch (e) {}
+}
 function offLogPush(tag, msg) {
     offLog.push({ tag, msg: String(msg || '').slice(0, 300), ts: Date.now() });
     if (offLog.length > 12) offLog.shift();
-    try { chrome.runtime.sendMessage({ action: 'OFFSCREEN_DIAG', kind: 'log', entries: offLog.slice() }).catch(() => {}); } catch (e) {}
+    if (!offLogTimer) offLogTimer = setTimeout(offLogSend, Math.max(0, 1000 - (Date.now() - offLogSentAt)));
 }
 
 // Live-ustawienia lektora — background przesyła patch po każdej zmianie w popupie
@@ -1423,6 +1448,12 @@ const AHEAD_ENGINE_KEYS = ['ttsEngine', 'voiceId', 'tts2Voice', 'audio8Voice', '
     'matchaWebTryb', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'];
 const aheadGate = { limitMs: 3 * 60000, tabs: new Map(), pending: new Map(), running: new Set(), max: 4, fields: {} };
 let aheadJob = null;   // obietnica syntezy ustawiana przez gałąź TTS_PRELOAD (koniec = wolne miejsce w bramce)
+// [FIX 2026-11-02] trwające nagrywanie do przodu: id kwestii → { promise, ticket }. TTS_PLAY tej samej kwestii (silniki
+// w przeglądarce: Sherpa, Matcha 🌐) czeka na nie zamiast liczyć ją drugi raz — przy 2 workerach Matchy podwójna synteza
+// zabierała połowę mocy dokładnie wtedy, gdy lektor nie nadążał (start filmu, przewinięcie).
+const aheadJobs = new Map();
+let aheadTicket = null;   // znacznik zadania Matchy 🌐 ustawiany razem z aheadJob (awans do kolejki pilnej)
+const AHEAD_WAIT_MAX_MS = 20000;
 function aheadLimitMs(min) {
     const m = Number(min);
     return Number.isFinite(m) && m > 0 ? Math.max(AHEAD_MIN_MS, m * 60000) : AHEAD_MIN_MS;
@@ -1472,18 +1503,28 @@ function aheadPump() {
         if (audioCache.has(msg.id)) continue;   // w międzyczasie policzone przez TTS_PLAY
         aheadGate.running.add(msg.id);
         aheadJob = null;
+        aheadTicket = null;
         try {
             ttsMainHandler(Object.assign({}, msg, aheadGate.fields, { __disk: true, __gated: true }), best.sender, () => {});
         } catch (e) { offLogPush('ahead-fail', errMsg(e)); }
-        const job = aheadJob;
+        const job = aheadJob, ticket = aheadTicket;
         aheadJob = null;
-        Promise.resolve(job).catch(() => {}).then(() => { aheadGate.running.delete(msg.id); aheadPump(); });
+        aheadTicket = null;
+        const entry = job ? { promise: job, ticket } : null;   // [FIX 2026-11-02] do podglądu przez TTS_PLAY
+        if (entry) aheadJobs.set(msg.id, entry);
+        Promise.resolve(job).catch(() => {}).then(() => {
+            aheadGate.running.delete(msg.id);
+            if (entry && aheadJobs.get(msg.id) === entry) aheadJobs.delete(msg.id);
+            aheadPump();
+        });
     }
 }
 // ===== koniec bramki zapasu =====
 
 function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany — ponowne wejście po sprawdzeniu dysku
     if (!msg || msg.target !== 'offscreen') return;
+    // [FIX 2026-11-02] pokolenie z chwili PRZYJŚCIA kwestii (sprawdzenie dysku jest asynchroniczne — pauza w tym czasie też się liczy)
+    if (msg.action === 'TTS_PLAY' && msg.__live === undefined) msg.__live = liveGen;
 
     // PING/GET_STATUS obsługuje wczesny listener na górze pliku (odpowiada zawsze).
 
@@ -1621,7 +1662,9 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 return true;
             }
             sendResponse({ status: 'preloading_matcha' });
-            aheadJob = matchaSynthesize(text, matchaPreloadSockets)   // [AGENT-EXP] preload: pauza go nie przerywa; aheadJob: bramka 2026-10-25
+            const ticket = /^web:/.test(matchaVoice) ? {} : null;   // [FIX 2026-11-02] TTS_PLAY może awansować to zadanie
+            aheadTicket = ticket;
+            aheadJob = matchaSynthesize(text, matchaPreloadSockets, false, ticket)   // [AGENT-EXP] preload: pauza go nie przerywa; aheadJob: bramka 2026-10-25
                 .then((blob) => {
                     cacheRemoteTtsBlob(id, blob);
                     recCapture(msg, blob).catch(() => {});
@@ -1775,6 +1818,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
     }
 
     if (msg.action === 'TTS_PLAY') {
+        { const t = aheadTab(msg.id); if (t !== 'x') lastPlayTab = t; }   // [FIX 2026-11-02] karta, która teraz czyta
         if (readToEnd) msg.noSkip = true;   // [AGENT-EXP] 2026-10-22: „Czytaj zawsze do końca” — bez pomijania spóźnionych / nadmiarowych
         if (msg.ttsEngine) applySettings({ ttsEngine: msg.ttsEngine });
         if (msg.tts2Voice !== undefined) applySettings({ tts2Voice: msg.tts2Voice });
@@ -1811,7 +1855,10 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (ttsEngine === 'sherpa') resetVoice(msg.voiceId);
         // noSkip: numer nadany przy przyjściu — gra w tej kolejności (patrz ordFlush)
         const nr = msg.noSkip ? ++ord.last : 0;
-        const put = nr ? (...a) => ordPart(nr, a) : enqueuePlay;
+        const putNow = nr ? (...a) => ordPart(nr, a) : enqueuePlay;
+        // [FIX 2026-11-02] synteza skończona po pauzie / przewinięciu — nie gramy (patrz liveGen)
+        const myLive = msg.__live !== undefined ? msg.__live : liveGen;
+        const put = (...a) => { if (myLive === liveGen) putNow(...a); else offLogPush('play-stale', String(msg.id || '').slice(0, 40)); };
         const end = () => { if (nr) ordEnd(nr); };
         const cached = audioCache.get(msg.id);
         if (cached) {
@@ -1829,124 +1876,152 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
             return true;
         }
         msg.text = ctext;
-        // [VOX] Supertonic: gotowy WAV do wspólnej kolejki (tempo, nagrywanie), jak Pocket.
-        if (ttsEngine === 'supertonic') {
-            playSupertonicStream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'supertonic' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] Supertonic playback:', err);
-                    offLogPush('supertonic-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'Supertonic: ' + errMsg(err) });
-                });
+        const synthNow = () => {
+            // [VOX] Supertonic: gotowy WAV do wspólnej kolejki (tempo, nagrywanie), jak Pocket.
+            if (ttsEngine === 'supertonic') {
+                playSupertonicStream(msg, put)
+                    .then(() => {
+                        end();
+                        sendResponse({ status: 'playing', engine: 'supertonic' });
+                    })
+                    .catch((err) => {
+                        end();
+                        console.error('[Offscreen] Supertonic playback:', err);
+                        offLogPush('supertonic-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: 'Supertonic: ' + errMsg(err) });
+                    });
+                return true;
+            }
+            if (ttsEngine === 'matcha') {
+                playMatchaStream(msg, put)
+                    .then(() => {
+                        end();
+                        sendResponse({ status: 'playing', engine: 'matcha' });
+                    })
+                    .catch((err) => {
+                        end();
+                        console.error('[Offscreen] Matcha playback:', err);
+                        offLogPush('matcha-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: 'Matcha-TTS: ' + errMsg(err) });
+                    });
+                return true;
+            }
+            // [AGENT-EXP] Odtwarzaj WAV z XTTS / F5 przez tę samą kolejkę, tempo i nagrywanie co Sherpa/Piper.
+            if (ttsEngine === 'xtts' || ttsEngine === 'f5') {
+                const isF5 = ttsEngine === 'f5';
+                playXttsStream(msg, put, isF5)
+                    .then(() => {
+                        end();
+                        sendResponse({ status: 'playing', engine: ttsEngine });
+                    })
+                    .catch((err) => {
+                        end();
+                        console.error('[Offscreen] ' + (isF5 ? 'F5' : 'XTTS') + ' playback:', err);
+                        offLogPush((isF5 ? 'f5' : 'xtts') + '-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: (isF5 ? 'F5-TTS (Marek): ' : 'XTTS (TTS2): ') + errMsg(err) });
+                    });
+                return true;
+            }
+            // [AGENT-EXP] Pocket-TTS-PL: jak XTTS — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
+            if (ttsEngine === 'pocket') {
+                playPocketStream(msg, put)
+                    .then(() => {
+                        end();
+                        sendResponse({ status: 'playing', engine: 'pocket' });
+                    })
+                    .catch((err) => {
+                        end();
+                        console.error('[Offscreen] Pocket playback:', err);
+                        offLogPush('pocket-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: 'Pocket-TTS-PL: ' + errMsg(err) });
+                    });
+                return true;
+            }
+            // [AGENT-EXP] 2026-10-27 Kokoro: jak Pocket — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
+            if (ttsEngine === 'kokoro') {
+                playKokoroStream(msg, put)
+                    .then(() => {
+                        end();
+                        sendResponse({ status: 'playing', engine: 'kokoro' });
+                    })
+                    .catch((err) => {
+                        end();
+                        console.error('[Offscreen] Kokoro playback:', err);
+                        offLogPush('kokoro-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: 'Kokoro: ' + errMsg(err) });
+                    });
+                return true;
+            }
+            // [AGENT-EXP] OmniVoice: jak Pocket — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
+            if (ttsEngine === 'omnivoice') {
+                playOmnivoiceStream(msg, put)
+                    .then(() => {
+                        end();
+                        sendResponse({ status: 'playing', engine: 'omnivoice' });
+                    })
+                    .catch((err) => {
+                        end();
+                        console.error('[Offscreen] OmniVoice playback:', err);
+                        offLogPush('omnivoice-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: 'OmniVoice: ' + errMsg(err) });
+                    });
+                return true;
+            }
+            // [AGENT-EXP] Audio8 ma RTF 3–5 na CPU; czekamy do 15 min i gramy przez wspólną kolejkę.
+            if (ttsEngine === 'audio8') {
+                playAudio8Stream(msg, put)
+                    .then(() => {
+                        end();
+                        sendResponse({ status: 'playing', engine: 'audio8' });
+                    })
+                    .catch((err) => {
+                        end();
+                        console.error('[Offscreen] Audio8 playback:', err);
+                        offLogPush('audio8-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: 'Audio8 ONNX: ' + errMsg(err) });
+                    });
+                return true;
+            }
+            sendResponse({ status: 'predicting_and_playing' });
+            // gdyby synteza zawisła — po 30 s kolejka idzie dalej (inaczej lektor zamilkłby na dobre)
+            const guard = nr ? setTimeout(() => { offLogPush('order-timeout', String(msg.text).slice(0, 40)); end(); }, 30000) : 0;
+            getSession()
+                .then((s) => predictStream(s, msg, put))
+                .catch((err) => { console.error('[Offscreen] play predict:', err); offLogPush('play-fail', errMsg(err)); })
+                .finally(() => { clearTimeout(guard); end(); });
+            return true;
+        };
+        // [FIX 2026-11-02] Ta kwestia właśnie nagrywa się do przodu w silniku w przeglądarce (Sherpa, Matcha 🌐) → czekamy
+        // na nią (Matcha: awans do kolejki pilnej) zamiast liczyć ją drugi raz; gotowa → z pamięci, nieudana → synteza jak zwykle.
+        const ahead = aheadJobs.get(msg.id);
+        if (ahead && (ttsEngine === 'sherpa' || (ttsEngine === 'matcha' && /^web:/.test(matchaVoice)))) {
+            if (ahead.ticket && mwMod && typeof mwMod.promote === 'function') mwMod.promote(ahead.ticket);
+            offLogPush('play-wait', String(msg.id || '').slice(0, 40) + ' (czekam na nagrywanie do przodu)');
+            let waitTimer = 0;
+            Promise.race([
+                Promise.resolve(ahead.promise).catch(() => {}),
+                new Promise((r) => { waitTimer = setTimeout(r, AHEAD_WAIT_MAX_MS); })
+            ]).then(() => {
+                clearTimeout(waitTimer);
+                if (myLive !== liveGen) { end(); sendResponse({ status: 'stale' }); return; }
+                const ready = audioCache.get(msg.id);
+                if (!ready) { synthNow(); return; }
+                put(ready, msg.durationMs, msg.piperSpeed, msg.rate, msg.slotMs, msg.noSkip);
+                end();
+                offLogPush('play', String(msg.id || '').slice(0, 40) + ' (z nagrywania do przodu)');
+                sendResponse({ status: 'playing' });
+            });
             return true;
         }
-        if (ttsEngine === 'matcha') {
-            playMatchaStream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'matcha' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] Matcha playback:', err);
-                    offLogPush('matcha-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'Matcha-TTS: ' + errMsg(err) });
-                });
-            return true;
-        }
-        // [AGENT-EXP] Odtwarzaj WAV z XTTS / F5 przez tę samą kolejkę, tempo i nagrywanie co Sherpa/Piper.
-        if (ttsEngine === 'xtts' || ttsEngine === 'f5') {
-            const isF5 = ttsEngine === 'f5';
-            playXttsStream(msg, put, isF5)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: ttsEngine });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] ' + (isF5 ? 'F5' : 'XTTS') + ' playback:', err);
-                    offLogPush((isF5 ? 'f5' : 'xtts') + '-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: (isF5 ? 'F5-TTS (Marek): ' : 'XTTS (TTS2): ') + errMsg(err) });
-                });
-            return true;
-        }
-        // [AGENT-EXP] Pocket-TTS-PL: jak XTTS — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
-        if (ttsEngine === 'pocket') {
-            playPocketStream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'pocket' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] Pocket playback:', err);
-                    offLogPush('pocket-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'Pocket-TTS-PL: ' + errMsg(err) });
-                });
-            return true;
-        }
-        // [AGENT-EXP] 2026-10-27 Kokoro: jak Pocket — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
-        if (ttsEngine === 'kokoro') {
-            playKokoroStream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'kokoro' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] Kokoro playback:', err);
-                    offLogPush('kokoro-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'Kokoro: ' + errMsg(err) });
-                });
-            return true;
-        }
-        // [AGENT-EXP] OmniVoice: jak Pocket — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
-        if (ttsEngine === 'omnivoice') {
-            playOmnivoiceStream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'omnivoice' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] OmniVoice playback:', err);
-                    offLogPush('omnivoice-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'OmniVoice: ' + errMsg(err) });
-                });
-            return true;
-        }
-        // [AGENT-EXP] Audio8 ma RTF 3–5 na CPU; czekamy do 15 min i gramy przez wspólną kolejkę.
-        if (ttsEngine === 'audio8') {
-            playAudio8Stream(msg, put)
-                .then(() => {
-                    end();
-                    sendResponse({ status: 'playing', engine: 'audio8' });
-                })
-                .catch((err) => {
-                    end();
-                    console.error('[Offscreen] Audio8 playback:', err);
-                    offLogPush('audio8-play-fail', errMsg(err));
-                    sendResponse({ status: 'error', error: 'Audio8 ONNX: ' + errMsg(err) });
-                });
-            return true;
-        }
-        sendResponse({ status: 'predicting_and_playing' });
-        // gdyby synteza zawisła — po 30 s kolejka idzie dalej (inaczej lektor zamilkłby na dobre)
-        const guard = nr ? setTimeout(() => { offLogPush('order-timeout', String(msg.text).slice(0, 40)); end(); }, 30000) : 0;
-        getSession()
-            .then((s) => predictStream(s, msg, put))
-            .catch((err) => { console.error('[Offscreen] play predict:', err); offLogPush('play-fail', errMsg(err)); })
-            .finally(() => { clearTimeout(guard); end(); });
-        return true;
+        return synthNow();
     }
 
     if (msg.action === 'TTS_PAUSE') {
+        // [FIX 2026-11-02] pauza z karty, która teraz NIE czyta (np. film w tle się skończył) — nie ucinamy lektora
+        if (msg.tab != null && lastPlayTab && String(msg.tab) !== lastPlayTab) { sendResponse({ status: 'other_tab' }); return true; }
         // [AGENT-EXP] 2026-10-22: pauza filmu przy „Czytaj zawsze do końca” — lektor dokańcza bieżące zdanie
         if (readToEnd && msg.reason === 'pause' && softStop()) { sendResponse({ status: 'finishing' }); return true; }
+        liveGen++;   // [FIX 2026-11-02] kwestie liczone teraz (każdy silnik) nie wejdą już do kolejki
         stLiveGen++;   // [VOX] Supertonic: kwestie liczone „na teraz” już nie wejdą do kolejki
         if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
         cancelMatchaRequests();
@@ -1964,8 +2039,11 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
     }
 
     if (msg.action === 'TTS_CLEAR_BUFFER') {
+        // [FIX 2026-11-02] czyszczenie z karty, która teraz NIE czyta (np. przewinięcie / koniec filmu w tle) — pomijamy
+        if (msg.tab != null && lastPlayTab && String(msg.tab) !== lastPlayTab) { sendResponse({ status: 'other_tab' }); return true; }
         // [AGENT-EXP] 2026-10-22: pauza filmu przy „Czytaj zawsze do końca” — lektor dokańcza bieżące zdanie
         if (readToEnd && msg.reason === 'pause' && softStop()) { sendResponse({ status: 'finishing' }); return true; }
+        liveGen++;   // [FIX 2026-11-02] kwestie liczone teraz (każdy silnik) nie wejdą już do kolejki
         stLiveGen++;   // [VOX] Supertonic: kwestie liczone „na teraz” już nie wejdą do kolejki
         if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
         cancelMatchaRequests();
@@ -1977,10 +2055,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         ordReset();
         playQueue.length = 0;
         finishCurrent();
-        if (player) {
-            player.pause();
-            player.src = '';
-        }
+        playerReset();   // [FIX 2026-11-02] bez fałszywego „audio-error”
         // [AGENT-EXP] 2026-10-17: nagrania ZOSTAJĄ (klucze są per karta + tekst, więc nic się nie pomyli) —
         // wcześniej czyszczenie kasowało cały zapas do przodu przy każdej pauzie / przewinięciu / ukryciu karty
         sendResponse({ status: 'cleared' });

@@ -379,8 +379,8 @@ if (!('__lektorBufPauza' in window)) {
         video = document.querySelector('video');
         if (video) {
             video.addEventListener('seeked', function () { try { filePlayed.clear(); } catch (e) {} stopSpeech(); });   // [AGENT-EXP] cofnięcie → kwestie czytane jeszcze raz
-            video.addEventListener('pause', function () { pauseSpeech(); }); // pauza filmu zawsze pauzuje lektora
-            video.addEventListener('play', function () { if (enabled) applyDuck(); else if (duckReady && duckMemGet() !== null) restoreVolume(); });   // [AGENT-EXP] 2026-10-20
+            video.addEventListener('pause', function () { pausedAtMs = video.currentTime * 1000; pauseSpeech(); }); // pauza filmu zawsze pauzuje lektora   // [FIX 2026-11-02] pausedAtMs
+            video.addEventListener('play', function () { if (enabled) { applyDuck(); rereadInterrupted(); } else if (duckReady && duckMemGet() !== null) restoreVolume(); });   // [AGENT-EXP] 2026-10-20   // [FIX 2026-11-02] rereadInterrupted
             video.addEventListener('volumechange', function () { if (enabled && tabFocused) applyDuck(); });
             if (enabled && tabFocused) applyDuck();
         }
@@ -427,6 +427,24 @@ if (!('__lektorBufPauza' in window)) {
         if (v) { duckOrig(v); duckMemSet(null); }   // [AGENT-EXP] 2026-10-20
         if (v && savedVolume !== null) { v.volume = savedVolume; savedVolume = null; }
     }
+    // [FIX 2026-11-02] Kwestia z pliku / całych napisów przerwana pauzą (bez „Czytaj zawsze do końca”) — po wznowieniu
+    // czytana od początku. Wcześniej zostawała oznaczona jako przeczytana i jej reszta przepadała.
+    var pausedAtMs = -1;
+    function rereadInterrupted() {
+        var at = pausedAtMs;
+        pausedAtMs = -1;
+        var rte = false;
+        try { rte = !!(window.__LivedubOpts && window.__LivedubOpts.get('readToEnd')); } catch (e) {}
+        if (at < 0 || rte || !fileSubs.length) return;
+        var v = getVideo();
+        if (!v || Math.abs(v.currentTime * 1000 - at) > 1500) return;   // przewinięte w czasie pauzy — tym zajmuje się 'seeked'
+        var off = getOff();
+        for (var i = 0; i < fileSubs.length; i++) {
+            var s = fileSubs[i], st = s.startMs + off, en = s.endMs + off;
+            if (at < st || at >= en || !filePlayed.has(s.id)) continue;
+            if (at - st < String(s.text || '').length / 14 * 1000) filePlayed.delete(s.id);   // lektor (ok. 14 znaków/s) nie zdążył skończyć
+        }
+    }
     function pauseSpeech() {
         try { chrome.runtime.sendMessage({ action: 'TTS_PAUSE', reason: 'pause' }); } catch (e) {}   // [AGENT-EXP] 2026-10-22: woła ją tylko pauza filmu — „Czytaj zawsze do końca” dokańcza zdanie
         try { filePreloaded.clear(); } catch (e) {}   // [AGENT-EXP] preload jeszcze raz (gotowe — z pamięci / dysku)
@@ -469,8 +487,6 @@ if (!('__lektorBufPauza' in window)) {
         // Opisy dźwięków w nawiasach — nieczytane przez lektora
         cleaned = cleaned.replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' ').replace(/（[^）]*）/g, ' ').replace(/【[^】]*】/g, ' ').replace(/\s{2,}/g, ' ').trim();
         if (!cleaned) return '';
-        // Mocne wulgaryzmy — wycinane; pusta linia nie jest czytana
-        cleaned = cleaned.replace(LIVEDUB_PROFANITY_RE, ' ').replace(/\s{2,}/g, ' ').trim();
         cleaned = cleaned.replace(/\b(?:www\.|https?:\/\/)\S+/gi, ' ');
         var junkBefore = (cleaned.match(JUNK_VOCAB_RE) || []).length;
 
@@ -528,8 +544,9 @@ if (!('__lektorBufPauza' in window)) {
         'i'
     );
 
-    // Mocne wulgaryzmy PL+EN (rdzenie łapią odmiany) — wycinane z mowy lektora.
-    var LIVEDUB_PROFANITY_RE = /(\b\p{L}*(?:kurw|chuj|huj|jeb|pizd|pierdol|pierdal|cipk|cip[aeęyiu]|dziwk|szmat|g[óo]wn|fuck|motherfuck|cunt|cocksuck|wank|whore|slut|pussy|shit)[^\s]*)/giu;
+    // [FIX 2026-11-02] Wulgaryzmy wycina teraz WYŁĄCZNIE cenzor lektora (src/offscreen/censor.js) zgodnie z ustawieniami
+    // (wł./wył., usuń / beep / gwiazdki, własne słowa). Ten stały wzorzec wycinał je zawsze — wbrew wyłączonemu cenzorowi,
+    // tryby beep / gwiazdki nie miały czego zamienić, a rdzenie łapały też niewinne słowa (np. „szmatka”).
 
     // Normalizacja do testów: usuwa znaki zero-width i sprowadza wszystkie
     // białe znaki (w tym niełamliwe, nowe linie między <span>ami banera)
@@ -1378,10 +1395,17 @@ if (!('__lektorBufPauza' in window)) {
                     if (recentSpoken.length > 5) recentSpoken.shift();
                     applyDuck();
                     if (isBlockedPhrase(sub.text)) continue; // blokujemy "Only the translation ,,"
+                    // [FIX 2026-11-02] okno kwestii (do następnej, najwyżej +2 s) i prędkość filmu — jak na YouTube; bez nich
+                    // „Auto-nadrabianie” i tempo A/B nie działały na Prime / iQIYI / WeTV / Viki / Bilibili / stronach Łowcy.
+                    var rate = v.playbackRate || 1;
+                    var nxt = fileSubs[i + 1];
+                    var slotEnd = nxt ? Math.min(nxt.startMs + off, endT + 2000) : endT + 2000;
+                    if (slotEnd < endT) slotEnd = endT;
                     chrome.runtime.sendMessage({
                         action: 'TTS_PLAY', id: sub.id, text: sub.text,
                         durationMs: sub.endMs - sub.startMs,
-                        startMs: startT, endMs: endT
+                        startMs: startT, endMs: endT,
+                        rate: rate, slotMs: Math.max(400, (slotEnd - nowMs) / rate)
                     });
                 }
                 if (startT > nowMs + fileLookahead) break;

@@ -172,14 +172,39 @@ if (!('__lektorBufPauza' in window)) {
             video.addEventListener('pause', function () {
                 if (enabled) chrome.runtime.sendMessage({ action: 'TTS_PAUSE', reason: 'pause' });   // [AGENT-EXP] 2026-10-22: „Czytaj zawsze do końca” → dokończ zdanie
                 preloaded.clear();   // [AGENT-EXP] 2026-10-17: preload jeszcze raz po wznowieniu (gotowe — z pamięci / dysku)
+                pausedAtMs = video.currentTime * 1000;   // [FIX 2026-11-02] do ponownego czytania przerwanej kwestii
             });
             video.addEventListener('volumechange', function () {
                 if (enabled) applyDuck();
             });
-            video.addEventListener('play', function () { if (!enabled && duckReady && duckMemGet() !== null) restoreVideo(); });   // [AGENT-EXP] 2026-10-20
+            video.addEventListener('play', function () {
+                if (!enabled && duckReady && duckMemGet() !== null) restoreVideo();   // [AGENT-EXP] 2026-10-20
+                if (enabled) rereadInterrupted();   // [FIX 2026-11-02]
+            });
             if (enabled) applyDuck();
         }
         return video;
+    }
+
+    // [FIX 2026-11-02] Kwestia przerwana pauzą filmu (bez „Czytaj zawsze do końca”) — po wznowieniu czytana od początku.
+    // Wcześniej zostawała oznaczona jako przeczytana, więc jej reszta przepadała (YouTube robił to już dobrze).
+    var pausedAtMs = -1;
+    function readToEndOn() {
+        try { return !!(window.__LivedubOpts && window.__LivedubOpts.get('readToEnd')); } catch (e) { return false; }
+    }
+    function rereadInterrupted() {
+        var at = pausedAtMs;
+        pausedAtMs = -1;
+        if (at < 0 || readToEndOn()) return;   // „Czytaj zawsze do końca”: lektor dokończył zdanie mimo pauzy
+        var v = getVideo();
+        if (!v || Math.abs(v.currentTime * 1000 - at) > 1500) return;   // przewinięte w czasie pauzy — tym zajmuje się 'seeked'
+        var off = getOff();
+        for (var i = 0; i < subtitles.length; i++) {
+            var s = subtitles[i], st = s.startMs + off, en = s.endMs + off;
+            if (at < st || at >= en || !played.has(s.id)) continue;
+            // lektor (ok. 14 znaków/s) nie zdążył jej skończyć przed pauzą → od początku
+            if (at - st < String(s.text || '').length / 14 * 1000) played.delete(s.id);
+        }
     }
 
     // --- Ducking: ścisz wideo do duckLevel% ---
@@ -511,6 +536,13 @@ if (!('__lektorBufPauza' in window)) {
                     recentSpoken.push({ t: sub.text, w: sub.words || 0 });
                                          if (recentSpoken.length > 5) recentSpoken.shift();
                      if (isBlockedPhrase(sub.text)) continue; // pomijamy blokowane frazy
+                     // [FIX 2026-11-02] okno kwestii (do następnej, najwyżej +2 s) i prędkość filmu — jak na YouTube.
+                     // Bez tego na Netflixie nie działały „Auto-nadrabianie” ani tempo A/B przy przyspieszonym filmie:
+                     // dłuższe polskie zdania spychały lektora za obraz, a potem kolejka wyrzucała zaległe kwestie.
+                     var rate = v.playbackRate || 1;
+                     var nxt = subtitles[i + 1];
+                     var slotEnd = nxt ? Math.min(nxt.startMs + off, endT + 2000) : endT + 2000;
+                     if (slotEnd < endT) slotEnd = endT;
                      chrome.runtime.sendMessage({
                         action: 'TTS_PLAY',
                         id: sub.id,
@@ -518,6 +550,8 @@ if (!('__lektorBufPauza' in window)) {
                         durationMs: sub.endMs - sub.startMs,
                         startMs: startT,
                         endMs: endT,
+                        rate: rate,
+                        slotMs: Math.max(400, (slotEnd - nowMs) / rate),
                         platform: 'netflix'
                     });
                 }
@@ -566,12 +600,13 @@ if (!('__lektorBufPauza' in window)) {
         } catch (e) {}
     }, 2000);
 
-    // Mocne wulgaryzmy PL+EN (rdzenie łapią odmiany) — wycinane z mowy lektora.
-    var LIVEDUB_PROFANITY_RE = /(\b\p{L}*(?:kurw|chuj|huj|jeb|pizd|pierdol|pierdal|cipk|cip[aeęyiu]|dziwk|szmat|g[óo]wn|fuck|motherfuck|cunt|cocksuck|wank|whore|slut|pussy|shit)[^\s]*)/giu;
+    // [FIX 2026-11-02] Wulgaryzmy wycina teraz WYŁĄCZNIE cenzor lektora (src/offscreen/censor.js) zgodnie z ustawieniami
+    // (wł./wył., usuń / beep / gwiazdki, własne słowa). Ten stały wzorzec wycinał je zawsze — wbrew wyłączonemu cenzorowi,
+    // tryby beep / gwiazdki nie miały czego zamienić, a rdzenie łapały też niewinne słowa (np. „szmatka”).
 
     // --- Odbior napisów ze świata strony ---
     function stripCueBrackets(t) {
-        return String(t || '').replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' ').replace(LIVEDUB_PROFANITY_RE, ' ').replace(/\s{2,}/g, ' ').trim();
+        return String(t || '').replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' ').replace(/\s{2,}/g, ' ').trim();
     }
     // ===== Źródła napisów: czytamy TYLKO JEDEN plik napisów =====
     // Netflix potrafi wczytać naraz dwie ścieżki: natywną (wybraną w odtwarzaczu)

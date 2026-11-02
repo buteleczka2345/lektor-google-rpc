@@ -40,12 +40,15 @@ function isBlockedPhrase(text) {
 // ===== Użytkownicze blokady z panelu (zapisane w chrome.storage.local) =====
 // Ładuje się automatycznie przy starcie service workera i aktualizuje przy zmianach.
 let userBlockedPhrases = [];
+// [FIX 2026-11-02] obietnica wczytania blokad — TTS_PLAY / TTS_PRELOAD czekają na nią. Pierwsza kwestia po wybudzeniu
+// service workera przychodzi zwykle, zanim storage odpowie, więc wcześniej mogła przejść mimo blokady.
+let userBlockedReady = Promise.resolve();
 
 function loadUserBlockedPhrases() {
     // [AGENT-EXP] chrome.storage.local.get zwraca w MV3 OBIETNICĘ — wcześniej czytane bez await, więc po każdym
     // uśpieniu service workera (≈30 s bezczynności) lista Blokad była PUSTA, dopóki użytkownik czegoś nie zmienił.
     try {
-        chrome.storage.local.get('userBlockedPhrases').then((result) => {
+        userBlockedReady = chrome.storage.local.get('userBlockedPhrases').then((result) => {
             userBlockedPhrases = Array.isArray(result && result.userBlockedPhrases) ? result.userBlockedPhrases : [];
         }).catch(() => { userBlockedPhrases = []; });
     } catch (e) {
@@ -448,6 +451,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.target === 'offscreen') return;
     if (ocrOnlyBlocksTts(msg)) { sendResponse({ status: 'ocr-only' }); return; }   // [AGENT-EXP] tryb „tylko OCR”
     if ((msg.action === 'TTS_PRELOAD' || msg.action === 'TTS_PLAY') && msg.id != null) msg = { ...msg, id: ttsCacheId(msg, _sender) };   // [AGENT-EXP]
+    // [FIX 2026-11-02] pauza / czyszczenie ze strony niosą kartę — offscreen pomija je, gdy czyta inna karta
+    if ((msg.action === 'TTS_PAUSE' || msg.action === 'TTS_CLEAR_BUFFER') && _sender && _sender.tab && _sender.tab.id != null) msg = { ...msg, tab: String(_sender.tab.id) };
     if (msg.action === 'OFFSCREEN_READY') {
         sendResponse({ status: 'ok' });
         return true;
@@ -496,12 +501,14 @@ const TTS_ROUTES = {
     async INIT_TTS(msg) { return callOffscreen({ ...msg, ...(await ttsEngineFields()) }); },
     async CLEAR_CACHE(msg) { return callOffscreen({ ...msg, ...(await ttsEngineFields()) }); },
     async TTS_PRELOAD(msg) {
+        await userBlockedReady;   // [FIX 2026-11-02]
         if (isBlockedPhrase(msg.text)) return { status: 'blocked' };   // fraza na czarnej liście — bez syntezy
         const fields = await ttsEngineFields();
         callOffscreen({ ...msg, ...fields }, 20).catch(() => {});   // nie czekamy: nagrywanie do przodu idzie w tle
         return { status: 'queued' };
     },
     async TTS_PLAY(msg) {
+        await userBlockedReady;   // [FIX 2026-11-02]
         if (isBlockedPhrase(msg.text)) return { status: 'blocked' };
         return callOffscreen({ ...msg, ...(await ttsEngineFields(true)) });
     },
@@ -512,6 +519,12 @@ const TTS_ROUTES = {
     async TTS_PAUSE(msg) { if (await hasOffscreen()) sendOffscreen(msg).catch(() => {}); return { status: 'stopped' }; },
     async TTS_CLEAR_BUFFER(msg) { if (await hasOffscreen()) sendOffscreen(msg).catch(() => {}); return { status: 'stopped' }; }
 };
+
+// [FIX 2026-11-02] zamknięta karta, z której lektor właśnie czytał — kolejka tej karty przestaje grać
+// (wcześniej po zamknięciu karty lektor dokańczał jeszcze kilka zaległych kwestii). Inne karty: offscreen pomija.
+chrome.tabs.onRemoved.addListener((tabId) => {
+    hasOffscreen().then((ok) => { if (ok) return sendOffscreen({ action: 'TTS_CLEAR_BUFFER', tab: String(tabId) }); }).catch(() => {});
+});
 
 // ===== Nagrywanie lektora (REC) — orkiestracja sesji + pobieranie WAV =====
 // Przycisk REC na stronie (assets/rec_button.js) → tu → offscreen (zapis kwestii do IndexedDB).
@@ -994,8 +1007,28 @@ async function lowcaResults(msg, sendResponse) {
     lowcaBroadcast(st);
     sendResponse({ ok: true, saved: selectors.length });
 }
+// [FIX 2026-11-02] Proxy Łowcy pobiera tylko publiczne adresy http(s). Prośba przychodzi przez window.postMessage strony,
+// więc bez tego dowolny skrypt strony mógł czytać przez rozszerzenie (bez CORS) serwery w sieci domowej / firmowej
+// i lokalne usługi (127.0.0.1 — także serwery TTS). Napisy i playlisty leżą na publicznych CDN-ach.
+function lowcaXhrAllowed(url) {
+    let u;
+    try { u = new URL(String(url || '')); } catch (e) { return false; }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (!h || h === 'localhost' || /\.(localhost|local|lan|internal|home|corp)$/.test(h)) return false;
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) {
+        const [a, b] = h.split('.').map(Number);
+        if (a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+            || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)) return false;
+    }
+    if (h.indexOf(':') >= 0) {   // IPv6: pętla zwrotna, sieci lokalne (fc00::/7, fe80::/10), adresy IPv4 w IPv6
+        if (h === '::1' || h === '::' || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || /^::ffff:/.test(h)) return false;
+    }
+    return true;
+}
 async function lowcaXhr(msg, sendResponse) {
     // Proxy GM_xmlhttpRequest z huntera (MAIN) - host *://*/* omija CORS.
+    if (!lowcaXhrAllowed(msg.url)) { sendResponse({ id: msg.id, ok: false, status: 0, error: 'adres niedozwolony (tylko publiczne http/https)' }); return; }
     const ctrl = new AbortController();
     const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 30000);
     try {

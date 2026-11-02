@@ -270,7 +270,11 @@ if (!('__lektorBufPauza' in window)) {
                 if (!ownPauza && !wTle && !played.has(i) && now >= s.startMs && now < s.endMs) {
                     played.add(i);
                     applyDuck();
-                    send({ action: 'TTS_PLAY', id: s.id, text: s.text, durationMs: s.endMs - s.startMs, startMs: s.startMs, endMs: s.endMs, rate: video.playbackRate || 1 });
+                    // [FIX 2026-11-02] okno kwestii (do następnej, najwyżej +2 s) — „Auto-nadrabianie” działa jak na YouTube
+                    var rate = video.playbackRate || 1, nx = items[i + 1];
+                    var slotEnd = nx ? Math.min(nx.startMs, s.endMs + 2000) : s.endMs + 2000;
+                    if (slotEnd < s.endMs) slotEnd = s.endMs;
+                    send({ action: 'TTS_PLAY', id: s.id, text: s.text, durationMs: s.endMs - s.startMs, startMs: s.startMs, endMs: s.endMs, rate: rate, slotMs: Math.max(400, (slotEnd - now) / rate) });
                     clearTimeout(startOwnLoop._r);
                     startOwnLoop._r = setTimeout(restoreVolume, Math.min(6000, Math.max(1500, s.text.length * 65) + 400));
                 }
