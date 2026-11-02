@@ -12,10 +12,10 @@ const SCHEMA = [
   { sec: '🗣 Silnik mowy — narzędzia', id: 'engineSec', sub: 'Silnik, głos, sprzęt (CPU / GPU) i jakość wybierasz w popupie, w karcie „🗣 Silnik mowy”. Tu: test lektora, restart silnika Supertonic i jego stan.', items: [] },
   // [AGENT-EXP] 2026-10-17: sekcja „🎙 Silnik lektora” usunięta — silnik i głos wybiera się w popupie
   // (🗣 Silnik mowy + Głos); buforowanie w pauzie / w tle też jest w popupie.
-  { sec: '⏩ Tempo', sub: 'Jak lektor nadąża za przyspieszonym filmem (np. 1.5×).', items: [
+  // [FIX 2026-11-02] „Auto-nadrabianie” tylko w popupie (karta prędkości) — było w obu miejscach
+  { sec: '⏩ Tempo', sub: 'Jak lektor nadąża za przyspieszonym filmem (np. 1.5×). Auto-nadrabianie (najwyżej 1,8×) włączasz w popupie, przy prędkości lektora.', items: [
     { k: 'tempoMode', t: 'select', def: 'A', label: 'Wariant tempa', hint: 'A — jak film, B — połowa przyspieszenia, C — stałe tempo', options: [
       ['A', 'A — Za wideo 1:1'], ['B', 'B — Za wideo łagodnie'], ['C', 'C — Stałe tempo']] },
-    { k: 'autoCatchup', t: 'bool', def: true, label: 'Auto-nadrabianie', hint: 'Przyspiesza, gdy kwestia nie mieści się w czasie' },
     { k: 'compressor', t: 'bool', def: false, label: 'Anty-trzask', hint: 'Kompresor na wyjściu lektora' }
   ]},
   { sec: '🗂️ Karty i pauza', sub: 'Zachowanie przy wielu kartach i pauzie.', items: [
@@ -47,7 +47,6 @@ const SCHEMA = [
     { k: 'extTrInterval', t: 'select', def: '30s', label: 'Odstęp między porcjami', hint: 'Plus losowe ±50%, żeby nie było jak zegarek; duża porcja starcza na długo', options: [   // [AGENT-EXP] 2026-10-17: ±50%, 1–5 min co minutę, bez 10 min
       ['20s', '20 sekund'], ['30s', '30 sekund'], ['1min', '1 minuta'], ['2min', '2 minuty'], ['3min', '3 minuty'], ['4min', '4 minuty'], ['5min', '5 minut']] },
     // [AGENT-EXP] NOWA OPCJA 1/2 — Google RPC: zamienia główną funkcję Google (gtx) na metodę RPC.
-    { k: 'extTrGoogleRpc', t: 'bool', def: false, label: 'Google RPC — nowa metoda (eksperymentalna)', hint: 'Zamienia główną funkcję Google (endpoint gtx) na metodę RPC z limitem 4 żądania/1350 ms i pełnym parsowaniem (bez ucinania tekstu). Działa, gdy włączone jest tłumaczenie sieciowe i wybrany Google (lub rotacja). Wył. = dokładnie jak dotychczas. [AGENT-EXP] Uwaga: adres RPC odpowiada dziś 404 — po porażce Google sam wraca na 10 min do zwykłej metody gtx.' },
     // [AGENT-EXP] NOWA OPCJA 2/2 — zatrzymanie tłumaczenia razem z lektorem.
     { k: 'extTrStopWithLektor', t: 'bool', def: false, label: 'Zatrzymaj tłumaczenie razem z lektorem', hint: 'Gdy wyłączysz lektora (STOP) lub przejdziesz na inny film — natychmiast ubija kolejkę tłumaczenia w tle (mniej zapytań, brak blokad). Wył. = tłumaczenie dokończy kolejkę samo.' },
     // [AGENT-EXP] NOWA OPCJA 3/3 — Microsoft/Bing: nowa metoda batch (czysta tablica + limit 7 żąd./1250 ms, styl Immersive Translate).
@@ -71,11 +70,11 @@ const SCHEMA = [
       ['off', 'wyłącz'], ['normal', 'normalnie'], ['strong', 'mocno']] },
     { k: 'cenzorAsrTag', t: 'bool', def: true, label: 'Wyciszaj „[ __ ]” z auto-napisów YouTube', hint: 'YouTube sam zamienia przekleństwa w auto-napisach na „[ __ ]”.' },
   ]},
-  { sec: '🔍 Łowca napisów', sub: 'Szukanie napisów na żądanie (przycisk w popupie). Pokazuj GUI tylko wtedy, gdy go potrzebujesz.', items: [
+  // [FIX 2026-11-02] „Pokazuj GUI Łowcy” tylko w popupie (karta Łowcy) — było w obu miejscach
+  { sec: '🔍 Łowca napisów', sub: 'Szukanie napisów na żądanie (przycisk w popupie). „Pokazuj GUI Łowcy (przycisk CC)” przełączasz w popupie, w karcie Łowcy.', items: [
     // [AGENT-EXP] 2026-10-15 — 🔋 tryb oszczędny Łowcy (assets/lowca_napisow.js, przekazuje mostek).
     // [AGENT-EXP] 2026-10-17: opis zgodny z kodem — bez filmu Łowca się nie włącza, z filmem ~2 s (było „4 s / 15 s”).
     { k: 'lowcaEco', t: 'bool', def: true, label: 'Łowca: tryb oszczędny', hint: 'Strona bez filmu — Łowca w ogóle się nie włącza (włączy go dopiero film, który się na niej pojawi). Gdy film jest: szuka ok. 2 s gry filmu; po złapaniu napisów albo gdy ich brak (reklama YouTube się nie liczy) przestaje szukać do następnego filmu. „Szukaj napisów” w popupie albo „Szukaj dalej” w panelu Łowcy budzi go od razu.' },
-    { k: 'lowcaGui', t: 'bool', def: false, label: 'Pokazuj GUI Łowcy (przycisk CC)', hint: 'Wł. = przycisk CC zawsze widoczny na każdej stronie z filmem (klik uruchamia Łowcę i otwiera panel; panel też Alt+N). Wył. = przycisk schowany wszędzie. Ten sam checkbox jest w popupie.' },
     // [AGENT-EXP] 2026-10-17: pola kluczy API OpenSubtitles.com i SubDL usunięte z Ustawień (niepotrzebne).
     // subs_db.js dalej czyta osApiKey / subdlApiKey — bez klucza te bazy są pomijane; OpenSubtitles.org działa bez klucza.
     // Żeby wrócić: dopisz tu { k: 'osApiKey', t: 'text', secret: true, ... } (wzór w kopii kodu z 2026-10-17).

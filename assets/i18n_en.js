@@ -1460,5 +1460,11 @@ self.ML_I18N_EN = {
     "Lektor Marek F5-TTS (serwer :9400)": "Narrator Marek F5-TTS (server :9400)",
     "Pocket-TTS-PL (serwer :9200)": "Pocket-TTS-PL (server :9200)",
     "OmniVoice (serwer :9100)": "OmniVoice (server :9100)",
-    "Kokoro (serwer :9500)": "Kokoro (server :9500)"
+    "Kokoro (serwer :9500)": "Kokoro (server :9500)",
+    // [FIX 2026-11-02]
+    "Jak lektor nadąża za przyspieszonym filmem (np. 1.5×). Auto-nadrabianie (najwyżej 1,8×) włączasz w popupie, przy prędkości lektora.": "How the narrator keeps up with a sped-up video (e.g. 1.5×). Auto catch-up (at most 1.8×) is switched on in the popup, next to the narrator speed.",
+    "Szukanie napisów na żądanie (przycisk w popupie). „Pokazuj GUI Łowcy (przycisk CC)” przełączasz w popupie, w karcie Łowcy.": "On-demand subtitle search (button in the popup). “Show the Hunter GUI (CC button)” is toggled in the popup, in the Hunter card.",
+    // [FIX 2026-11-02]
+    "Przyspiesza (najwyżej do 1,8×), gdy kwestia nie mieści się w czasie albo w kolejce czekają następne": "Speeds up (to at most 1.8×) when a line does not fit in its time or more lines are waiting",
+    "Auto-nadrabianie (najwyżej 1,8×, gdy kwestia nie mieści się w czasie)": "Auto catch-up (at most 1.8× when a line does not fit in its time)"
 };

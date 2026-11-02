@@ -9,7 +9,6 @@ const EXT_TR_ENGINES = ['google', 'bing', 'deepl', 'ai']; // [AGENT-EXP] 'ai' = 
 let extTrIdx = 0;                 // pozycja round-robin
 let extTrCooldownUntil = {};      // { engine: timestamp } — padniety odpoczywa (20 s → 1 min → 5 min)
 let extTrFailCount = {};          // [AGENT-EXP] ile razy z rzędu silnik padł (kasowane po udanym tłumaczeniu)
-let extTrRpcDeadUntil = 0;        // [AGENT-EXP] adres Google RPC nie działa → do tej chwili od razu zwykłe gtx
 let extTrCache = new Map();       // "engine|src|pl|tekst" -> tlumaczenie (pamiec SW)
 let bingAuthCache = { token: '', at: 0 };
 
@@ -58,8 +57,8 @@ async function extTrFetchText(url, reqInit) {
     } finally { clearTimeout(timer); }
 }
 /* EXT-TRANSLATE: silniki Google + Bing (formaty z TWP). */
-// [AGENT-EXP] === Google RPC (nowa metoda) — zamienna implementacja „głównej" funkcji Google ===
-// Limiter tokenów: max 4 żądania na 1350 ms (wzorzec Immersive Translate) — chroni przed 429.
+// [FIX 2026-11-02] „Google RPC” (batchexecute) usunięte: adres odpowiadał 404, więc zawsze kończyło się na gtx.
+// Ogranicznik żądań zostaje — chroni teraz zwykłe Google (gtx): max 4 żądania na 1350 ms (wzorzec Immersive Translate).
 let extTrGgTokens = 4, extTrGgLast = Date.now();
 async function extTrGoogleGate() {
     while (true) {
@@ -69,86 +68,6 @@ async function extTrGoogleGate() {
         if (extTrGgTokens >= 1) { extTrGgTokens -= 1; return; }
         await new Promise((r) => setTimeout(r, ((1 - extTrGgTokens) / 4) * 1350));
     }
-}
-// Czy włączony jest checkbox „Google RPC"? Świeży odczyt ze storage (przełącznik działa od razu).
-async function extTrGoogleRpcOn() {
-    try {
-        const r = await chrome.storage.local.get(['extTrGoogleRpc']);
-        return r && r.extTrGoogleRpc === true;
-    } catch (e) { return false; }
-}
-// Wyciąga tłumaczenie z odpowiedzi RPC — najpierw tablica zdań, potem pola stylu API, na końcu najdłuższy string.
-function extTrPickGoogleTranslation(outer, inner, sourceText, minLen) {
-    let best = '';
-    const norm = (s) => s.replace(/\s+/g, ' ').trim();
-    const excluded = norm(sourceText || '');
-    (function walk(node) {
-        if (typeof node === 'string') {
-            const s = node.trim();
-            if (s.length >= minLen && s.length > best.length &&
-                !/^[a-z]{2}(-[A-Z]{2})?$/.test(s) && norm(s) !== excluded) best = s;
-        } else if (Array.isArray(node)) node.forEach(walk);
-        else if (node && typeof node === 'object') Object.values(node).forEach(walk);
-    })(inner);
-    try {
-        const sentences = inner && inner[1] && inner[1][0] && inner[1][0][0] && inner[1][0][0][5];
-        if (Array.isArray(sentences)) {
-            const joined = sentences.map((s) => (Array.isArray(s) && typeof s[0] === 'string') ? s[0] : '').join('');
-            if (joined.trim()) return joined;
-        }
-    } catch (e) {}
-    const fromApi = (inner && inner.translatedTexts && inner.translatedTexts[0]) ||
-        (inner && inner.data && inner.data.translatedTexts && inner.data.translatedTexts[0]) ||
-        (inner && inner.data && inner.data.translations && inner.data.translations[0] && inner.data.translations[0].translatedText) ||
-        (outer && outer.translatedTexts && outer.translatedTexts[0]);
-    if (typeof fromApi === 'string' && fromApi.trim()) return fromApi;
-    return best;
-}
-// Główna funkcja nowej metody: batchexecute (RPC) zamiast gtx. Ten sam interfejs: texts[] -> string[].
-// Teksty łączone separatorem ' /// ' (jak w gtx), odpowiedź rozdzielana po '///'.
-async function extTrGoogleRpc(src, tgt, texts) {
-    const sep = ' /// ';
-    const q = texts.join(sep);
-    if (extTrCountWords(q) === 0) return texts.map(() => '');
-    await extTrGoogleGate();
-    const rpcData = JSON.stringify([[
-        ['MkEWBc', JSON.stringify([q, src || 'auto', tgt, true]), null, 'generic']
-    ]]);
-    const raw = await extTrFetchText('https://translate.googleapis.com/_/TranslateWebserverUi/data/batchexecute', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-            'Accept': '*/*'
-        },
-        body: 'f.req=' + encodeURIComponent(rpcData)
-    });
-    // Odpowiedź: prefiks )]}' + kilka linii; szukamy linii z „wrb.fr".
-    const body = String(raw || '').replace(/^\)\]\}'?\s*/, '');
-    let outer = null;
-    for (const line of body.split('\n')) {
-        const t = line.trim();
-        if (!t.startsWith('[')) continue;
-        try {
-            const arr = JSON.parse(t);
-            if (Array.isArray(arr) && Array.isArray(arr[0]) && arr[0][0] === 'wrb.fr') { outer = arr; break; }
-        } catch (e) {}
-    }
-    if (!outer) {
-        try {
-            const whole = JSON.parse(body);
-            if (Array.isArray(whole) && Array.isArray(whole[0]) && whole[0][0] === 'wrb.fr') outer = whole;
-        } catch (e) {}
-    }
-    if (!outer) throw new Error('Google RPC: brak linii z odpowiedzia (wrb.fr)');
-    let inner;
-    try { inner = JSON.parse(outer[0][2]); } catch (e) { throw new Error('Google RPC: zly wewnetrzny JSON'); }
-    const minLen = Math.max(3, Math.min(10, Math.floor(q.length / 3)));
-    const full = extTrPickGoogleTranslation(outer, inner, q, minLen);
-    if (!full || !full.trim()) throw new Error('Google RPC: puste tlumaczenie');
-    const parts = String(full).split('///').map((s) => s.trim());
-    const out = extTrSepParts(parts, texts, 'Google RPC');   // [FIX 2026-11-02] bez przesunięć kwestii
-    if (!out.some(Boolean)) throw new Error('Google RPC: puste tlumaczenie po podziale');
-    return out;
 }
 // [FIX 2026-11-02] Odpowiedź sklejona separatorem ' /// ' → tablica 1:1 z kwestiami. Gdy tłumacz zgubił / przestawił /
 // dodał separator, liczba części się nie zgadza — wcześniej tłumaczenia przesuwały się na SĄSIEDNIE kwestie (lektor czytał
@@ -162,7 +81,6 @@ function extTrSepParts(parts, texts, who) {
     }
     return parts;
 }
-// [AGENT-EXP] === koniec bloku Google RPC ===
 
 // [AGENT-EXP] === Microsoft/Bing batch (styl Immersive Translate) ===
 // Limiter tokenów: max 7 żądań na 1250 ms (wzorzec Immersive Translate dla Edge/Bing).
@@ -287,17 +205,7 @@ async function extTrGoogle(src, tgt, texts) {
     }
 }
 async function extTrGoogleOnce(src, tgt, texts) {
-    // [AGENT-EXP] Checkbox „Google RPC": najpierw metoda RPC. Jej adres
-    // (translate.googleapis.com/_/TranslateWebserverUi/data/batchexecute) odpowiada dziś 404 — po porażce
-    // przez 10 min idzie od razu zwykłe gtx, zamiast odpadać całym silnikiem Google.
-    if (Date.now() >= extTrRpcDeadUntil && await extTrGoogleRpcOn()) {
-        try { return await extTrGoogleRpc(src, tgt, texts); }
-        catch (e) {
-            if (e && e.sepMismatch) throw e;   // [FIX 2026-11-02] RPC działa — tylko paczka do podziału
-            extTrRpcDeadUntil = Date.now() + 10 * 60000;
-            console.warn('[LiveDub SW] Google RPC nie działa — zwykłe Google (gtx):', String((e && e.message) || e));
-        }
-    }
+    await extTrGoogleGate();   // [FIX 2026-11-02] ogranicznik żądań (wcześniej tylko dla RPC)
     return extTrGoogleGtx(src, tgt, texts);
 }
 // Google „bezpośrednio”: publiczny adres translate_a/single?client=gtx (oryginalny kod extTrGoogle).

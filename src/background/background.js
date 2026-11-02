@@ -32,6 +32,9 @@ chrome.storage.local.get(['cenzorWords', 'censorCustomWords', 'censorOneListV1']
     chrome.storage.local.set(patch, () => { chrome.storage.local.remove('cenzorWords'); });
 });
 
+// [FIX 2026-11-02] przełącznik „Google RPC” usunięty (adres 404) — sprzątamy jego zapis
+try { chrome.storage.local.remove('extTrGoogleRpc'); } catch (e) {}
+
 // ===== Blokowane frazy — lektor NIGDY ich nie czyta =====
 // Centralny filtr: ostateczna kontrola odbywa się tutaj, przed TTS_PLAY → callOffscreen.
 const BLOCKED_PHRASES = [

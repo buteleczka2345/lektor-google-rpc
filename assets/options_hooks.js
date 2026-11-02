@@ -21,7 +21,6 @@
         extTrChunk: 'mieszane',     // '100' | '300' | '400' | 'mieszane'
         extTrInterval: '30s',       // '20s' | '30s' | '1min' | '2min' | '3min' | '4min' | '5min'   [AGENT-EXP] 2026-10-17
         // [AGENT-EXP] nowe opcje eksperymentalne (domyślnie WYŁ. = zachowanie jak przed zmianą)
-        extTrGoogleRpc: false,      // Google RPC (nowa metoda zamiast gtx) — obsługiwane w SW
         extTrStopWithLektor: false, // zatrzymaj tłumaczenie sieciowe razem z wyłączeniem lektora
         extTrMicrosoftBatch: false, // Microsoft/Bing: czysta tablica + limit 7 żąd./1250 ms (styl Immersive)
         extTrContext: true,         // [AGENT-EXP] 2026-10-17: tłumacz dostaje kwestie blokami do pauzy w mowie (kontekst)
