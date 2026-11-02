@@ -1439,5 +1439,26 @@ self.ML_I18N_EN = {
     " kwestii do pliku .srt (Pobrane).": " lines to an .srt file (Downloads).",
     "⛔ Brak całych napisów na tej karcie — najpierw „⬇ Pobierz całe napisy”, plik albo bazy napisów.": "⛔ No whole subtitles on this tab — first use “⬇ Download whole subtitles”, a file or the subtitle databases.",
     " · ⏱ opóźnienie ": " · ⏱ delay ",
-    " · ⏭ pominięte: ": " · ⏭ skipped: "
+    " · ⏭ pominięte: ": " · ⏭ skipped: ",
+    // [FIX 2026-11-02]
+    "W przeglądarce — bez serwera": "In the browser — no server",
+    "Serwer lokalny (WebSocket)": "Local server (WebSocket)",
+    "Serwer lokalny — własny adres": "Local server — custom address",
+    "XTTS v2 (TTS2) — :8000": "XTTS v2 (TTS2) — :8000",
+    "Audio8 ONNX INT8 — :9300 (wolny)": "Audio8 ONNX INT8 — :9300 (slow)",
+    "Lektor Marek (F5-TTS) — :9400": "Narrator Marek (F5-TTS) — :9400",
+    "Adres serwera (ws://…)": "Server address (ws://…)",
+    "Serwer dostaje JSON {text, voice, speed, pilne} i odsyła plik WAV — tak jak XTTS, Pocket czy Kokoro.": "The server receives JSON {text, voice, speed, pilne} and sends back a WAV file — just like XTTS, Pocket or Kokoro.",
+    "Głos na serwerze (ID; puste = domyślny serwera)": "Voice on the server (ID; empty = server default)",
+    "🗣 Silnik mowy — narzędzia": "🗣 Speech engine — tools",
+    "Silnik, głos, sprzęt (CPU / GPU) i jakość wybierasz w popupie, w karcie „🗣 Silnik mowy”. Tu: test lektora, restart silnika Supertonic i jego stan.": "You pick the engine, voice, hardware (CPU / GPU) and quality in the popup, in the “🗣 Speech engine” card. Here: narrator test, Supertonic engine restart and its status.",
+    "Aktywny silnik: ": "Active engine: ",
+    " (zmiana: popup → „🗣 Silnik mowy”).": " (change it: popup → “🗣 Speech engine”).",
+    "Serwer lokalny — własny adres (popup)": "Local server — custom address (popup)",
+    "XTTS v2 (serwer :8000)": "XTTS v2 (server :8000)",
+    "Audio8 ONNX (serwer :9300)": "Audio8 ONNX (server :9300)",
+    "Lektor Marek F5-TTS (serwer :9400)": "Narrator Marek F5-TTS (server :9400)",
+    "Pocket-TTS-PL (serwer :9200)": "Pocket-TTS-PL (server :9200)",
+    "OmniVoice (serwer :9100)": "OmniVoice (server :9100)",
+    "Kokoro (serwer :9500)": "Kokoro (server :9500)"
 };

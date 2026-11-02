@@ -7,17 +7,9 @@
 const SCHEMA = [
   // [VOX] 2026-10-20: 🗣 Silnik mowy — ten sam klucz ttsEngine co w popupie, plus Supertonic (silnik z VoxNemesis).
   // Głos dla serwerów (Matcha, XTTS, Pocket…) dalej wybiera się w popupie.
-  { sec: '🗣 Silnik mowy', id: 'engineSec', sub: 'Którym głosem czyta lektor. Supertonic (z VoxNemesis) liczy na tym komputerze — procesorem albo kartą graficzną. Głos dla serwerów (Matcha, XTTS, Pocket…) wybierasz w popupie.', items: [
-    { k: 'ttsEngine', t: 'select', def: 'matcha',   /* [AGENT-EXP] 2026-10-24: domyślnie Matcha 🌐 */ label: 'Silnik', hint: 'Ten sam wybór co „🗣 Silnik mowy” w popupie. Głos przeglądarki (Web Speech API) gra prosto z systemu: bez wzmocnienia ponad 100%, kompresora, nagrywania i zapisu bufora', options: [ /* [AGENT-EXP] 2026-10-21 */
-      ['matcha', 'Matcha-TTS-PL 🌐 — w przeglądarce (domyślny) lub serwer :9000'], ['sherpa', 'Sherpa / Piper — pobrane głosy (Języki świata)'], ['browser', 'Głos przeglądarki (Google / Microsoft) — darmowy'], ['supertonic', 'Supertonic 3 (VoxNemesis) — CPU / GPU'], ['xtts', 'XTTS v2 (TTS2) — serwer :8000'],
-      ['audio8', 'Audio8 ONNX INT8 — serwer :9300'], ['f5', 'Lektor Marek (F5-TTS) — serwer :9400'], ['pocket', 'Pocket-TTS-PL — serwer :9200'], ['omnivoice', 'OmniVoice — serwer :9100'], ['kokoro', 'Kokoro — serwer :9500']] },
-    { k: 'supertonicVoice', t: 'select', def: 'Supertonic M1', label: 'Supertonic — głos', hint: '4 głosy wbudowane w model', st: true, options: [
-      ['Supertonic M1', 'Męski 1'], ['Supertonic M2', 'Męski 2'], ['Supertonic F1', 'Żeński 1'], ['Supertonic F2', 'Żeński 2']] },
-    { k: 'engineBackend', t: 'select', def: 'cpu', label: 'Supertonic — sprzęt', hint: 'Karta graficzna liczy kilka–kilkanaście razy szybciej. Gdy GPU nie działa, silnik sam wraca na CPU.', st: true, options: [
-      ['cpu', 'CPU — procesor'], ['igpu', 'GPU zintegrowana (np. AMD Radeon / Intel)'], ['gpu', 'GPU dedykowana (np. NVIDIA)']] },
-    { k: 'supertonicSteps', t: 'select', num: true, def: 4, label: 'Supertonic — jakość', hint: 'Kroki syntezy: więcej = lepszy głos, ale wolniej. Wolny procesor: 2–3.', st: true, options: [
-      ['2', '2 — najszybciej'], ['3', '3 — szybko'], ['4', '4 — zalecane'], ['5', '5'], ['6', '6 — lepiej'], ['8', '8 — wolniej'], ['10', '10 — najlepsza']] }
-  ]},
+  // [FIX 2026-11-02] bez dubli: silnik, głos, sprzęt i jakość Supertonic wybiera się TYLKO w popupie („🗣 Silnik mowy”).
+  // Tu zostały narzędzia, których popup nie ma: test lektora, restart Supertonic, instrukcja NVIDIA i stan silnika.
+  { sec: '🗣 Silnik mowy — narzędzia', id: 'engineSec', sub: 'Silnik, głos, sprzęt (CPU / GPU) i jakość wybierasz w popupie, w karcie „🗣 Silnik mowy”. Tu: test lektora, restart silnika Supertonic i jego stan.', items: [] },
   // [AGENT-EXP] 2026-10-17: sekcja „🎙 Silnik lektora” usunięta — silnik i głos wybiera się w popupie
   // (🗣 Silnik mowy + Głos); buforowanie w pauzie / w tle też jest w popupie.
   { sec: '⏩ Tempo', sub: 'Jak lektor nadąża za przyspieszonym filmem (np. 1.5×).', items: [
@@ -934,18 +926,20 @@ function buildExport() {
 // ---------------- [VOX] Silnik mowy: test, restart, stan Supertonic ----------------
 // Wzór: buildEngineTools / refreshEngine ze strony ustawień VoxNemesis.
 let engineLive = null;
+// [FIX 2026-11-02] silnik i sprzęt czytane ze storage (pola wyboru są tylko w popupie)
+const engineState = { engine: 'matcha', backend: 'cpu' };
+const ENGINE_NAMES = { matcha: 'Matcha-TTS-PL 🌐', sherpa: 'Sherpa / Piper', browser: 'Głos przeglądarki', supertonic: 'Supertonic 3',
+  server: 'Serwer lokalny — własny adres', xtts: 'XTTS v2 (serwer :8000)', audio8: 'Audio8 ONNX (serwer :9300)', f5: 'Lektor Marek F5-TTS (serwer :9400)',
+  pocket: 'Pocket-TTS-PL (serwer :9200)', omnivoice: 'OmniVoice (serwer :9100)', kokoro: 'Kokoro (serwer :9500)' };
 function syncEngineRows() {
-  const eng = fields.ttsEngine && fields.ttsEngine.input.value;
-  Object.keys(fields).forEach((k) => {
-    const f = fields[k];
-    if (!f.def || !f.def.st) return;
-    const row = f.input.closest('.row');
-    if (row) row.style.opacity = eng === 'supertonic' ? '' : '.5';
+  chrome.storage.local.get(['ttsEngine', 'engineBackend'], (r) => {
+    engineState.engine = (r && r.ttsEngine) || 'matcha';
+    engineState.backend = (r && r.engineBackend) || 'cpu';
+    refreshEngine();
   });
-  refreshEngine();
 }
 function describeSupertonic(r) {
-  const want = { cpu: 'CPU', igpu: 'GPU zintegrowana', gpu: 'GPU dedykowana' }[(fields.engineBackend && fields.engineBackend.input.value) || 'cpu'];
+  const want = { cpu: 'CPU', igpu: 'GPU zintegrowana', gpu: 'GPU dedykowana' }[engineState.backend] || 'CPU';
   if (!r || !r.running || !r.loaded) {
     return { cls: '', txt: 'Supertonic: ' + want + ' · silnik uruchomi się przy pierwszej kwestii (albo kliknij ▶ Test lektora).'
       + (r && r.running && r.isolated === false ? '\n⚠ Brak izolacji COOP/COEP — CPU liczy na 1 wątku.' : '') };
@@ -969,10 +963,10 @@ function describeSupertonic(r) {
 }
 function refreshEngine() {
   if (!engineLive) return;
-  const eng = fields.ttsEngine && fields.ttsEngine.input.value;
+  const eng = engineState.engine;
   if (eng !== 'supertonic') {
     engineLive.className = 'live';
-    engineLive.textContent = 'Aktywny silnik: ' + (fields.ttsEngine ? fields.ttsEngine.input.selectedOptions[0].textContent : '—') + '.';
+    engineLive.textContent = 'Aktywny silnik: ' + (ENGINE_NAMES[eng] || eng) + ' (zmiana: popup → „🗣 Silnik mowy”).';
     return;
   }
   try {
@@ -1022,8 +1016,6 @@ function buildEngineTools() {
     });
   });
   nvidia.addEventListener('click', () => chrome.tabs.create({ url: chrome.runtime.getURL('supertonic/GPU-NVIDIA-instrukcja.txt') }));
-  fields.ttsEngine.input.addEventListener('change', () => setTimeout(syncEngineRows, 0));
-  fields.engineBackend.input.addEventListener('change', () => setTimeout(refreshEngine, 400));
   setInterval(() => { if (!document.hidden) refreshEngine(); }, 2000);
 }
 
@@ -1290,5 +1282,5 @@ chrome.storage.onChanged.addListener((ch, area) => {
     }
     touched = true;
   });
-  if (touched && (ch.ttsEngine || ch.engineBackend)) syncEngineRows();
+  if (ch.ttsEngine || ch.engineBackend) syncEngineRows();   // [FIX 2026-11-02] pola są w popupie — stan ze storage
 });

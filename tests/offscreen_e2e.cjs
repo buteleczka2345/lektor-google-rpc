@@ -6,7 +6,32 @@
 //   C) czyszczenie z innej karty nie ucina lektora             D) dziennik do storage najwyżej ~1×/s
 //   E) „Czytaj zawsze do końca”: kolejność przyjścia            F) … i pauza filmu dokańcza bieżące zdanie
 //   G) nadrabianie ≤ 1,8× i liczniki pominiętych / opóźnienia (TTS_STATS)
-const http = require('http'), fs = require('fs'), os = require('os'), path = require('path');
+//   H) „Serwer lokalny — własny adres”: JSON do serwera WebSocket (czytanie pilne / nagrywanie do przodu) i odtworzenie WAV
+const http = require('http'), fs = require('fs'), os = require('os'), path = require('path'), crypto = require('crypto');
+
+// Minimalny serwer WebSocket (RFC 6455, jedna ramka na wiadomość): zapisuje JSON-y i odsyła 0,3 s ciszy w WAV.
+function fakeTtsServer() {
+    const got = [];
+    const wav = (() => { const sr = 8000, n = 2400, b = Buffer.alloc(44 + n * 2); b.write('RIFF', 0); b.writeUInt32LE(36 + n * 2, 4); b.write('WAVE', 8);
+        b.write('fmt ', 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(sr, 24); b.writeUInt32LE(sr * 2, 28);
+        b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(n * 2, 40); return b; })();
+    const srv = http.createServer();
+    srv.on('upgrade', (req, sock) => {
+        const acc = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+        sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + acc + '\r\n\r\n');
+        sock.on('data', (d) => {
+            if ((d[0] & 0x0f) !== 1) return;   // tylko ramki tekstowe
+            let len = d[1] & 0x7f, off = 2;
+            if (len === 126) { len = d.readUInt16BE(2); off = 4; } else if (len === 127) { len = Number(d.readBigUInt64BE(2)); off = 10; }
+            const mask = d.slice(off, off + 4), body = Buffer.from(d.slice(off + 4, off + 4 + len).map((x, i) => x ^ mask[i % 4]));
+            try { got.push(JSON.parse(body.toString('utf8'))); } catch (e) { return; }
+            const head = wav.length < 65536 ? Buffer.from([0x82, 126, wav.length >> 8, wav.length & 255]) : null;
+            setTimeout(() => { try { sock.write(Buffer.concat([head, wav])); } catch (e) {} }, 50);
+        });
+        sock.on('error', () => {});
+    });
+    return { srv, got };
+}
 const { chromium } = require('playwright');
 
 const repo = path.resolve(__dirname, '..');
@@ -158,6 +183,21 @@ const check = (name, ok, got) => { console.log((ok ? '  ✓ ' : '  ✗ ') + name
         check('G: licznik pominiętych (nadmiar w kolejce)', s && s.skipped10m >= 1, s);
         check('G: opóźnienie lektora zmierzone', s && s.lagAvgMs != null && s.lagAvgMs >= 0, s);
         await ctx.close(); }
+
+    { const fake = fakeTtsServer();   // H
+        await new Promise((r) => fake.srv.listen(0, '127.0.0.1', r));
+        const S = { ttsEngine: 'server', serverUrl: 'ws://127.0.0.1:' + fake.srv.address().port, serverVoice: 'moj_glos' };
+        const { ctx, page } = await fresh(S);
+        await page.evaluate((b) => window.__send(Object.assign({ action: 'TTS_PRELOAD', id: '5|h1|x', text: 'Nagrywane do przodu przez serwer.', startMs: 5000, endMs: 7000, nowMs: 0, lookaheadMin: 3 }, b)), S);
+        await page.evaluate((b) => window.__send(Object.assign({ action: 'TTS_PLAY', id: '5|h2|x', text: 'Czytane teraz przez serwer.' }, b)), S);
+        await sleep(1500);
+        const pre = fake.got.find((m) => /do przodu/.test(m.text)), live = fake.got.find((m) => /teraz/.test(m.text));
+        check('H: serwer dostał nagrywanie do przodu (pilne: false, głos, speed 1)', !!pre && pre.pilne === false && pre.voice === 'moj_glos' && pre.speed === 1, pre);
+        check('H: serwer dostał kwestię czytaną teraz (pilne: true)', !!live && live.pilne === true, live);
+        const n = await page.evaluate(() => window.__plays.filter((p) => p.src.startsWith('blob:')).length);
+        check('H: odpowiedź serwera (WAV) zagrała', n === 1, n);
+        await ctx.close();
+        fake.srv.close(); }
 
     await browser.close();
     srv.close();

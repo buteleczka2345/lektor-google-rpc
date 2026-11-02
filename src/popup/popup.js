@@ -2071,7 +2071,18 @@ try {
     const dot = document.getElementById('ttsEngineDot');
     const txt = document.getElementById('ttsEngineText');
     if (!sel || !dot || !txt) return;
-    const WS = { matcha: 'ws://127.0.0.1:9000', xtts: 'ws://127.0.0.1:8000', audio8: 'ws://127.0.0.1:9300', f5: 'ws://127.0.0.1:9400', pocket: 'ws://127.0.0.1:9200', omnivoice: 'ws://127.0.0.1:9100', kokoro: 'ws://127.0.0.1:9500' };   // [AGENT-EXP] f5: lektor Marek; 2026-10-27: kokoro
+    const WS = { matcha: 'ws://127.0.0.1:9000', xtts: 'ws://127.0.0.1:8000', audio8: 'ws://127.0.0.1:9300', f5: 'ws://127.0.0.1:9400', pocket: 'ws://127.0.0.1:9200', omnivoice: 'ws://127.0.0.1:9100', kokoro: 'ws://127.0.0.1:9500', server: 'ws://127.0.0.1:9000' };   // [AGENT-EXP] f5: lektor Marek; 2026-10-27: kokoro; [FIX 2026-11-02] server = adres z pola
+    // [FIX 2026-11-02] „Serwer lokalny — własny adres”: pole adresu (widoczne przy tym silniku) + kropka sprawdza wpisany adres
+    const srvRow = document.getElementById('srvRow'), srvUrl = document.getElementById('serverUrlInput');
+    const srvShow = () => { if (srvRow) srvRow.style.display = sel.value === 'server' ? '' : 'none'; };
+    chrome.storage.local.get('serverUrl', (r) => { WS.server = (r && r.serverUrl) || 'ws://127.0.0.1:9000'; if (srvUrl) srvUrl.value = WS.server; });
+    if (srvUrl) srvUrl.addEventListener('change', () => {
+        const v = srvUrl.value.trim();
+        if (!/^wss?:\/\/[^\s]+$/i.test(v)) { srvUrl.value = WS.server; return; }   // tylko ws:// albo wss://
+        WS.server = v;
+        chrome.storage.local.set({ serverUrl: v });
+        probe();
+    });
     let probeNo = 0;
     // [AGENT-EXP] 2026-10-24: Matcha z głosem 🌐 'web:…' liczy w rozszerzeniu — nie sprawdzaj serwera :9000.
     let matchaWeb = true;
@@ -2104,12 +2115,13 @@ try {
     }
     chrome.storage.local.get('ttsEngine', (r) => {
         const v = r && r.ttsEngine;
-        sel.value = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'].indexOf(v) >= 0 ? v : 'matcha';   // [AGENT-EXP] 2026-10-24
+        sel.value = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'server', 'supertonic', 'browser'].indexOf(v) >= 0 ? v : 'matcha';   // [AGENT-EXP] 2026-10-24
+        srvShow();
         probe();
     });
-    sel.addEventListener('change', () => { chrome.storage.local.set({ ttsEngine: sel.value }); probe(); });
+    sel.addEventListener('change', () => { chrome.storage.local.set({ ttsEngine: sel.value }); srvShow(); probe(); });
     chrome.storage.onChanged.addListener((ch, area) => {
-        if (area === 'local' && ch.ttsEngine && ch.ttsEngine.newValue && ch.ttsEngine.newValue !== sel.value) { sel.value = ch.ttsEngine.newValue; probe(); }
+        if (area === 'local' && ch.ttsEngine && ch.ttsEngine.newValue && ch.ttsEngine.newValue !== sel.value) { sel.value = ch.ttsEngine.newValue; srvShow(); probe(); }
     });
     setInterval(() => { if (WS[sel.value] && !(sel.value === 'matcha' && matchaWeb)) probe(true); }, 4000);   // [AGENT-EXP] 2026-10-24
 })();
@@ -2141,6 +2153,7 @@ try {
         omnivoice: { k: 'omnivoiceVoice', def: 'male, young adult, moderate pitch', label: 'Głos OmniVoice', list: OMNI },
         kokoro: { k: 'kokoroVoice', def: 'pm_mateusz', label: 'Głos Kokoro', list: KOKORO },   // [AGENT-EXP] 2026-10-27
         audio8: { k: 'audio8Voice', def: 'default', label: 'Głos Audio8 (ID katalogu w voices\\)', text: true },
+        server: { k: 'serverVoice', def: '', label: 'Głos na serwerze (ID; puste = domyślny serwera)', text: true, allowEmpty: true },   // [FIX 2026-11-02]
         // [VOX] 2026-10-20: Supertonic 3 — 4 głosy wbudowane w model (VoxNemesis)
         supertonic: { k: 'supertonicVoice', def: 'Supertonic M1', label: 'Głos Supertonic', list: [['Supertonic M1', 'Męski 1'], ['Supertonic M2', 'Męski 2'], ['Supertonic F1', 'Żeński 1'], ['Supertonic F2', 'Żeński 2']] },
         // [AGENT-EXP] 2026-10-21: 🗣 głosy przeglądarki — lista z dokumentu lektora (BROWSER_TTS_VOICES), '' = automatycznie
@@ -2178,7 +2191,7 @@ try {
         });
     }
     sel.addEventListener('change', () => { if (cur && !cur.text) chrome.storage.local.set({ [cur.k]: sel.value }); });
-    txt.addEventListener('change', () => { if (cur && cur.text) chrome.storage.local.set({ [cur.k]: txt.value.trim() || cur.def }); });
+    txt.addEventListener('change', () => { if (cur && cur.text) chrome.storage.local.set({ [cur.k]: cur.allowEmpty ? txt.value.trim() : (txt.value.trim() || cur.def) }); });   // [FIX 2026-11-02] allowEmpty
     eng.addEventListener('change', render);
     chrome.storage.onChanged.addListener((ch, area) => {
         if (area === 'local' && (ch.ttsEngine || (cur && ch[cur.k]))) setTimeout(render, 0);

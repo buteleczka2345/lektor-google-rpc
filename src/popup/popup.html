@@ -68,18 +68,29 @@
             </div>
             <select id="ttsEngineSelect">
                 <!-- [AGENT-EXP] 2026-10-24: Matcha 🌐 domyślna (na górze); Sherpa bez wbudowanego głosu — tylko pobrane/własne -->
+                <!-- [FIX 2026-11-02] dwie grupy: bez serwera / jeden silnik serwerowy (własny adres + gotowe ustawienia znanych serwerów) -->
+                <optgroup label="W przeglądarce — bez serwera">
                 <option value="matcha">Matcha-TTS-PL 🌐 — w przeglądarce (domyślny) lub serwer :9000</option>
                 <option value="sherpa">Sherpa / Piper — pobrane głosy (Języki świata)</option>
                 <!-- [AGENT-EXP] 2026-10-21: 🗣 Web Speech API (jak DubMog Standard) -->
                 <option value="browser">Głos przeglądarki (Google / Microsoft) — darmowy, bez serwera</option>
                 <option value="supertonic">Supertonic 3 (VoxNemesis) — wbudowany, CPU / GPU</option>
-                <option value="xtts">XTTS v2 (TTS2) — serwer :8000</option>
-                <option value="audio8">Audio8 ONNX INT8 — serwer :9300 (wolny)</option>
-                <option value="f5">Lektor Marek (F5-TTS) — serwer :9400</option>
-                <option value="pocket">Pocket-TTS-PL — serwer :9200</option>
-                <option value="omnivoice">OmniVoice — serwer :9100 (GPU)</option>
-                <option value="kokoro">Kokoro — serwer :9500 (GPU)</option>
+                </optgroup>
+                <optgroup label="Serwer lokalny (WebSocket)">
+                <option value="server">Serwer lokalny — własny adres</option>
+                <option value="xtts">XTTS v2 (TTS2) — :8000</option>
+                <option value="audio8">Audio8 ONNX INT8 — :9300 (wolny)</option>
+                <option value="f5">Lektor Marek (F5-TTS) — :9400</option>
+                <option value="pocket">Pocket-TTS-PL — :9200</option>
+                <option value="omnivoice">OmniVoice — :9100 (GPU)</option>
+                <option value="kokoro">Kokoro — :9500 (GPU)</option>
+                </optgroup>
             </select>
+            <div id="srvRow" class="field" style="display:none;">
+                <label class="field-label" for="serverUrlInput">Adres serwera (ws://…)</label>
+                <input type="text" id="serverUrlInput" class="text-input" placeholder="ws://127.0.0.1:9000" spellcheck="false">
+                <div class="footnote">Serwer dostaje JSON {text, voice, speed, pilne} i odsyła plik WAV — tak jak XTTS, Pocket czy Kokoro.</div>
+            </div>
             <div class="footnote" id="ttsEngineHint">Zielona kropka = serwer odpowiada. Najpierw uruchom serwer (np. start_xtts_auto.bat w folderze tts2).</div>
             <!-- [AGENT-EXP] 2026-10-17: głos dla wybranego silnika (przeniesione ze strony Ustawienia) -->
             <!-- [AGENT-EXP] 2026-10-24: wariant Matcha w przeglądarce (głosy 🌐) — tylko 2 (test: reszta wolniejsza) -->

@@ -131,21 +131,17 @@ function poolSize() {
 let sherpaPool = [];          // elementy: { worker, ready, busy, pending, t0, lastUsed }
 const audioCache = new Map();
 const matchaSockets = new Set();
-// [AGENT-EXP] Śledzimy połączenia XTTS, aby pauza i zmiana silnika mogły przerwać oczekujące syntezy.
-const xttsSockets = new Set();
-// [AGENT-EXP] Żądania Audio8 również są anulowane przy pauzie i zmianie silnika/głosu.
-const audio8Sockets = new Set();
-// [AGENT-EXP] Pocket-TTS-PL — własne zestawy połączeń (czytane teraz / nagrywane do przodu).
-const pocketSockets = new Set(), pocketPreloadSockets = new Set();
-const omnivoiceSockets = new Set(), omnivoicePreloadSockets = new Set();   // [AGENT-EXP] OmniVoice
-const kokoroSockets = new Set(), kokoroPreloadSockets = new Set();   // [AGENT-EXP] 2026-10-27 Kokoro
 // [AGENT-EXP] 2026-10-17: osobne zestawy połączeń dla NAGRYWANIA DO PRZODU (preload). Pauza / przewinięcie /
 // TTS_CLEAR_BUFFER przerywają tylko syntezę „na gorąco”; preload przerywa dopiero zmiana silnika lub głosu.
 // Wcześniej pauza kasowała nagrane do przodu kwestie, a skrypty strony uważały je za nagrane → od tej chwili
 // wszystko syntezowane w chwili czytania (XTTS nie nadąża → lektor milknie).
-const matchaPreloadSockets = new Set(), xttsPreloadSockets = new Set(), audio8PreloadSockets = new Set();
+const matchaPreloadSockets = new Set();
+// [FIX 2026-11-02] JEDEN silnik serwerowy: połączenia każdego serwera w jednej tabeli — [czytane teraz, nagrywane do przodu]
+// (F5 dzieli zestaw z XTTS). Wcześniej osobne zmienne i osobne funkcje anulowania dla każdego z 7 serwerów.
+const REMOTE_SOCKETS = { xtts: [new Set(), new Set()], audio8: [new Set(), new Set()], pocket: [new Set(), new Set()],
+    omnivoice: [new Set(), new Set()], kokoro: [new Set(), new Set()], server: [new Set(), new Set()] };
 function cancelRemotePreloads() {
-    for (const set of [matchaPreloadSockets, xttsPreloadSockets, audio8PreloadSockets, pocketPreloadSockets, omnivoicePreloadSockets, kokoroPreloadSockets]) {
+    for (const set of [matchaPreloadSockets].concat(Object.keys(REMOTE_SOCKETS).map((k) => REMOTE_SOCKETS[k][1]))) {
         for (const socket of set) { try { socket.close(); } catch (e) {} }
         set.clear();
     }
@@ -282,15 +278,11 @@ function resumeAudioCtx() {
 function applySettings(s) {
     if (!s || typeof s !== 'object') return;
     if (s.ttsEngine !== undefined) {
-        const nextEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'].indexOf(s.ttsEngine) >= 0 ? s.ttsEngine : 'matcha';   // [AGENT-EXP] 2026-10-24
+        const nextEngine = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'server', 'supertonic', 'browser'].indexOf(s.ttsEngine) >= 0 ? s.ttsEngine : 'matcha';   // [AGENT-EXP] 2026-10-24
         if (nextEngine !== ttsEngine) {
             ttsEngine = nextEngine;
             cancelMatchaRequests();
-            cancelXttsRequests();
-            cancelAudio8Requests();
-            cancelPocketRequests();
-            cancelOmnivoiceRequests();
-            cancelKokoroRequests();   // [AGENT-EXP] 2026-10-27
+            cancelRemoteLive();       // [FIX 2026-11-02] wszystkie serwery naraz
             cancelRemotePreloads();   // [AGENT-EXP]
             cancelSupertonicPreloads();   // [VOX]
             // [VOX] inny silnik → Supertonic zwalnia workery / kartę (model zostaje pobrany na dysku)
@@ -305,8 +297,8 @@ function applySettings(s) {
         const nextVoice = typeof s.tts2Voice === 'string' ? s.tts2Voice : '';
         if (nextVoice !== tts2Voice) {
             tts2Voice = nextVoice;
-            if (ttsEngine === 'xtts') {
-                cancelXttsRequests();
+            if (ttsEngine === 'xtts' || ttsEngine === 'f5') {   // [FIX 2026-11-02] F5 ma tę samą próbkę głosu
+                cancelRemoteLive('xtts');
                 cancelRemotePreloads();   // [AGENT-EXP]
                 clearTtsPlayback();
             }
@@ -320,8 +312,7 @@ function applySettings(s) {
         if (nextVoice !== audio8Voice) {
             audio8Voice = nextVoice;
             if (ttsEngine === 'audio8') {
-                cancelAudio8Requests();
-                cancelPocketRequests();
+                cancelRemoteLive('audio8');
                 cancelRemotePreloads();   // [AGENT-EXP]
                 clearTtsPlayback();
             }
@@ -335,7 +326,7 @@ function applySettings(s) {
         if (nextVoice !== pocketVoice) {
             pocketVoice = nextVoice;
             if (ttsEngine === 'pocket') {
-                cancelPocketRequests();
+                cancelRemoteLive('pocket');
                 cancelRemotePreloads();
                 clearTtsPlayback();
             }
@@ -349,7 +340,7 @@ function applySettings(s) {
         if (nextVoice !== kokoroVoice) {
             kokoroVoice = nextVoice;
             if (ttsEngine === 'kokoro') {
-                cancelKokoroRequests();
+                cancelRemoteLive('kokoro');
                 cancelRemotePreloads();
                 clearTtsPlayback();
             }
@@ -376,11 +367,27 @@ function applySettings(s) {
         if (nextVoice !== omnivoiceVoice) {
             omnivoiceVoice = nextVoice;
             if (ttsEngine === 'omnivoice') {
-                cancelOmnivoiceRequests();
+                cancelRemoteLive('omnivoice');
                 cancelRemotePreloads();
                 clearTtsPlayback();
             }
             offLogPush('omnivoice-voice', nextVoice || 'losowy');
+        }
+    }
+    // [FIX 2026-11-02] Serwer lokalny — własny adres (ws:// / wss://) i głos; zmiana czyści bufor poprzedniego serwera
+    if (s.serverUrl !== undefined || s.serverVoice !== undefined) {
+        const nu = s.serverUrl === undefined ? serverUrl
+            : (/^wss?:\/\/[^\s]+$/i.test(String(s.serverUrl || '').trim()) ? String(s.serverUrl).trim() : 'ws://127.0.0.1:9000');
+        const nv = s.serverVoice === undefined ? serverVoice : String(s.serverVoice || '').trim();
+        if (nu !== serverUrl || nv !== serverVoice) {
+            serverUrl = nu;
+            serverVoice = nv;
+            if (ttsEngine === 'server') {
+                cancelRemoteLive('server');
+                cancelRemotePreloads();
+                clearTtsPlayback();
+            }
+            offLogPush('server', nu + (nv ? ' · ' + nv : ''));
         }
     }
     // [VOX] Supertonic: zmiana głosu lub jakości czyści bufor poprzedniego głosu.
@@ -493,57 +500,8 @@ function applySettings(s) {
 // połączenie, żeby odpowiedzi równoległych kwestii nie pomyliły się ze sobą.
 function matchaSynthesize(text, sockets = matchaSockets, pilne = false, ticket = null) {   // [AGENT-EXP] sockets: preload osobno; pilne: czytana TERAZ
     if (/^web:/.test(matchaVoice)) return matchaWebSynthesize(text, pilne, ticket);   // [AGENT-EXP] 2026-10-24: w przeglądarce, bez WebSocketu
-    return new Promise((resolve, reject) => {
-        let socket;
-        let settled = false;
-        const finish = (error, blob) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            if (socket) {
-                sockets.delete(socket);
-                try { socket.close(); } catch (e) {}
-            }
-            if (error) reject(error);
-            else resolve(blob);
-        };
-        const limitMs = pilne ? 120000 : REMOTE_PRELOAD_TIMEOUT_MS;
-        const timer = setTimeout(() => finish(new Error('Matcha nie odpowiedział w ciągu ' + Math.round(limitMs / 1000) + ' s.')), limitMs);
-        try {
-            socket = new WebSocket(MATCHA_WS_URL);
-            sockets.add(socket);
-            socket.binaryType = 'arraybuffer';
-        } catch (err) {
-            finish(new Error('Nie można połączyć z lokalnym Matcha-TTS: ' + errMsg(err)));
-            return;
-        }
-        socket.onopen = () => {
-            try {
-                socket.send(JSON.stringify({ text, voice: matchaVoice, speed: 1, pilne: !!pilne }));   // [AGENT-EXP] 2026-10-17: głos z popupu (było na sztywno 'synthetic')
-            } catch (err) {
-                finish(new Error('Nie udało się wysłać tekstu do Matcha-TTS: ' + errMsg(err)));
-            }
-        };
-        socket.onmessage = (event) => {
-            if (typeof event.data === 'string') {
-                let response;
-                try { response = JSON.parse(event.data); }
-                catch (err) { finish(new Error('Serwer Matcha zwrócił nieprawidłową odpowiedź.')); return; }
-                finish(new Error(String((response && response.error) || 'Serwer Matcha nie zwrócił pliku WAV.')));
-                return;
-            }
-            const blob = event.data instanceof Blob ? event.data : new Blob([event.data], { type: 'audio/wav' });
-            if (blob.size < 44) {
-                finish(new Error('Serwer Matcha zwrócił pusty lub nieprawidłowy plik WAV.'));
-                return;
-            }
-            finish(null, blob);
-        };
-        socket.onerror = () => finish(new Error('Nie można połączyć z Matcha-TTS. Uruchom serwer serwer\\uruchom_serwer.bat.'));
-        socket.onclose = () => {
-            if (!settled) finish(new Error('Połączenie z Matcha-TTS zostało przerwane.'));
-        };
-    });
+    // [FIX 2026-11-02] serwer Matcha (:9000) — ta sama funkcja co pozostałe serwery (wcześniej osobna kopia obsługi WebSocketu)
+    return synthesizeRemoteWav(MATCHA_WS_URL, sockets, { text, voice: matchaVoice, speed: 1, pilne: !!pilne }, 'Matcha-TTS', pilne ? 120000 : REMOTE_PRELOAD_TIMEOUT_MS);
 }
 
 // [AGENT-EXP] XTTS i Audio8 używają JSON WebSocket i zwracają kompletny plik WAV.
@@ -610,80 +568,42 @@ function synthesizeRemoteWav(url, sockets, payload, engineName, timeoutMs) {
     });
 }
 
-// [AGENT-EXP] TTS2 oczekuje JSON {text, voice, pilne}; kwestia czytana teraz czeka do 120 s, zapas do 1 h.
-function xttsSynthesize(text, voice, sockets = xttsSockets, pilne = false) {   // [AGENT-EXP] sockets: preload osobno
-    return synthesizeRemoteWav(
-        XTTS_WS_URL, sockets, { text, voice: voice || '', pilne: !!pilne }, 'XTTS', pilne ? 120000 : REMOTE_PRELOAD_TIMEOUT_MS
-    );
+// [FIX 2026-11-02] JEDEN silnik serwerowy (WebSocket: JSON {text, voice, …, pilne} → WAV) — tabela zamiast 7 kopii kodu.
+// pilne = kwestia czytana TERAZ (serwer liczy ją przed nagrywanymi do przodu); speed: 1, bo tempo ustawia odtwarzacz.
+// set: zestaw połączeń; split: długie kwestie dzielone na części ≤ 1900 znaków (limit serwerów 2000; XTTS i F5 dzielą same);
+// live / pre: ile czekać na kwestię czytaną teraz / nagrywaną do przodu (cały film może stać w kolejce serwera).
+// „server” = Serwer lokalny — własny adres (popup): dowolny serwer z tym samym protokołem, adres i głos do wpisania.
+let serverUrl = 'ws://127.0.0.1:9000', serverVoice = '';
+const REMOTE = {
+    xtts: { url: () => XTTS_WS_URL, name: 'XTTS', label: 'XTTS (TTS2)', set: 'xtts', split: false, live: 120000, pre: REMOTE_PRELOAD_TIMEOUT_MS,
+        body: (t) => ({ text: t, voice: tts2Voice || '' }) },
+    f5: { url: () => F5_WS_URL, name: 'F5-TTS (Marek)', label: 'F5-TTS (Marek)', set: 'xtts', split: false, live: 300000, pre: REMOTE_PRELOAD_TIMEOUT_MS,
+        body: (t) => ({ text: t, voice: tts2Voice || '' }) },
+    audio8: { url: () => AUDIO8_WS_URL, name: 'Audio8', label: 'Audio8 ONNX', set: 'audio8', split: true, live: AUDIO8_TIMEOUT_MS,
+        pre: 4 * REMOTE_PRELOAD_TIMEOUT_MS,   // wolny model (RTF 3–5 na CPU): cały film w kolejce może trwać godzinami
+        body: (t) => ({ text: t, voice: audio8Voice || 'default', speed: 1 }) },
+    pocket: { url: () => POCKET_WS_URL, name: 'Pocket-TTS-PL', label: 'Pocket-TTS-PL', set: 'pocket', split: true, live: 120000, pre: 60 * 60 * 1000,
+        body: (t) => ({ text: t, voice: pocketVoice || 'ref', speed: 1 }) },
+    omnivoice: { url: () => OMNIVOICE_WS_URL, name: 'OmniVoice', label: 'OmniVoice', set: 'omnivoice', split: true, live: 120000, pre: 60 * 60 * 1000,
+        // czas_ms = miejsce kwestii w filmie — serwer pokazuje je w terminalu (np. 20:05)
+        body: (t, msg) => { const b = { text: t, voice: omnivoiceVoice || '', speed: 1 }; const c = msg ? omnivoiceCzasMs(msg) : undefined;
+            if (typeof c === 'number' && c >= 0) b.czas_ms = Math.round(c); return b; } },
+    kokoro: { url: () => KOKORO_WS_URL, name: 'Kokoro', label: 'Kokoro', set: 'kokoro', split: true, live: 120000, pre: REMOTE_PRELOAD_TIMEOUT_MS,
+        body: (t) => ({ text: t, voice: kokoroVoice || 'pm_mateusz', speed: 1 }) },
+    server: { url: () => serverUrl, name: 'Serwer lokalny', label: 'Serwer lokalny', set: 'server', split: true, live: 120000, pre: REMOTE_PRELOAD_TIMEOUT_MS,
+        body: (t) => ({ text: t, voice: serverVoice || '', speed: 1 }) }
+};
+function remoteSynth(eng, text, pilne, msg) {
+    const c = REMOTE[eng], sets = REMOTE_SOCKETS[c.set];
+    return synthesizeRemoteWav(c.url(), pilne ? sets[0] : sets[1], Object.assign(c.body(text, msg), { pilne: !!pilne }), c.name, pilne ? c.live : c.pre);
 }
-
-// [AGENT-EXP] 2026-10-17: F5-TTS „Marek” — połączenia liczone razem z XTTS (te same zestawy do anulowania).
-function f5Synthesize(text, voice, sockets = xttsSockets, pilne = false) {   // voice: ta sama próbka co XTTS (tts2Voice)
-    // [AGENT-EXP] pilne: kwestia czytana TERAZ (TTS_PLAY) — serwer liczy ją przed nagrywanymi do przodu
-    return synthesizeRemoteWav(F5_WS_URL, sockets, { text, voice: voice || '', pilne: !!pilne }, 'F5-TTS (Marek)',
-        pilne ? 300000 : REMOTE_PRELOAD_TIMEOUT_MS);
-}
-
-// [AGENT-EXP] Audio8 ma podobny protokół, przyjmuje również speed; jego CPU-synteza jest wolniejsza.
-function audio8Synthesize(text, voice, sockets = audio8Sockets, pilne = false) {   // [AGENT-EXP] sockets: preload osobno
-    return synthesizeRemoteWav(
-        AUDIO8_WS_URL, sockets, { text, voice: voice || 'default', speed: 1, pilne: !!pilne }, 'Audio8',
-        pilne ? AUDIO8_TIMEOUT_MS : 4 * REMOTE_PRELOAD_TIMEOUT_MS   // wolny model: cały film w kolejce może trwać godzinami
-    );
-}
-
-// [AGENT-EXP] Pocket-TTS-PL. pilne = kwestia czytana TERAZ — serwer liczy ją przed nagrywanymi do przodu.
-// speed: 1, bo tempo ustawia odtwarzacz.
-function pocketSynthesize(text, voice, sockets = pocketSockets, pilne = false) {
-    return synthesizeRemoteWav(
-        POCKET_WS_URL, sockets, { text, voice: voice || 'ref', speed: 1, pilne: !!pilne }, 'Pocket-TTS-PL',
-        pilne ? 120000 : 60 * 60 * 1000   // zapas: cały film czeka w kolejce serwera (nawet ~300 kwestii)
-    );
-}
-
-// [AGENT-EXP] Zatrzymuje oczekujące żądania do Pocket-TTS-PL (tylko „na gorąco”, nie preload).
-function cancelPocketRequests() {
-    for (const socket of pocketSockets) {
-        try { socket.close(); } catch (e) {}
+// Zatrzymuje oczekujące żądania „na gorąco” (nie nagrywanie do przodu): jednego zestawu albo wszystkich serwerów.
+function cancelRemoteLive(set) {
+    for (const k of (set ? [set] : Object.keys(REMOTE_SOCKETS))) {
+        const live = REMOTE_SOCKETS[k][0];
+        for (const socket of live) { try { socket.close(); } catch (e) {} }
+        live.clear();
     }
-    pocketSockets.clear();
-}
-
-// [AGENT-EXP] OmniVoice (GPU, RTF ~1 na RTX 3050). pilne = kwestia czytana TERAZ — serwer liczy ją przed zapasem.
-// speed: 1, bo tempo ustawia odtwarzacz.
-// [AGENT-EXP] 2026-10-17: czas_ms = miejsce kwestii w filmie — serwer pokazuje je w terminalu (np. 20:05).
-function omnivoiceSynthesize(text, voice, sockets = omnivoiceSockets, pilne = false, czasMs) {
-    const payload = { text, voice: voice || '', speed: 1, pilne: !!pilne };
-    if (typeof czasMs === 'number' && czasMs >= 0) payload.czas_ms = Math.round(czasMs);
-    return synthesizeRemoteWav(
-        OMNIVOICE_WS_URL, sockets, payload, 'OmniVoice',
-        pilne ? 120000 : 60 * 60 * 1000   // zapas czeka w kolejce serwera (liczy jedną kwestię naraz)
-    );
-}
-
-// [AGENT-EXP] Zatrzymuje oczekujące żądania do OmniVoice (tylko „na gorąco”, nie preload).
-function cancelOmnivoiceRequests() {
-    for (const socket of omnivoiceSockets) {
-        try { socket.close(); } catch (e) {}
-    }
-    omnivoiceSockets.clear();
-}
-
-// [AGENT-EXP] 2026-10-27 Kokoro (GPU, ~15× szybciej niż mowa na RTX 3050). pilne = kwestia czytana TERAZ.
-// speed: 1, bo tempo ustawia odtwarzacz.
-function kokoroSynthesize(text, voice, sockets = kokoroSockets, pilne = false) {
-    return synthesizeRemoteWav(
-        KOKORO_WS_URL, sockets, { text, voice: voice || 'pm_mateusz', speed: 1, pilne: !!pilne }, 'Kokoro',
-        pilne ? 120000 : REMOTE_PRELOAD_TIMEOUT_MS
-    );
-}
-
-// [AGENT-EXP] Zatrzymuje oczekujące żądania do Kokoro (tylko „na gorąco”, nie preload).
-function cancelKokoroRequests() {
-    for (const socket of kokoroSockets) {
-        try { socket.close(); } catch (e) {}
-    }
-    kokoroSockets.clear();
 }
 
 function cancelMatchaRequests() {
@@ -692,22 +612,6 @@ function cancelMatchaRequests() {
     }
     matchaSockets.clear();
     if (mwMod) mwMod.cancelQueued('anulowano', 'urgent');   // [AGENT-EXP] 2026-10-24: Matcha w przeglądarce
-}
-
-// [AGENT-EXP] Anulowanie żądań XTTS zatrzymuje oczekujące syntezy przy pauzie lub zmianie silnika.
-function cancelXttsRequests() {
-    for (const socket of xttsSockets) {
-        try { socket.close(); } catch (e) {}
-    }
-    xttsSockets.clear();
-}
-
-// [AGENT-EXP] Zatrzymuje oczekujące żądania do Audio8.
-function cancelAudio8Requests() {
-    for (const socket of audio8Sockets) {
-        try { socket.close(); } catch (e) {}
-    }
-    audio8Sockets.clear();
 }
 
 function clearTtsPlayback() {
@@ -773,13 +677,14 @@ function ttsDisk() {
     return ttsDiskDb;
 }
 function ttsPersistKey(msg) {
-    const eng = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'supertonic', 'browser'].indexOf(msg.ttsEngine) >= 0 ? msg.ttsEngine : ttsEngine;
+    const eng = ['sherpa', 'matcha', 'xtts', 'audio8', 'f5', 'pocket', 'omnivoice', 'kokoro', 'server', 'supertonic', 'browser'].indexOf(msg.ttsEngine) >= 0 ? msg.ttsEngine : ttsEngine;
     const voice = eng === 'supertonic' ? ((msg.supertonicVoice || supertonicVoice) + '@' + (msg.supertonicSteps || supertonicSteps))   // [VOX]
         : (eng === 'xtts' || eng === 'f5') ? (msg.tts2Voice !== undefined ? msg.tts2Voice : tts2Voice)
         : eng === 'audio8' ? (msg.audio8Voice || audio8Voice)
         : eng === 'pocket' ? (msg.pocketVoice || pocketVoice)
         : eng === 'omnivoice' ? (msg.omnivoiceVoice !== undefined ? msg.omnivoiceVoice : omnivoiceVoice)
         : eng === 'kokoro' ? (msg.kokoroVoice || kokoroVoice)   // [AGENT-EXP] 2026-10-27
+        : eng === 'server' ? ((msg.serverUrl || serverUrl) + '|' + (msg.serverVoice !== undefined ? msg.serverVoice : serverVoice))   // [FIX 2026-11-02]
         : eng === 'matcha' ? ((msg.matchaVoice || matchaVoice) + (/^web:/.test(msg.matchaVoice || matchaVoice) && (msg.matchaWebTryb || matchaWebTryb) === 'cpu_fp32' ? '@fp32' : ''))   // [AGENT-EXP] 2026-10-17: osobne nagrania dla każdego głosu; 2026-10-24: i dla wariantu fp32
         // [FIX 2026-11-02] Sherpa: klucz z ID własnego głosu (wcześniej zawsze ten sam voiceId — po zmianie głosu dysk
         // oddawał kwestie starym głosem) i znacznikiem tempa 1× (stare nagrania mogły mieć tempo z syntezy).
@@ -1525,7 +1430,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // z aktualnym miejscem filmu tej karty (nowMs ze skryptu strony) i aktualnym suwakiem.
 const AHEAD_MIN_MS = 8000;   // suwak 0 = „na bieżąco”: najwyżej kilka sekund (jak full_subs_ondemand)
 const AHEAD_PAST_MS = 1000;  // kwestia skończyła się dawniej niż 1 s temu — nie liczymy
-const AHEAD_ENGINE_KEYS = ['ttsEngine', 'voiceId', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice',
+const AHEAD_ENGINE_KEYS = ['ttsEngine', 'voiceId', 'tts2Voice', 'audio8Voice', 'pocketVoice', 'omnivoiceVoice', 'kokoroVoice', 'matchaVoice', 'serverUrl', 'serverVoice',
     'matchaWebTryb', 'supertonicVoice', 'supertonicSteps', 'engineBackend', 'browserVoice'];
 const aheadGate = { limitMs: 3 * 60000, tabs: new Map(), pending: new Map(), running: new Set(), max: 4, fields: {} };
 let aheadJob = null;   // obietnica syntezy ustawiana przez gałąź TTS_PRELOAD (koniec = wolne miejsce w bramce)
@@ -1640,6 +1545,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.kokoroVoice !== undefined) applySettings({ kokoroVoice: msg.kokoroVoice });   // [AGENT-EXP] 2026-10-27
+        if (msg.serverUrl !== undefined || msg.serverVoice !== undefined) applySettings({ serverUrl: msg.serverUrl, serverVoice: msg.serverVoice });   // [FIX 2026-11-02]
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
         if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
@@ -1667,18 +1573,8 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 : { status: 'error', error: 'Głos przeglądarki: brak Web Speech API (speechSynthesis)' }));
             return true;
         }
-        // [AGENT-EXP] Nie inicjuj Sherpa, gdy wybrany jest serwer XTTS / F5.
-        if (ttsEngine === 'xtts' || ttsEngine === 'f5') {
-            sendResponse({ status: 'initialized', engine: ttsEngine });
-            return true;
-        }
-        // [AGENT-EXP] Audio8 działa jako osobny serwer i nie wymaga inicjalizacji Sherpa.
-        if (ttsEngine === 'audio8') {
-            sendResponse({ status: 'initialized', engine: 'audio8' });
-            return true;
-        }
-        // [AGENT-EXP] Pocket-TTS-PL, OmniVoice i Kokoro działają jako osobne serwery — bez inicjalizacji Sherpa.
-        if (ttsEngine === 'pocket' || ttsEngine === 'omnivoice' || ttsEngine === 'kokoro') {
+        // [FIX 2026-11-02] serwery lokalne (XTTS, F5, Audio8, Pocket, OmniVoice, Kokoro, własny adres) — bez inicjalizacji Sherpa
+        if (REMOTE[ttsEngine]) {
             sendResponse({ status: 'initialized', engine: ttsEngine });
             return true;
         }
@@ -1710,6 +1606,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.kokoroVoice !== undefined) applySettings({ kokoroVoice: msg.kokoroVoice });   // [AGENT-EXP] 2026-10-27
+        if (msg.serverUrl !== undefined || msg.serverVoice !== undefined) applySettings({ serverUrl: msg.serverUrl, serverVoice: msg.serverVoice });   // [FIX 2026-11-02]
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
         if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
@@ -1757,124 +1654,30 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                 });
             return true;
         }
-        // [AGENT-EXP] XTTS serwer sam dzieli długie teksty na bezpieczne fragmenty. F5 — tak samo.
-        if (ttsEngine === 'xtts' || ttsEngine === 'f5') {
-            const { id } = msg;
+        // [FIX 2026-11-02] serwery lokalne — jedna gałąź (wcześniej 5 kopii). XTTS / F5 dzielą długie teksty same;
+        // pozostałe mają limit 2000 znaków — dłuższa kwestia będzie liczona częściami przy czytaniu.
+        if (REMOTE[ttsEngine]) {
+            const eng = ttsEngine, c = REMOTE[eng];
             const text = censoredText(msg.text);
             if (!text || text.length < 2) {
                 sendResponse({ status: 'muted' });
                 return true;
             }
-            sendResponse({ status: 'preloading_' + ttsEngine });
-            aheadJob = (ttsEngine === 'f5' ? f5Synthesize(text, tts2Voice, xttsPreloadSockets) : xttsSynthesize(text, tts2Voice, xttsPreloadSockets))   // [AGENT-EXP] preload: pauza go nie przerywa
-                .then((blob) => {
-                    cacheRemoteTtsBlob(id, blob);
-                    recCapture(msg, blob).catch(() => {});
-                    offLogPush('xtts-preload', String(id || '').slice(0, 40));
-                })
-                .catch((err) => {
-                    console.error('[Offscreen] XTTS preload:', err);
-                    offLogPush('xtts-preload-fail', errMsg(err));
-                });
-            return true;
-        }
-        // [AGENT-EXP] OmniVoice: nagrywanie do przodu (limit serwera 2000 znaków).
-        if (ttsEngine === 'omnivoice') {
-            const text = censoredText(msg.text);
-            if (!text || text.length < 2) {
-                sendResponse({ status: 'muted' });
-                return true;
-            }
-            if (text.length > 1900) {
-                offLogPush('omnivoice-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
+            if (c.split && text.length > 1900) {
+                offLogPush(eng + '-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
                 sendResponse({ status: 'preload_skipped_long' });
                 return true;
             }
-            sendResponse({ status: 'preloading_omnivoice' });
-            aheadJob = omnivoiceSynthesize(text, omnivoiceVoice, omnivoicePreloadSockets, false, omnivoiceCzasMs(msg))   // [AGENT-EXP] aheadJob: bramka; preload: pauza go nie przerywa
+            sendResponse({ status: 'preloading_' + eng });
+            aheadJob = remoteSynth(eng, text, false, msg)   // aheadJob: bramka zapasu; preload: pauza go nie przerywa
                 .then((blob) => {
                     cacheRemoteTtsBlob(msg.id, blob);
                     recCapture(msg, blob).catch(() => {});
-                    offLogPush('omnivoice-preload', String(msg.id || '').slice(0, 40));
+                    offLogPush(eng + '-preload', String(msg.id || '').slice(0, 40));
                 })
                 .catch((err) => {
-                    console.error('[Offscreen] OmniVoice preload:', err);
-                    offLogPush('omnivoice-preload-fail', errMsg(err));
-                });
-            return true;
-        }
-        // [AGENT-EXP] 2026-10-27 Kokoro: nagrywanie do przodu (serwer sam dzieli na zdania, limit 2000 znaków).
-        if (ttsEngine === 'kokoro') {
-            const text = censoredText(msg.text);
-            if (!text || text.length < 2) {
-                sendResponse({ status: 'muted' });
-                return true;
-            }
-            if (text.length > 1900) {
-                offLogPush('kokoro-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
-                sendResponse({ status: 'preload_skipped_long' });
-                return true;
-            }
-            sendResponse({ status: 'preloading_kokoro' });
-            aheadJob = kokoroSynthesize(text, kokoroVoice, kokoroPreloadSockets)   // aheadJob: bramka; preload: pauza go nie przerywa
-                .then((blob) => {
-                    cacheRemoteTtsBlob(msg.id, blob);
-                    recCapture(msg, blob).catch(() => {});
-                    offLogPush('kokoro-preload', String(msg.id || '').slice(0, 40));
-                })
-                .catch((err) => {
-                    console.error('[Offscreen] Kokoro preload:', err);
-                    offLogPush('kokoro-preload-fail', errMsg(err));
-                });
-            return true;
-        }
-        // [AGENT-EXP] Pocket-TTS-PL: nagrywanie do przodu (serwer sam dzieli na zdania, limit 2000 znaków).
-        if (ttsEngine === 'pocket') {
-            const text = censoredText(msg.text);
-            if (!text || text.length < 2) {
-                sendResponse({ status: 'muted' });
-                return true;
-            }
-            if (text.length > 1900) {
-                offLogPush('pocket-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
-                sendResponse({ status: 'preload_skipped_long' });
-                return true;
-            }
-            sendResponse({ status: 'preloading_pocket' });
-            aheadJob = pocketSynthesize(text, pocketVoice, pocketPreloadSockets)   // [AGENT-EXP] aheadJob: bramka; preload: pauza go nie przerywa
-                .then((blob) => {
-                    cacheRemoteTtsBlob(msg.id, blob);
-                    recCapture(msg, blob).catch(() => {});
-                    offLogPush('pocket-preload', String(msg.id || '').slice(0, 40));
-                })
-                .catch((err) => {
-                    console.error('[Offscreen] Pocket preload:', err);
-                    offLogPush('pocket-preload-fail', errMsg(err));
-                });
-            return true;
-        }
-        // [AGENT-EXP] Długie kwestie dzielimy przy odtwarzaniu, aby nie przekroczyć limitu 2000 znaków serwera.
-        if (ttsEngine === 'audio8') {
-            const text = censoredText(msg.text);
-            if (!text || text.length < 2) {
-                sendResponse({ status: 'muted' });
-                return true;
-            }
-            if (text.length > 1900) {
-                offLogPush('audio8-preload-skip', 'Długa kwestia będzie syntezowana partiami przy odtwarzaniu.');
-                sendResponse({ status: 'preload_skipped_long' });
-                return true;
-            }
-            sendResponse({ status: 'preloading_audio8' });
-            aheadJob = audio8Synthesize(text, audio8Voice, audio8PreloadSockets)   // [AGENT-EXP] aheadJob: bramka; preload: pauza go nie przerywa
-                .then((blob) => {
-                    cacheRemoteTtsBlob(msg.id, blob);
-                    recCapture(msg, blob).catch(() => {});
-                    offLogPush('audio8-preload', String(msg.id || '').slice(0, 40));
-                })
-                .catch((err) => {
-                    console.error('[Offscreen] Audio8 preload:', err);
-                    offLogPush('audio8-preload-fail', errMsg(err));
+                    console.error('[Offscreen] ' + c.name + ' preload:', err);
+                    offLogPush(eng + '-preload-fail', errMsg(err));
                 });
             return true;
         }
@@ -1907,6 +1710,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         if (msg.pocketVoice !== undefined) applySettings({ pocketVoice: msg.pocketVoice });
         if (msg.omnivoiceVoice !== undefined) applySettings({ omnivoiceVoice: msg.omnivoiceVoice });
         if (msg.kokoroVoice !== undefined) applySettings({ kokoroVoice: msg.kokoroVoice });   // [AGENT-EXP] 2026-10-27
+        if (msg.serverUrl !== undefined || msg.serverVoice !== undefined) applySettings({ serverUrl: msg.serverUrl, serverVoice: msg.serverVoice });   // [FIX 2026-11-02]
         if (msg.matchaVoice !== undefined) applySettings({ matchaVoice: msg.matchaVoice });
         if (msg.matchaWebTryb === 'kombi' || msg.matchaWebTryb === 'cpu_fp32') matchaWebTryb = msg.matchaWebTryb;   // [AGENT-EXP] 2026-10-24
         applySupertonicMsg(msg);   // [VOX]
@@ -1995,79 +1799,19 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
                     });
                 return true;
             }
-            // [AGENT-EXP] Odtwarzaj WAV z XTTS / F5 przez tę samą kolejkę, tempo i nagrywanie co Sherpa/Piper.
-            if (ttsEngine === 'xtts' || ttsEngine === 'f5') {
-                const isF5 = ttsEngine === 'f5';
-                playXttsStream(msg, put, isF5)
+            // [FIX 2026-11-02] serwery lokalne — jedna gałąź (wcześniej 6 kopii): gotowy WAV do wspólnej kolejki (tempo, nagrywanie)
+            if (REMOTE[ttsEngine]) {
+                const eng = ttsEngine, c = REMOTE[eng];
+                playRemoteStream(msg, put, eng)
                     .then(() => {
                         end();
-                        sendResponse({ status: 'playing', engine: ttsEngine });
+                        sendResponse({ status: 'playing', engine: eng });
                     })
                     .catch((err) => {
                         end();
-                        console.error('[Offscreen] ' + (isF5 ? 'F5' : 'XTTS') + ' playback:', err);
-                        offLogPush((isF5 ? 'f5' : 'xtts') + '-play-fail', errMsg(err));
-                        sendResponse({ status: 'error', error: (isF5 ? 'F5-TTS (Marek): ' : 'XTTS (TTS2): ') + errMsg(err) });
-                    });
-                return true;
-            }
-            // [AGENT-EXP] Pocket-TTS-PL: jak XTTS — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
-            if (ttsEngine === 'pocket') {
-                playPocketStream(msg, put)
-                    .then(() => {
-                        end();
-                        sendResponse({ status: 'playing', engine: 'pocket' });
-                    })
-                    .catch((err) => {
-                        end();
-                        console.error('[Offscreen] Pocket playback:', err);
-                        offLogPush('pocket-play-fail', errMsg(err));
-                        sendResponse({ status: 'error', error: 'Pocket-TTS-PL: ' + errMsg(err) });
-                    });
-                return true;
-            }
-            // [AGENT-EXP] 2026-10-27 Kokoro: jak Pocket — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
-            if (ttsEngine === 'kokoro') {
-                playKokoroStream(msg, put)
-                    .then(() => {
-                        end();
-                        sendResponse({ status: 'playing', engine: 'kokoro' });
-                    })
-                    .catch((err) => {
-                        end();
-                        console.error('[Offscreen] Kokoro playback:', err);
-                        offLogPush('kokoro-play-fail', errMsg(err));
-                        sendResponse({ status: 'error', error: 'Kokoro: ' + errMsg(err) });
-                    });
-                return true;
-            }
-            // [AGENT-EXP] OmniVoice: jak Pocket — gotowy WAV do wspólnej kolejki (tempo, nagrywanie).
-            if (ttsEngine === 'omnivoice') {
-                playOmnivoiceStream(msg, put)
-                    .then(() => {
-                        end();
-                        sendResponse({ status: 'playing', engine: 'omnivoice' });
-                    })
-                    .catch((err) => {
-                        end();
-                        console.error('[Offscreen] OmniVoice playback:', err);
-                        offLogPush('omnivoice-play-fail', errMsg(err));
-                        sendResponse({ status: 'error', error: 'OmniVoice: ' + errMsg(err) });
-                    });
-                return true;
-            }
-            // [AGENT-EXP] Audio8 ma RTF 3–5 na CPU; czekamy do 15 min i gramy przez wspólną kolejkę.
-            if (ttsEngine === 'audio8') {
-                playAudio8Stream(msg, put)
-                    .then(() => {
-                        end();
-                        sendResponse({ status: 'playing', engine: 'audio8' });
-                    })
-                    .catch((err) => {
-                        end();
-                        console.error('[Offscreen] Audio8 playback:', err);
-                        offLogPush('audio8-play-fail', errMsg(err));
-                        sendResponse({ status: 'error', error: 'Audio8 ONNX: ' + errMsg(err) });
+                        console.error('[Offscreen] ' + c.name + ' playback:', err);
+                        offLogPush(eng + '-play-fail', errMsg(err));
+                        sendResponse({ status: 'error', error: c.label + ': ' + errMsg(err) });
                     });
                 return true;
             }
@@ -2114,11 +1858,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         stLiveGen++;   // [VOX] Supertonic: kwestie liczone „na teraz” już nie wejdą do kolejki
         if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
         cancelMatchaRequests();
-        cancelXttsRequests();
-        cancelAudio8Requests();
-        cancelPocketRequests();
-        cancelOmnivoiceRequests();
-        cancelKokoroRequests();   // [AGENT-EXP] 2026-10-27
+        cancelRemoteLive();   // [FIX 2026-11-02] wszystkie serwery lokalne
         ordReset();
         playQueue.length = 0;
         finishCurrent();
@@ -2136,11 +1876,7 @@ function ttsMainHandler(msg, _sender, sendResponse) {   // [AGENT-EXP] nazwany �
         stLiveGen++;   // [VOX] Supertonic: kwestie liczone „na teraz” już nie wejdą do kolejki
         if (browserTts) browserTts.stop();   // [AGENT-EXP] 🗣
         cancelMatchaRequests();
-        cancelXttsRequests();
-        cancelAudio8Requests();
-        cancelPocketRequests();
-        cancelOmnivoiceRequests();
-        cancelKokoroRequests();   // [AGENT-EXP] 2026-10-27
+        cancelRemoteLive();   // [FIX 2026-11-02] wszystkie serwery lokalne
         ordReset();
         playQueue.length = 0;
         finishCurrent();
@@ -2469,13 +2205,19 @@ async function playMatchaStream(msg, put) {
     }
 }
 
-// [AGENT-EXP] XTTS dostarcza jeden WAV dla całej kwestii, a prędkość ustawia odtwarzacz.
-async function playXttsStream(msg, put, isF5) {   // [AGENT-EXP] isF5: lektor Marek (F5-TTS)
-    const blob = isF5 ? await f5Synthesize(msg.text, tts2Voice, xttsSockets, true) : await xttsSynthesize(msg.text, tts2Voice, xttsSockets, true);
-    const url = cacheRemoteTtsBlob(msg.id, blob);
-    put(url, msg.durationMs, msg.piperSpeed, msg.rate, msg.slotMs, msg.noSkip);
-    recCapture(msg, blob).catch(() => {});
-    offLogPush('xtts-play', String(msg.id || '').slice(0, 40));
+// [FIX 2026-11-02] Serwery lokalne: kwestia czytana teraz idzie z flagą pilne; długie teksty (poza XTTS / F5, które dzielą
+// same) częściami ≤ 1900 znaków — każda część gra, gdy jest gotowa. Wcześniej 5 osobnych kopii tej funkcji.
+async function playRemoteStream(msg, put, eng) {
+    const c = REMOTE[eng];
+    const chunks = c.split ? splitForRemoteTts(msg.text, 1900) : [msg.text];
+    for (let i = 0; i < chunks.length; i++) {
+        const blob = await remoteSynth(eng, chunks[i], true, msg);
+        const single = chunks.length === 1;
+        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
+        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
+        recCapture(msg, blob).catch(() => {});
+        offLogPush(eng + '-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
+    }
 }
 
 // ===== [VOX] 2026-10-20: SUPERTONIC (silnik z VoxNemesis) =====
@@ -2570,63 +2312,11 @@ async function playSupertonicStream(msg, put) {
     }
 }
 
-// [AGENT-EXP] Pocket-TTS-PL: kwestia czytana teraz idzie z flagą pilne; długie teksty partiami (limit 2000).
-async function playPocketStream(msg, put) {
-    const chunks = splitForRemoteTts(msg.text, 1900);
-    for (let i = 0; i < chunks.length; i++) {
-        const blob = await pocketSynthesize(chunks[i], pocketVoice, pocketSockets, true);
-        const single = chunks.length === 1;
-        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
-        recCapture(msg, blob).catch(() => {});
-        offLogPush('pocket-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
-    }
-}
-
-// [AGENT-EXP] 2026-10-27 Kokoro: kwestia czytana teraz idzie z flagą pilne; długie teksty partiami (limit 2000).
-async function playKokoroStream(msg, put) {
-    const chunks = splitForRemoteTts(msg.text, 1900);
-    for (let i = 0; i < chunks.length; i++) {
-        const blob = await kokoroSynthesize(chunks[i], kokoroVoice, kokoroSockets, true);
-        const single = chunks.length === 1;
-        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id);
-        recCapture(msg, blob).catch(() => {});
-        offLogPush('kokoro-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
-    }
-}
-
 // [AGENT-EXP] 2026-10-17: czas kwestii w filmie (Netflix: startMs z napisów, inne: moment czytania).
 function omnivoiceCzasMs(msg) {
     if (typeof msg.startMs === 'number' && msg.startMs >= 0) return msg.startMs;
     if (typeof msg.videoTimeMs === 'number' && msg.videoTimeMs >= 0) return msg.videoTimeMs;
     return undefined;
-}
-
-// [AGENT-EXP] OmniVoice: kwestia czytana teraz idzie z flagą pilne; długie teksty partiami (limit 2000).
-async function playOmnivoiceStream(msg, put) {
-    const chunks = splitForRemoteTts(msg.text, 1900);
-    for (let i = 0; i < chunks.length; i++) {
-        const blob = await omnivoiceSynthesize(chunks[i], omnivoiceVoice, omnivoiceSockets, true, omnivoiceCzasMs(msg));
-        const single = chunks.length === 1;
-        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
-        recCapture(msg, blob).catch(() => {});
-        offLogPush('omnivoice-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
-    }
-}
-
-// [AGENT-EXP] Audio8 ogranicza wejście do 2000 znaków; serializujemy fragmenty i odtwarzamy po kolei.
-async function playAudio8Stream(msg, put) {
-    const chunks = splitForRemoteTts(msg.text, 1900);
-    for (let i = 0; i < chunks.length; i++) {
-        const blob = await audio8Synthesize(chunks[i], audio8Voice, audio8Sockets, true);
-        const single = chunks.length === 1;
-        const url = cacheRemoteTtsBlob(single ? msg.id : msg.id + '#' + i, blob);
-        put(url, single ? msg.durationMs : 0, msg.piperSpeed, msg.rate, single ? msg.slotMs : 0, msg.noSkip, msg.id); // [AGENT-EXP] group
-        recCapture(msg, blob).catch(() => {});
-        offLogPush('audio8-play', (single ? '' : 'paczka ' + (i + 1) + '/' + chunks.length + ' · ') + String(msg.id || '').slice(0, 40));
-    }
 }
 
 // Jedna ponowna próba — chwilowy błąd workera nie może zjeść zdania.
