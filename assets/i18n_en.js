@@ -1404,5 +1404,32 @@ self.ML_I18N_EN = {
     "słów + Twoje własne": "words + your own",
     // [FIX 2026-11-02]
     "🤬 Cenzor przekleństw — wyciszanie dźwięku filmu": "🤬 Profanity filter — muting the video sound",
-    "Włączanie, tryb i lista słów (wspólna z lektorem) są w popupie, w karcie „🤬 Cenzor przekleństw”. Tu: skąd brać napisy i jak długo trwa cisza w oryginalnym dźwięku. Pracuje tylko na tekście napisów (nie słucha dźwięku); działa także przy wyłączonym lektorze.": "Switching on, the mode and the word list (shared with the narrator) are in the popup, in the “🤬 Profanity filter” card. Here: where subtitles come from and how long the silence in the original sound lasts. It works only on subtitle text (it does not listen to the audio); it also works with the narrator turned off."
+    "Włączanie, tryb i lista słów (wspólna z lektorem) są w popupie, w karcie „🤬 Cenzor przekleństw”. Tu: skąd brać napisy i jak długo trwa cisza w oryginalnym dźwięku. Pracuje tylko na tekście napisów (nie słucha dźwięku); działa także przy wyłączonym lektorze.": "Switching on, the mode and the word list (shared with the narrator) are in the popup, in the “🤬 Profanity filter” card. Here: where subtitles come from and how long the silence in the original sound lasts. It works only on subtitle text (it does not listen to the audio); it also works with the narrator turned off.",
+    // [FIX 2026-11-02]
+    "📍 Czytam z: ": "📍 Reading from: ",
+    " · 📍 Czytam z: ": " · 📍 Reading from: ",
+    "pamięć napisów (napisy YouTube)": "subtitle memory (YouTube subtitles)",
+    "napisy YouTube — tłumaczenie YouTube": "YouTube subtitles — YouTube translation",
+    "polskie napisy YouTube": "Polish YouTube subtitles",
+    "napisy YouTube → tłumaczenie": "YouTube subtitles → translation",
+    "napisy YouTube → tłumaczenie sieciowe": "YouTube subtitles → online translation",
+    "napisy YouTube → tłumacz w chmurze (Bing)": "YouTube subtitles → cloud translator (Bing)",
+    "napisy YouTube → Translator Chrome": "YouTube subtitles → Chrome Translator",
+    "oś czasu YouTube (podgląd Hover)": "YouTube timeline (Hover preview)",
+    "napisy YouTube": "YouTube subtitles",
+    "napisy Netflix": "Netflix subtitles",
+    "plik napisów: ": "subtitle file: ",
+    "plik napisów": "subtitle file",
+    "bazy napisów: ": "subtitle databases: ",
+    "całe napisy (na żądanie)": "whole subtitles (on demand)",
+    "całe napisy strony (automat)": "whole site subtitles (automatic)",
+    "całe napisy": "whole subtitles",
+    "Łowca napisów": "Subtitle Hunter",
+    "na żywo: Immersive Translate": "live: Immersive Translate",
+    "na żywo: podgląd miniatury (Immersive Translate)": "live: thumbnail preview (Immersive Translate)",
+    "na żywo: podgląd Hover": "live: Hover preview",
+    "na żywo: napisy z ekranu Netflix": "live: Netflix on-screen subtitles",
+    "na żywo: napisy ze strony → tłumacz": "live: on-page subtitles → translator",
+    "na żywo: napisy ze strony": "live: on-page subtitles",
+    "OCR: napisy z obrazu": "OCR: subtitles from the picture"
 };

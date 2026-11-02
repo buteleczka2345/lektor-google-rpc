@@ -721,7 +721,7 @@ async function init() {
     async function fullGeneric(tab) {
         fullSet('Szukam napisów w odtwarzaczu…');
         try {
-            await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['assets/lektor_bar.js', 'assets/full_subs_ondemand.js'] });   // [AGENT-EXP] lektor_bar: 📊 pasek
+            await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['assets/lektor_bar.js', 'assets/lektor_scheduler.js', 'assets/full_subs_ondemand.js'] });   // [FIX 2026-11-02] + wspólny harmonogram   // [AGENT-EXP] lektor_bar: 📊 pasek
             const res = await chrome.scripting.executeScript({
                 target: { tabId: tab.id, allFrames: true },
                 func: () => (window.__lektorFullSubs ? window.__lektorFullSubs.start() : { found: false, reason: 'noscript' })
@@ -2363,6 +2363,25 @@ try {
         if (ch.ttsEngine) setTimeout(sync, 0);
     });
     chrome.storage.local.get('ttsEngine', () => setTimeout(sync, 0));   // po ustawieniu eng.value przez blok „Silnik mowy”
+})();
+
+// [FIX 2026-11-02] „Czytam z: …” — skąd lektor bierze tekst na aktywnej karcie (odpowiada ramka, która ma źródło:
+// wspólny harmonogram assets/lektor_scheduler.js, czytanie na żywo, OCR). Odświeżane co 2 s, póki popup jest otwarty.
+(function () {
+    const line = document.getElementById('lektorSourceLine');
+    if (!line) return;
+    const ask = () => chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs && tabs[0];
+        if (!tab || tab.id == null) return;
+        chrome.tabs.sendMessage(tab.id, { action: 'LEKTOR_SOURCE' }, (r) => {
+            void chrome.runtime.lastError;
+            if (!r || !r.source) { line.style.display = 'none'; return; }
+            line.textContent = '📍 Czytam z: ' + r.source + (r.cues ? ' (' + r.cues + ' kwestii)' : '');
+            line.style.display = '';
+        });
+    });
+    ask();
+    setInterval(ask, 2000);
 })();
 
 // [AGENT-EXP] 2026-10-24: wariant Matcha w przeglądarce (klucz matchaWebTryb: 'kombi' | 'cpu_fp32'), widoczny przy silniku Matcha.

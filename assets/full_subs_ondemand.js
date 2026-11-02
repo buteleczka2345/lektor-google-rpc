@@ -245,6 +245,7 @@ if (!('__lektorBufPauza' in window)) {
     function restoreVolume() { if (video && savedVolume !== null) { try { video.volume = savedVolume; } catch (e) {} } savedVolume = null; }
 
     function stopLoop() { if (loopTimer) { clearInterval(loopTimer); loopTimer = null; } restoreVolume(); }
+    var fsSrcSent = -1;   // [FIX 2026-11-02] „czytam z: …”
     function startOwnLoop() {
         stopLoop();
         loopTimer = setInterval(function () {
@@ -257,28 +258,19 @@ if (!('__lektorBufPauza' in window)) {
             var now = video.currentTime * 1000;
             if (lastNow >= 0 && Math.abs(now - lastNow) > 1500) { played.clear(); preloaded.clear(); clearBuffer(); } // przewinięcie
             lastNow = now;
-            var budget = wTle ? 50 : 4;   // [AGENT-EXP] w tle Chrome zwalnia timery
-            for (var i = 0; i < items.length; i++) {
-                var s = items[i];
-                if (now > s.endMs + 1000) continue;
-                if (s.startMs > now + LOOKAHEAD) break;
-                if (!s.text) continue;
-                if (!preloaded.has(i) && s.startMs >= now && budget > 0) {
-                    budget--; preloaded.add(i);
-                    send({ action: 'TTS_PRELOAD', id: s.id, text: s.text, startMs: s.startMs, endMs: s.endMs, nowMs: now });   // [AGENT-EXP] 2026-10-25: nowMs = miejsce filmu (bramka zapasu w offscreen)
-                }
-                if (!ownPauza && !wTle && !played.has(i) && now >= s.startMs && now < s.endMs) {
-                    played.add(i);
-                    applyDuck();
-                    // [FIX 2026-11-02] okno kwestii (do następnej, najwyżej +2 s) — „Auto-nadrabianie” działa jak na YouTube
-                    var rate = video.playbackRate || 1, nx = items[i + 1];
-                    var slotEnd = nx ? Math.min(nx.startMs, s.endMs + 2000) : s.endMs + 2000;
-                    if (slotEnd < s.endMs) slotEnd = s.endMs;
-                    send({ action: 'TTS_PLAY', id: s.id, text: s.text, durationMs: s.endMs - s.startMs, startMs: s.startMs, endMs: s.endMs, rate: rate, slotMs: Math.max(400, (slotEnd - now) / rate) });
+            // [FIX 2026-11-02] wspólny harmonogram (assets/lektor_scheduler.js) — ta sama logika co YouTube / Netflix / strony DOM
+            var S = window.__LektorSched;
+            if (fsSrcSent !== items.length) { fsSrcSent = items.length; S.setSource('całe napisy (na żądanie)', items.length); }
+            S.tick({
+                list: items, nowMs: now, off: 0, rate: video.playbackRate || 1, lookaheadMs: LOOKAHEAD,
+                budget: S.budgetFor(video), canPlay: S.canPlay(video), preloaded: preloaded, played: played,
+                keyOf: function (c, i) { return i; }, send: send,
+                onPlay: function () { applyDuck(); },
+                afterPlay: function (c) {
                     clearTimeout(startOwnLoop._r);
-                    startOwnLoop._r = setTimeout(restoreVolume, Math.min(6000, Math.max(1500, s.text.length * 65) + 400));
+                    startOwnLoop._r = setTimeout(restoreVolume, Math.min(6000, Math.max(1500, c.text.length * 65) + 400));
                 }
-            }
+            });
         }, 100);
     }
     function stop() {
@@ -305,7 +297,7 @@ if (!('__lektorBufPauza' in window)) {
             return { id: 'od_' + myToken + '_' + i, startMs: c.startMs, endMs: c.endMs, src: c.text, text: pl ? c.text : '' };
         });
         state = { found: true, cues: items.length, lang: tr.lang, busy: !pl, status: pl ? 'Gotowe — ' + items.length + ' kwestii (polskie), lektor czyta.' : 'Tłumaczę na polski: 0/' + items.length };
-        if (window.__LIVEDUB_AUTO_APPLY__) { try { window.__LIVEDUB_AUTO_APPLY__(items); } catch (e) { startOwnLoop(); } }
+        if (window.__LIVEDUB_AUTO_APPLY__) { try { window.__LIVEDUB_AUTO_APPLY__(items, false, 'całe napisy (na żądanie)'); } catch (e) { startOwnLoop(); } }   // [FIX 2026-11-02] etykieta źródła
         else startOwnLoop();
         if (!pl) translateAll(/^und/.test(tr.lang) ? 'auto' : tr.lang, myToken).then(function () { if (myToken === token) state.busy = false; });
         return { found: true, cues: items.length, lang: tr.lang, translating: !pl };

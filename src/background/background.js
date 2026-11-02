@@ -737,7 +737,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             if (msg.action === 'OCR_TOOL_CMD') {
                 const tabId = sender && sender.tab && sender.tab.id;
                 if (tabId == null) { sendResponse({ ok: false }); return; }
-                await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/ocr_tool.js'] }).catch(() => {});   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
+                await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lektor_scheduler.js', 'assets/ocr_tool.js'] }).catch(() => {});   // [FIX 2026-11-02] + harmonogram (wskaźnik źródła)   // [AGENT-EXP] 2026-10-21: język interfejsu (PL / EN)
                 chrome.tabs.sendMessage(tabId, { action: 'OCR_TOOL', cmd: msg.cmd }, (r) => {
                     void chrome.runtime.lastError;
                     sendResponse(r || { ok: false, novideo: true });
@@ -802,7 +802,7 @@ chrome.storage.local.get('lowcaGui').then((r) => ccStubSync(!!(r && r.lowcaGui),
 chrome.storage.onChanged.addListener((ch, area) => {
     if (area === 'local' && ch.lowcaGui) ccStubSync(!!ch.lowcaGui.newValue, true);
 });
-const LOWCA_LEKTOR_FRAMES = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/options_hooks.js', 'assets/lektor_bar.js', 'assets/dom_content.js'];   // [AGENT-EXP] 2026-10-21: i18n — język paneli   // [AGENT-EXP] lektor_bar: 📊 pasek postępu
+const LOWCA_LEKTOR_FRAMES = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/options_hooks.js', 'assets/lektor_bar.js', 'assets/lektor_scheduler.js', 'assets/dom_content.js'];   // [FIX 2026-11-02] + wspólny harmonogram   // [AGENT-EXP] 2026-10-21: i18n — język paneli   // [AGENT-EXP] lektor_bar: 📊 pasek postępu
 const LOWCA_LEKTOR_TOP = ['assets/i18n_en.js', 'assets/i18n.js', 'assets/lektor-controls.js', 'assets/lektor-settings.js'];   // [AGENT-EXP] 2026-10-21
 // Serwisy z wbudowanym lektorem (manifest) — tam nic nie dokładamy.
 const LOWCA_BUILTIN = /(^|\.)(netflix\.com|youtube\.com|youtube-nocookie\.com|primevideo\.com|amazon\.com|iq\.com|iqiyi\.com|dailymotion\.com|dai\.ly|rumble\.com|viki\.com|wetv\.vip|bilibili\.com|bilibili\.tv)$/;

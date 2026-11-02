@@ -412,7 +412,7 @@
     // ================= Przekazanie do lektora =================
     function apply(cues) {
         curCount = cues ? cues.length : 0;
-        try { if (window.__LIVEDUB_AUTO_APPLY__) window.__LIVEDUB_AUTO_APPLY__(cues); } catch (e) {}
+        try { if (window.__LIVEDUB_AUTO_APPLY__) window.__LIVEDUB_AUTO_APPLY__(cues, false, 'całe napisy strony (automat)'); } catch (e) {}   // [FIX 2026-11-02] etykieta źródła
     }
 
     var curKey = '', runToken = 0, busy = false;

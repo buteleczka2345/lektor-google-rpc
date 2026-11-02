@@ -122,7 +122,7 @@
   //    (curItems: gotowe tłumaczenia przechodzą na nową listę; stałe id = lektor nie czyta drugi raz).
   var fullPath = '', curItems = null;
   function hasVideo() { try { return !!document.querySelector('video'); } catch (e) { return false; } }
-  function apply(items, keep) { try { if (window.__LIVEDUB_AUTO_APPLY__) window.__LIVEDUB_AUTO_APPLY__(items, keep); } catch (e) {} }   // [AGENT-EXP] keep: bez czyszczenia przeczytanych
+  function apply(items, keep) { try { if (window.__LIVEDUB_AUTO_APPLY__) window.__LIVEDUB_AUTO_APPLY__(items, keep, 'Łowca napisów'); } catch (e) {} }   // [AGENT-EXP] keep   // [FIX 2026-11-02] etykieta źródła: bez czyszczenia przeczytanych
   function looksPl(cues) {
     var n = 0, m = Math.min(cues.length, 60);
     for (var i = 0; i < m; i++) if (/[ąćęłńśźżĄĆĘŁŃŚŹŻ]/.test(cues[i][2])) n++;

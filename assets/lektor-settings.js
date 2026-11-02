@@ -126,15 +126,19 @@
         if (!el) return;
         var m = null;
         try { if (window.__LIVEDUB_GET_MODE__) m = window.__LIVEDUB_GET_MODE__(); } catch (e) {}
-        if (!m) { el.textContent = ''; return; }
+        // [FIX 2026-11-02] „czytam z: …” — źródło tekstu z tej ramki (wspólny harmonogram)
+        var src = null;
+        try { src = window.__LektorSched && window.__LektorSched.getSource(); } catch (e) {}
+        var srcTxt = src ? ' · 📍 Czytam z: ' + src.name : '';
+        if (!m) { el.textContent = srcTxt ? srcTxt.slice(3) : ''; return; }
         if (m.mode === 'timeline') {
-            el.textContent = '🎬 Oś czasu napisów aktywna (' + m.cues + ' kwestii) — przesunięcie działa w OBIE strony, także w lewo (−).';
+            el.textContent = '🎬 Oś czasu napisów aktywna (' + m.cues + ' kwestii) — przesunięcie działa w OBIE strony, także w lewo (−).' + srcTxt;
             el.style.color = '#7effa0';
         } else if (m.mode === 'file') {
-            el.textContent = '📂 Napisy z pliku (' + m.cues + ' kwestii) — przesunięcie działa w OBIE strony.';
+            el.textContent = '📂 Napisy z pliku (' + m.cues + ' kwestii) — przesunięcie działa w OBIE strony.' + srcTxt;
             el.style.color = '#7effa0';
         } else {
-            el.textContent = '🔴 Czytanie NA ŻYWO — „+" (później) działa, „−" (wcześniej) NIE: lektor widzi napis dopiero, gdy się pojawia. Cofanie działa na Netflixie, z napisami z pliku i na YouTube, gdy oś czasu napisów jest aktywna.';
+            el.textContent = '🔴 Czytanie NA ŻYWO — „+" (później) działa, „−" (wcześniej) NIE: lektor widzi napis dopiero, gdy się pojawia. Cofanie działa na Netflixie, z napisami z pliku i na YouTube, gdy oś czasu napisów jest aktywna.' + srcTxt;
             el.style.color = '#ffb86b';
         }
     }

@@ -428,22 +428,14 @@ if (!('__lektorBufPauza' in window)) {
         if (v && savedVolume !== null) { v.volume = savedVolume; savedVolume = null; }
     }
     // [FIX 2026-11-02] Kwestia z pliku / całych napisów przerwana pauzą (bez „Czytaj zawsze do końca”) — po wznowieniu
-    // czytana od początku. Wcześniej zostawała oznaczona jako przeczytana i jej reszta przepadała.
+    // czytana od początku (wspólna funkcja harmonogramu). Wcześniej zostawała oznaczona jako przeczytana i jej reszta przepadała.
     var pausedAtMs = -1;
     function rereadInterrupted() {
         var at = pausedAtMs;
         pausedAtMs = -1;
-        var rte = false;
-        try { rte = !!(window.__LivedubOpts && window.__LivedubOpts.get('readToEnd')); } catch (e) {}
-        if (at < 0 || rte || !fileSubs.length) return;
-        var v = getVideo();
-        if (!v || Math.abs(v.currentTime * 1000 - at) > 1500) return;   // przewinięte w czasie pauzy — tym zajmuje się 'seeked'
-        var off = getOff();
-        for (var i = 0; i < fileSubs.length; i++) {
-            var s = fileSubs[i], st = s.startMs + off, en = s.endMs + off;
-            if (at < st || at >= en || !filePlayed.has(s.id)) continue;
-            if (at - st < String(s.text || '').length / 14 * 1000) filePlayed.delete(s.id);   // lektor (ok. 14 znaków/s) nie zdążył skończyć
-        }
+        var S = window.__LektorSched, v = getVideo();
+        if (!S || !v || !fileSubs.length || S.readToEndOn()) return;
+        S.rearmAfterPause(fileSubs, filePlayed, null, at, v.currentTime * 1000, getOff());
     }
     function pauseSpeech() {
         try { chrome.runtime.sendMessage({ action: 'TTS_PAUSE', reason: 'pause' }); } catch (e) {}   // [AGENT-EXP] 2026-10-22: woła ją tylko pauza filmu — „Czytaj zawsze do końca” dokańcza zdanie
@@ -960,6 +952,7 @@ if (!('__lektorBufPauza' in window)) {
         return false;
     }
 
+    function liveSrc(n) { try { var S = window.__LektorSched, g = S && S.getSource(); if (S && (!g || g.name !== n)) S.setSource(n, 0); } catch (e) {} }   // [FIX 2026-11-02] „czytam z: …”
     function emitIfNew(text) {
         if (!enabled) return;
         if (fileSubs.length) return; // tryb napisów z pliku — żywe czytanie wyłączone
@@ -986,6 +979,7 @@ if (!('__lektorBufPauza' in window)) {
             applyDuck();
             var id = 'stream_' + Date.now() + '_' + key;
             panelLog(cleanAgain, 'spoken');
+            liveSrc(netTr ? 'na żywo: napisy ze strony → tłumacz' : 'na żywo: napisy ze strony');
             chrome.runtime.sendMessage({
                 action: 'TTS_PLAY', id: id, text: cleanAgain, durationMs: 0,
                 videoTimeMs: vNow ? Math.round(vNow.currentTime * 1000) : 0
@@ -1312,8 +1306,9 @@ if (!('__lektorBufPauza' in window)) {
         startFileLoop();
     }
     try {
-        window.__LIVEDUB_AUTO_APPLY__ = function (cues, keep) {   // [AGENT-EXP] 2026-10-25: keep
+        window.__LIVEDUB_AUTO_APPLY__ = function (cues, keep, label) {   // [AGENT-EXP] 2026-10-25: keep   // [FIX 2026-11-02] label: „czytam z: …”
             autoSubs = Array.isArray(cues) && cues.length ? cues : null;
+            if (label) autoSrcName = String(label);
             // [AGENT-EXP] 2026-10-17: wygrywają NAJNOWSZE napisy — Łowca / „Pobierz całe napisy” przykrywają
             // wcześniej wczytany plik (wcześniej plik blokował je na zawsze); ich koniec → wraca plik tej karty
             if (autoSubs) { manualFile = false; autoApplyNow(!!keep); }
@@ -1322,8 +1317,10 @@ if (!('__lektorBufPauza' in window)) {
         };
     } catch (e) {}
 
+    var fileSrcName = 'plik napisów', autoSrcName = '', domSrcSent = '';   // [FIX 2026-11-02] „czytam z: …”
     function fileApply(f) {
         manualFile = !!(f && Array.isArray(f.cues) && f.cues.length);
+        if (manualFile) fileSrcName = /^🌐/.test(String(f.name || '')) ? 'bazy napisów: ' + String(f.name).replace(/^🌐\s*/, '') : 'plik napisów: ' + String(f.name || 'bez nazwy');
         lastFile = manualFile ? f : null;   // [AGENT-EXP]
         if (!manualFile && autoSubs) { autoApplyNow(); return; }
         if (f && Array.isArray(f.cues) && f.cues.length) {
@@ -1368,25 +1365,16 @@ if (!('__lektorBufPauza' in window)) {
             if (!enabled || fileSubs.length === 0) return;
             var v = getVideo();
             if (!v) return;
-            var filePauza = v.paused;   // [AGENT-EXP] pauza: tylko buforowanie, bez czytania
-            if (filePauza && window.__lektorBufPauza === false) return;
-            var nowMs = v.currentTime * 1000;
-            var off = getOff();
-            var preBudget = document.visibilityState !== 'visible'   // [AGENT-EXP] tło: więcej na tick albo nic (checkbox)
-                ? (window.__lektorBufTlo === false ? 0 : 50) : 4; // max nowe syntezy na tick — bez burstów
-            for (var i = 0; i < fileSubs.length; i++) {
-                var sub = fileSubs[i];
-                var startT = sub.startMs + off;
-                var endT = sub.endMs + off;
-                if (nowMs > endT + 1000) continue;
-                if (!sub.text) { if (startT > nowMs + fileLookahead) break; continue; } // jeszcze nieprzetłumaczona
-                if (!filePreloaded.has(sub.id) && startT >= nowMs && startT <= nowMs + fileLookahead && preBudget > 0) {
-                    preBudget--;
-                    filePreloaded.add(sub.id);
-                    chrome.runtime.sendMessage({ action: 'TTS_PRELOAD', id: sub.id, text: sub.text, startMs: startT, endMs: endT, nowMs: nowMs });   // [AGENT-EXP] 2026-10-25: nowMs = miejsce filmu (bramka zapasu w offscreen)
-                }
-                if (!filePauza && !filePlayed.has(sub.id) && nowMs >= startT && nowMs < endT) {
-                    filePlayed.add(sub.id);
+            if (v.paused && window.__lektorBufPauza === false) return;   // [AGENT-EXP] pauza: tylko buforowanie, bez czytania
+            // [FIX 2026-11-02] wspólny harmonogram (assets/lektor_scheduler.js): okno kwestii, tempo filmu, czytanie tylko na
+            // widocznej karcie z grającym filmem (wcześniej plik czytał też w karcie w tle)
+            var S = window.__LektorSched;
+            var srcName = manualFile ? fileSrcName : (autoSrcName || 'całe napisy');
+            if (domSrcSent !== srcName + fileSubs.length) { domSrcSent = srcName + fileSubs.length; S.setSource(srcName, fileSubs.length); }
+            S.tick({
+                list: fileSubs, nowMs: v.currentTime * 1000, off: getOff(), rate: v.playbackRate || 1, lookaheadMs: fileLookahead,
+                budget: S.budgetFor(v), canPlay: S.canPlay(v), preloaded: filePreloaded, played: filePlayed,
+                onPlay: function (sub) {
                     pushSpoken(sub.text);
                     var w = String(sub.text || '').trim().split(/\s+/).filter(Boolean).length;
                     spokenWords += w;
@@ -1394,22 +1382,9 @@ if (!('__lektorBufPauza' in window)) {
                     recentSpoken.push({ t: sub.text, w: w });
                     if (recentSpoken.length > 5) recentSpoken.shift();
                     applyDuck();
-                    if (isBlockedPhrase(sub.text)) continue; // blokujemy "Only the translation ,,"
-                    // [FIX 2026-11-02] okno kwestii (do następnej, najwyżej +2 s) i prędkość filmu — jak na YouTube; bez nich
-                    // „Auto-nadrabianie” i tempo A/B nie działały na Prime / iQIYI / WeTV / Viki / Bilibili / stronach Łowcy.
-                    var rate = v.playbackRate || 1;
-                    var nxt = fileSubs[i + 1];
-                    var slotEnd = nxt ? Math.min(nxt.startMs + off, endT + 2000) : endT + 2000;
-                    if (slotEnd < endT) slotEnd = endT;
-                    chrome.runtime.sendMessage({
-                        action: 'TTS_PLAY', id: sub.id, text: sub.text,
-                        durationMs: sub.endMs - sub.startMs,
-                        startMs: startT, endMs: endT,
-                        rate: rate, slotMs: Math.max(400, (slotEnd - nowMs) / rate)
-                    });
+                    if (isBlockedPhrase(sub.text)) return false; // blokujemy "Only the translation ,,"
                 }
-                if (startT > nowMs + fileLookahead) break;
-            }
+            });
         }, 50);
     }
     try {

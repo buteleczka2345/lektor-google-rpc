@@ -151,6 +151,7 @@
                 "assets/i18n_en.js",
                 "assets/i18n.js",
                 "assets/lektor_bar.js",
+                "assets/lektor_scheduler.js",
                 "assets/content.js-BgeP3Ise.js"
             ],
             "matches": [
@@ -164,6 +165,7 @@
                 "assets/i18n.js",
                 "assets/lektor_bar.js",
                 "assets/sub_panel.js",
+                "assets/lektor_scheduler.js",
                 "assets/youtube_content.js-CI940SBo.js"
             ],
             "matches": [
@@ -177,6 +179,7 @@
                 "assets/i18n_en.js",
                 "assets/i18n.js",
                 "assets/lektor_bar.js",
+                "assets/lektor_scheduler.js",
                 "assets/dom_content.js",
                 "assets/auto_subs.js"
             ],
@@ -194,6 +197,7 @@
                 "assets/i18n_en.js",
                 "assets/i18n.js",
                 "assets/lektor_bar.js",
+                "assets/lektor_scheduler.js",
                 "assets/dom_content.js"
             ],
             "matches": [
@@ -209,6 +213,7 @@
                 "assets/i18n_en.js",
                 "assets/i18n.js",
                 "assets/lektor_bar.js",
+                "assets/lektor_scheduler.js",
                 "assets/dom_content.js",
                 "assets/auto_subs.js"
             ],

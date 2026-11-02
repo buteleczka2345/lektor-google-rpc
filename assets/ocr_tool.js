@@ -423,6 +423,7 @@
             if (seq - my > 2) return;            // OCR już dalej — stary napis pomijamy
             if (pl === lastSaid) return;
             lastSaid = pl; duck(pl.length); showText(st.last, pl);
+            try { var LS = window.__LektorSched; if (LS) LS.setSource('OCR: napisy z obrazu', 0); } catch (e) {}   // [FIX 2026-11-02] „czytam z: …”
             send({ action: 'TTS_PLAY', id: 'ocrt_' + Date.now() + '_' + my, text: pl.slice(0, 600), durationMs: 0 })
                 .then((r) => { if (r && r.status === 'blocked' && my === seq) showEng('🚫 kwestia pominięta — pasuje do listy Blokad'); });   // [AGENT-EXP]
         }).catch(() => {});
