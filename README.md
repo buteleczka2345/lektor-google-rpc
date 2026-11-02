@@ -1,18 +1,32 @@
 # 🔊 Multilektor — polski lektor do filmów (rozszerzenie Chrome MV3)
 
-**Wersja:** 3.4.0 · **Typ:** rozszerzenie Chrome (Manifest V3) · **Język UI:** polski / English (automatycznie wg języka Chrome, przełącznik w popupie)
+**Wersja:** 3.6.0 · **Typ:** rozszerzenie Chrome (Manifest V3) · **Język UI:** polski / English (automatycznie wg języka Chrome, przełącznik w popupie)
 
-> Rozszerzenie zamienia **obce napisy / mowę w filmie na polskiego lektora czytanego na żywo** — bezpośrednio na stronie (YouTube, Netflix, Prime Video, iQIYI, WeTV, Viki, Bilibili, Dailymotion, Rumble i inne). Tłumaczy lokalnie (Translator Chrome) albo przez silniki sieciowe (Google RPC, Bing, DeepL, AI), czyta wbudowanym głosem **Sherpa VITS pl_PL-meski_wg_glos-medium** albo zewnętrznymi serwerami TTS przez WebSocket. Ma też **Łowcę Napisów**, **OCR napisów wtopionych w obraz** (Tesseract + PP-OCRv6 ONNX), **cenzora przekleństw**, **Głos i Napisy** (dyktowanie + napisy z karty), pamięć napisów i tłumaczeń (IndexedDB, 90 dni) oraz stronę ustawień i benchmark OCR.
+> Rozszerzenie zamienia **obce napisy / mowę w filmie na polskiego lektora czytanego na żywo** — bezpośrednio na stronie (YouTube, Netflix, Prime Video, iQIYI, WeTV, Viki, Bilibili, Dailymotion, Rumble i inne). Tłumaczy lokalnie (Translator Chrome) albo przez silniki sieciowe (Google RPC, Bing, DeepL, AI), czyta głosem liczonym w przeglądarce — domyślnie **Matcha-TTS-PL 🌐** (głos pobiera się sam przy pierwszym czytaniu), do wyboru Supertonic 3, Sherpa/Piper (głosy do pobrania lub własne), głos przeglądarki — albo zewnętrznymi serwerami TTS przez WebSocket. Ma też **Łowcę Napisów**, **OCR napisów wtopionych w obraz** (Tesseract + PP-OCRv6 ONNX), **cenzora przekleństw**, **Głos i Napisy** (dyktowanie + napisy z karty), pamięć napisów i tłumaczeń (IndexedDB, 90 dni) oraz stronę ustawień.
 
 > 💡 **Przerabiaj go po swojemu!** Ten program możesz dowolnie zmieniać pod własne potrzeby — i gorąco zachęcam, żeby go ulepszać. Szczegóły niżej w „🛠️ Wolno modyfikować”.
 
 ## ⬇️ Pobierz ZIP
 
-**[📦 Pobierz Multilektor 3.4.0 (ZIP, ~220 MB)](https://github.com/buteleczka2345/lektor-google-rpc/releases/download/v3.4.0/Multilektor-3.4.0-sklep-2026-10-21.zip)** · [wszystkie wydania](https://github.com/buteleczka2345/lektor-google-rpc/releases/latest)
+**[📦 Pobierz Multilektor 3.6.0 (ZIP z GitHuba, ~156 MB po rozpakowaniu)](https://github.com/buteleczka2345/lektor-google-rpc/archive/refs/heads/main.zip)** · [starsze wydania](https://github.com/buteleczka2345/lektor-google-rpc/releases)
 
 Instalacja: rozpakuj ZIP do folderu → otwórz `chrome://extensions` → włącz **Tryb dewelopera** → **Załaduj rozpakowane** → wskaż rozpakowany folder (ten z `manifest.json`).
 
-## 🆕 Co nowego (3.1 → 3.4.0)
+## 🆕 Co nowego (3.4.0 → 3.6.0)
+
+- **🌐 Matcha-TTS-PL w samym rozszerzeniu** (`matcha_web/`) — szybki polski lektor liczony w przeglądarce, bez serwera
+  (2 workery na procesorze, wokoder na karcie graficznej, gdy pomaga). Głos męski i żeński, warianty INT8 i F32.
+- **Mniejsza paczka:** modeli Matchy i wbudowanego głosu Sherpa nie ma już w ZIP-ie. Przy pierwszym czytaniu lektor sam
+  pobiera głos Matcha INT8 (~27 MB) z Hugging Face do pamięci rozszerzenia — potem działa bez internetu.
+  Ręcznie: popup → „Języki świata” (⬇ INT8 / F32, „Włącz” wybiera wariant) albo „📂 Wskaż pliki własnego głosu”
+  (folder Sherpa/Piper **albo** Matchy — rozpoznaje sam).
+- **📼 Zapas do przodu dla wszystkich lektorów** (suwak „Nagrywanie / zapas do przodu”).
+- **🤐 Cenzor:** wycisza z każdych napisów lektora, HBO Max (całe napisy z manifestu DASH + LIVE).
+- **🧩 Moduły popupu:** karty można przestawiać, chować i zwijać.
+- **YouTube:** głośniczek lektora nie gubi kliknięć, polski film nie jest ściszany, bez czytania zdania dwa razy.
+- **Chrome Web Store (3.5.x):** OCR bez kodu z CDN.
+
+## Wcześniej (3.1 → 3.4.0)
 
 - **Nowa nazwa: Multilektor** (wcześniej „Lektor Multilanguage”). Nazwa i opis w dwóch językach przez `_locales/pl` i `_locales/en`.
 - **🌐 Interfejs po polsku i angielsku** — popup, Ustawienia, panele na stronach z filmem, Łowca napisów, OCR, okienka „Głos”.
@@ -48,7 +62,7 @@ Masz poprawkę albo pomysł, z którego skorzystają też inni? Śmiało — otw
 1. Wykrywa napisy: z playera (YouTube timedtext, Netflix, Prime, iQIYI…), z sieci (fetch/XHR), z DOM/Shadow DOM, z pliku .srt, z baz napisów albo z obrazu (OCR).
 2. Skleja urwane kwestie w CAŁE ZDANIA (domyślnie WŁ. — extTrJoinSentences), żeby tłumacz nie dostawał połówek zdań.
 3. Tłumaczy na polski: najpierw słownik 571 fraz/idiomów (assets/phrase_dict.js), potem Translator Chrome (lokalnie) albo wybrany silnik sieciowy.
-4. Czyta lektorem: wbudowany Sherpa VITS (WASM, pula 6 workerów) albo zdalny serwer (Matcha / XTTS / F5 / Pocket / OmniVoice / Audio8) przez ws://127.0.0.1:port.
+4. Czyta lektorem w przeglądarce (domyślnie Matcha 🌐; też Supertonic, Sherpa/Piper, głos przeglądarki) albo zdalny serwer (Matcha / XTTS / F5 / Pocket / OmniVoice / Audio8) przez ws://127.0.0.1:port.
 5. Ścisza film pod lektorem (ducking), nadąża za tempem wideo (tryby A/B/C), buforuje do przodu (także w pauzie / w tle), cenzuruje przekleństwa, pokazuje pasek i arkusz ustawień na stronie.
 
 Instalacja deweloperska: chrome://extensions → tryb dewelopera → Załaduj rozpakowane → ten folder (musi zawierać manifest.json).
@@ -69,7 +83,6 @@ Instalacja deweloperska: chrome://extensions → tryb dewelopera → Załaduj ro
 - src/offscreen/ppocr_engine.js + ppocr_core.js — PP-OCRv6 tiny/small ONNX (det DB + rec CTC, onnxruntime-web WASM)
 - src/popup/ — panel: Lektor wł/wył, Łowca, Głos i Napisy, głos/silnik, plik napisów, bazy, dziennik
 - src/options/ — strona ustawień (SCHEMA): tempo, karty/pauza, YouTube, tłumaczenie sieciowe, AI, klucze, domeny, Kreator, Łowca, AI Subtitle Translator
-- src/bench/ — benchmark OCR (Tesseract vs PP-OCR na generowanych obrazkach PL/EN/ZH)
 - assets/lektor_bar.js, lektor-controls.js, lektor-settings.js — pasek ◄ ►, prędkość, offset napisów ±60 s, blokady zdań
 - assets/dom_content.js — Prime/iQIYI: napisy z DOM/Shadow DOM do harmonogramu TTS
 - assets/youtube_content.js + yt_subs_bridge.js — YouTube: przechwyt /api/timedtext + tłumaczenie lokalne
@@ -80,17 +93,16 @@ Instalacja deweloperska: chrome://extensions → tryb dewelopera → Załaduj ro
 - assets/ocr_tool.js — OCR wtopionych napisów (zrzut klatki co 0,5 s → offscreen → okienko + lektor; język ocrToolLang, ramka ocrToolRegions)
 - assets/i18n.js + i18n_en.js — 🌐 język interfejsu PL / EN (MLi18n: page, watch, t; słownik pl → en)
 - _locales/pl, _locales/en — nazwa i opis rozszerzenia w dwóch językach
+- matcha_web/ — 🌐 Matcha-TTS-PL-Edge-v2 w przeglądarce: engine.js (kolejka, 2 workery, samo pobieranie głosu do IndexedDB lektorVoices), matcha.worker.js (ONNX Runtime Web), espeak-ng WASM; modele pobierane z Hugging Face (machinekind/Matcha-TTS-PL-Edge-v2, licencja CC BY-SA 4.0 w matcha_web/models/)
 - supertonic/ — silnik Supertonic 3 przeniesiony z lektora VoxNemesis (CPU / WebGPU), model pobierany z Hugging Face przy pierwszym użyciu
 - sklep/ — teksty do Chrome Web Store (opis, uprawnienia, prywatność) i polityka prywatności (HTML)
 - assets/phrase_dict.js — 571 idiomów (DUO_PHRASE_MAP) — sprawdzany PRZED tłumaczem i PRZED cache
 - glos/ — Głos i Napisy: glos_bg.js (Alt+Shift+1/2, okienka, badge REC/CC, dziennik gnDbg), glos.html/js (mikrofon→tekst w pole), karta.html/js (tabCapture cyfrowo→napisy), overlay.js, historia.html/js (napisy na bieżąco), common.js (DeepFilterNet, boost mowy 1–2,5 kHz), dfn/ (DeepFilterNet3 WASM, licencje MIT/Apache). Pełna instrukcja: glos/CZYTAJ MNIE.txt
 - ocr/ — Tesseract: traineddata pol/eng/chi_sim/chi_tra + rdzenie WASM SIMD/LSTM
 - ppocr/ — PP-OCRv6 tiny+small (det/rec .onnx), słowniki, ort-wasm-simd-threaded
-- sherpa/ — głos wbudowany vits-piper-pl_PL-meski_wg_glos-medium (.onnx ~60 MB) + espeak-ng-data + silnik WASM sherpa-onnx-wasm-main-tts (~92 MB)
-- AI Subtitle Translator.js — osobny userscript (nie część rozszerzenia)
-- test_xtts_websocket.mjs.js — test serwera XTTS (JSON {text,voice} → WAV)
+- sherpa/ — silnik WASM sherpa-onnx (Piper/VITS) + espeak-ng-data; bez wbudowanego głosu — głosy pobierane w „Językach świata” albo własne z plików
 
-Rozmiar: ~465 plików, ~305 MB (głównie modele: Sherpa ~150 MB, PP-OCR ~35 MB, Tesseract ~9 MB, DeepFilterNet ~8 MB).
+Rozmiar: ~480 plików, ~156 MB (głównie ONNX Runtime / silniki WASM, PP-OCR ~35 MB, Tesseract ~9 MB, DeepFilterNet ~8 MB). Głosy lektora nie są w paczce — pobierają się do pamięci rozszerzenia.
 
 ## 🧠 Jak to działa pod maską
 
@@ -98,7 +110,7 @@ Warstwy: Service Worker (kolejka TTS_PLAY → offscreen, reanimacja przez PING b
 
 Tłumaczenie: lokalnie Translator Chrome + słownik; angielski lokalnie, inne języki opcjonalnie Bingiem (extTrNonEnCloud). Sieciowo extTrEngine: lokalny | rotacja | google | gtab | bing | deepl | ai. Google: RPC batchexecute (limiter 4 żądania/1350 ms jak Immersive Translate) z fallbackiem do gtx, separator " /// ", round-robin, cooldown 20 s → 1 min → 5 min, cache SW + IndexedDB. Całe zdania: ZD_MAX_CHARS=220, ZD_MAX_MS=12000, ZD_GAP_MS=1500. AI: OpenAI-compatible (URL, klucz, model, edytowalny prompt) + AI Subtitle Translator (plik → Gemini Nano / Prompt API → .srt lub wprost do lektora).
 
-Mowa: Sherpa WASM pula 6 workerów (~0,35–0,5 GB każdy, własny głos z IndexedDB lektorVoices) albo Matcha :9000 / XTTS :8000 / Marek F5 :9400 / Pocket :9200 / OmniVoice :9100 / Audio8 :9300 (preload do 1 h). Głośność do 400%, prędkość czytana w momencie odtwarzania, tempo A/B/C + auto-nadrabianie + anty-trzask.
+Mowa: domyślnie Matcha 🌐 w przeglądarce (2 workery, głos z IndexedDB lektorVoices, przy braku pobierany sam z Hugging Face), Supertonic 3, Sherpa WASM pula workerów (głosy z IndexedDB lektorVoices), głos przeglądarki albo serwery: Matcha :9000 / XTTS :8000 / Marek F5 :9400 / Pocket :9200 / OmniVoice :9100 / Audio8 :9300 (preload do 1 h). Głośność do 400%, prędkość czytana w momencie odtwarzania, tempo A/B/C + auto-nadrabianie + anty-trzask.
 
 Napisy: Łowca na żądanie, auto-napisy od bieżącego miejsca, timedtext, textTracks, bazy (mini-unzip, MicroDVD→SRT, cięcie reklam), wgrany plik (pierwszeństwo), OCR wtopionych.
 
@@ -110,10 +122,10 @@ Cenzor: listy PL/EN/DE/ES (kolizje wycięte), tryby remove/beep/replace + własn
 
 1. Załaduj rozpakowane w chrome://extensions. 2. Otwórz film, włącz Lektor w popupie. 3. Dostosuj głos/silnik, prędkość, offset (⚙️ na stronie lub popup). 4. Napisy: automat, Łowca (Szukaj napisów), Pobierz całe napisy, plik albo bazy. 5. Wtopione: menu CC → OCR (język + ramka). 6. Alt+Shift+1 / Alt+Shift+2 (modele mowy pobierz raz przyciskiem w popupie). 7. Problemy: popup → Ustawienia i dziennik → Kopiuj dziennik (__svcError, gnDbg, Ostatnie kwestie).
 
-Serwery zdalne TTS opcjonalne — bez nich działa wbudowana Sherpa offline.
+Serwery zdalne TTS opcjonalne — bez nich czyta Matcha 🌐 w przeglądarce (po pierwszym pobraniu głosu także offline).
 
 ## ⚠️ Uwagi do publikacji
 
-Największy plik ~92 MB < limit 100 MB GitHub — push bez LFS, ale klonowanie potrwa. Przed szeroką publikacją uzupełnij licencję (Sherpa/Piper, espeak-ng-data, DeepFilterNet, Tesseract, PaddleOCR) i rozważ usunięcie test_*.mjs.js. Klucze API trzymane są w chrome.storage przeglądarki, nie w repo.
+Największy plik ~24 MB (ONNX Runtime WASM) — push bez LFS. Przed szeroką publikacją uzupełnij licencję (Sherpa/Piper, espeak-ng-data, DeepFilterNet, Tesseract, PaddleOCR, Matcha CC BY-SA 4.0). Klucze API trzymane są w chrome.storage przeglądarki, nie w repo.
 
-*Opis na podstawie analizy kodu (manifest 3.4.0, service-worker-loader.js, src/background, src/offscreen, src/popup, src/options, assets, glos/CZYTAJ MNIE.txt).*
+*Opis na podstawie analizy kodu (manifest 3.6.0, service-worker-loader.js, src/background, src/offscreen, src/popup, src/options, assets, glos/CZYTAJ MNIE.txt).*
