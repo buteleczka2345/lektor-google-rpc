@@ -1381,7 +1381,7 @@ async function init() {
                 lastTelemetry = null;
                 return;
             }
-            chrome.storage.local.get('__recTelemetry_' + plat, (items) => {
+            chrome.storage.session.get('__recTelemetry_' + plat, (items) => {   // [FIX 2026-11-02] telemetria w storage.session
                 const t = items && items['__recTelemetry_' + plat];
                 if (!t || Date.now() - (t.ts || 0) > 10000) {
                     if (tEl) tEl.textContent = plat === 'netflix'
@@ -1428,7 +1428,7 @@ async function init() {
                             ? rec.map((r) => '• „' + String(r.t || '').slice(0, 40) + '” — ' + (r.w || 0) + ' wyrazów').join('\n')
                             : '—';
                         // Czarna skrzynka silnika: błędy startu/syntezy/odtwarzania (offscreen).
-                        chrome.storage.local.get(['__offscreenError', '__offscreenLog'], (d) => {
+                        Promise.all([chrome.storage.local.get('__offscreenError'), chrome.storage.session.get('__offscreenLog')]).then(([d1, d2]) => Object.assign({}, d1, d2)).catch(() => ({})).then((d) => {   // [FIX 2026-11-02] dziennik w storage.session
                             if (!logEl || !logEl.isConnected) return;
                             const lines = [];
                             if (d && d.__offscreenError) lines.push('⛔ SILNIK: ' + String(d.__offscreenError.msg || '').slice(0, 140));

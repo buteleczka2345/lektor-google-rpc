@@ -29,12 +29,26 @@
             .replace(/[\s\u00A0]+/g, ' ')
             .trim().toLowerCase();
     }
+    // [FIX 2026-11-02] blokada pasuje do CAŁYCH słów (granice liter/cyfr): „tak” nie wycisza już zdań z „także”, „takiego”.
+    // Brzeg wpisu, który sam nie jest literą (np. „only the translation ,,”), sprawdzany jest jak dawniej (podciąg).
+    function phraseHit(text, phrase) {
+        if (!phrase) return false;
+        var w = /[\p{L}\p{N}]/u, i = text.indexOf(phrase);
+        var needL = w.test(phrase.charAt(0)), needR = w.test(phrase.charAt(phrase.length - 1));
+        while (i !== -1) {
+            var okL = !needL || i === 0 || !w.test(text.charAt(i - 1));
+            var okR = !needR || i + phrase.length >= text.length || !w.test(text.charAt(i + phrase.length));
+            if (okL && okR) return true;
+            i = text.indexOf(phrase, i + 1);
+        }
+        return false;
+    }
     function isBlockedText(t) {
         if (!blocked.length) return false;
         var n = normalizeForCheck(t);
         if (!n) return false;
         for (var i = 0; i < blocked.length; i++) {
-            if (n.indexOf(blocked[i]) !== -1) return true;
+            if (phraseHit(n, String(blocked[i] || '').toLowerCase())) return true;
         }
         return false;
     }

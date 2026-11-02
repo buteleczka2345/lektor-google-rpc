@@ -38,15 +38,29 @@ const BLOCKED_PHRASES = [
     'only the translation',
     'only the translation ,,'
 ];
+// [FIX 2026-11-02] blokada pasuje do CAŁYCH słów (granice liter/cyfr): „tak” nie wycisza już zdań z „także”, „takiego”.
+// Brzeg wpisu, który sam nie jest literą (np. „only the translation ,,”), sprawdzany jest jak dawniej (podciąg).
+function phraseHit(text, phrase) {
+    if (!phrase) return false;
+    var w = /[\p{L}\p{N}]/u, i = text.indexOf(phrase);
+    var needL = w.test(phrase.charAt(0)), needR = w.test(phrase.charAt(phrase.length - 1));
+    while (i !== -1) {
+        var okL = !needL || i === 0 || !w.test(text.charAt(i - 1));
+        var okR = !needR || i + phrase.length >= text.length || !w.test(text.charAt(i + phrase.length));
+        if (okL && okR) return true;
+        i = text.indexOf(phrase, i + 1);
+    }
+    return false;
+}
 function isBlockedPhrase(text) {
     if (!text || typeof text !== 'string') return false;
     // [AGENT-EXP] ta sama normalizacja co przy zapisie blokady (lektor-settings.js): niewidoczne znaki i wielokrotne spacje
     const t = text.replace(/[\u200B-\u200D\uFEFF\u00AD]/g, ' ').replace(/[\s\u00A0]+/g, ' ').trim().toLowerCase();
     for (let i = 0; i < BLOCKED_PHRASES.length; i++) {
-        if (t.includes(BLOCKED_PHRASES[i])) return true;
+        if (phraseHit(t, BLOCKED_PHRASES[i])) return true;
     }
     for (let i = 0; i < userBlockedPhrases.length; i++) {
-        if (t.includes(userBlockedPhrases[i])) return true;
+        if (phraseHit(t, String(userBlockedPhrases[i] || '').toLowerCase())) return true;
     }
     return false;
 }
@@ -184,14 +198,32 @@ async function callOffscreen(payload, tries = 50) {
 }
 
 // OPTIONS-PAGE: offscreen zgłasza pustą kolejkę lektora → przekazujemy do kart (wznowienie filmu po pauzie z lektorem)
+// [FIX 2026-11-02] tylko do kart, z których lektor czytał w ostatnich 15 min (wcześniej do WSZYSTKICH kart po każdej
+// kwestii). Lista w storage.session przeżywa uśpienie service workera.
+const NARRATOR_TAB_MS = 15 * 60000;
+const narratorTabs = new Map();   // karta → chwila ostatniego TTS_PLAY
+try {
+    chrome.storage.session.get('narratorTabs').then((r) => {
+        (Array.isArray(r && r.narratorTabs) ? r.narratorTabs : []).forEach((e) => { if (Array.isArray(e) && !narratorTabs.has(e[0])) narratorTabs.set(e[0], e[1]); });
+    }).catch(() => {});
+} catch (e) {}
+function narratorTabNote(tabId) {
+    if (tabId == null) return;
+    const now = Date.now(), prev = narratorTabs.get(tabId) || 0;
+    narratorTabs.set(tabId, now);
+    if (now - prev < 60000) return;   // zapis najwyżej raz na minutę na kartę
+    for (const [t, at] of narratorTabs) if (now - at > NARRATOR_TAB_MS) narratorTabs.delete(t);
+    try { chrome.storage.session.set({ narratorTabs: [...narratorTabs] }).catch(() => {}); } catch (e) {}
+}
 chrome.runtime.onMessage.addListener((msg, sender) => {
     if (!msg || msg.action !== 'TTS_QUEUE_IDLE' || (sender && sender.tab)) return;
-    chrome.tabs.query({}, (tabs) => {
-        (tabs || []).forEach((t) => {
-            try { chrome.tabs.sendMessage(t.id, { action: 'TTS_QUEUE_IDLE' }, () => { void chrome.runtime.lastError; }); } catch (e) {}
-        });
-    });
+    const now = Date.now();
+    for (const [t, at] of narratorTabs) {
+        if (now - at > NARRATOR_TAB_MS) continue;
+        try { chrome.tabs.sendMessage(t, { action: 'TTS_QUEUE_IDLE' }, () => { void chrome.runtime.lastError; }); } catch (e) {}
+    }
 });
+chrome.tabs.onRemoved.addListener((tabId) => { narratorTabs.delete(tabId); });
 
 // ENERGIA: dokument lektora (offscreen) NIE startuje razem z przeglądarką — tworzy go dopiero
 // pierwsza kwestia do przeczytania (callOffscreen → ensureOffscreen). Bez lektora nic nie działa w tle.
@@ -246,7 +278,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             } else if (msg.kind === 'clear-error') {
                 chrome.storage.local.remove('__offscreenError');
             } else if (msg.kind === 'log') {
-                chrome.storage.local.set({ __offscreenLog: Array.isArray(msg.entries) ? msg.entries : [] });
+                chrome.storage.session.set({ __offscreenLog: Array.isArray(msg.entries) ? msg.entries : [] }).catch(() => {});   // [FIX 2026-11-02] session — patrz telemetria
             }
         } catch (e) { /* ignore */ }
         sendResponse({ status: 'diag_ok' });
@@ -473,6 +505,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.target === 'offscreen') return;
     if (ocrOnlyBlocksTts(msg)) { sendResponse({ status: 'ocr-only' }); return; }   // [AGENT-EXP] tryb „tylko OCR”
     if ((msg.action === 'TTS_PRELOAD' || msg.action === 'TTS_PLAY') && msg.id != null) msg = { ...msg, id: ttsCacheId(msg, _sender) };   // [AGENT-EXP]
+    if (msg.action === 'TTS_PLAY' && _sender && _sender.tab) narratorTabNote(_sender.tab.id);   // [FIX 2026-11-02] adresaci TTS_QUEUE_IDLE
     // [FIX 2026-11-02] pauza / czyszczenie ze strony niosą kartę — offscreen pomija je, gdy czyta inna karta
     if ((msg.action === 'TTS_PAUSE' || msg.action === 'TTS_CLEAR_BUFFER') && _sender && _sender.tab && _sender.tab.id != null) msg = { ...msg, tab: String(_sender.tab.id) };
     if (msg.action === 'OFFSCREEN_READY') {
@@ -564,7 +597,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             if (msg.action === 'REC_TELEMETRY') {
                 try {
                     const plat = (msg.platform === 'youtube' || msg.platform === 'dom') ? msg.platform : 'netflix';
-                    await chrome.storage.local.set({
+                    // [FIX 2026-11-02] storage.session (pamięć przeglądarki): zapis co 2 s z każdej karty z filmem nie budzi już
+                    // nasłuchów chrome.storage.onChanged we wszystkich kartach (skrypty stron nie widzą obszaru „session”)
+                    await chrome.storage.session.set({
                         ['__recTelemetry_' + plat]: {
                             platform: plat,
                             nowMs: msg.nowMs || 0,
