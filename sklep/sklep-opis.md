@@ -1,7 +1,7 @@
-# Multilektor 3.5.0 — teksty do Chrome Web Store (do wklejenia)
+# Multilektor 3.6.0 — teksty do Chrome Web Store (do wklejenia)
 
-Paczka: `lektor najnowszy\Multilektor-3.5.0-sklep-2026-10-21.zip` (210 MB, 461 plików, bez kopii .bak, testów i `update_url`).
-Nową paczkę zbudujesz poleceniem `python "_zbuduj_paczke_sklep.py"` w folderze `lektor najnowszy`.
+Paczka: `dist/Multilektor-3.6.0.zip` (~123 MB, ~490 plików, bez testów, narzędzi, tekstów do Sklepu, kopii .bak i `update_url`).
+Nową paczkę zbudujesz poleceniem `node narzedzia/pakuj.mjs` w folderze repozytorium (Windows: `narzedzia\pakuj.bat`).
 
 ---
 
@@ -11,7 +11,7 @@ wersję zgodną z językiem klienta:
 - **Nazwa:** Multilektor
 - **Krótki opis (126/132 znaki):** Polski lektor do filmów: czyta napisy na głos na YouTube, Netflixie i innych stronach, tłumaczy je i ścisza film na czas mowy.
 - **Krótki opis EN (127/132):** Polish voice-over for videos: reads subtitles aloud on YouTube, Netflix and more, translates them and lowers the video's sound.
-- **Wersja:** 3.5.0
+- **Wersja:** 3.6.0
 
 ---
 
@@ -30,7 +30,7 @@ GDZIE DZIAŁA
 • Inne serwisy wideo — napisy z ekranu na żywo, całe pliki napisów (iQIYI, WeTV, Viki, Bilibili) oraz OCR, gdy napisy są wtopione w obraz.
 
 GŁOSY
-• Wbudowany polski głos (Sherpa / Piper) — działa bez internetu, na tym komputerze.
+• Wbudowany polski głos Matcha-TTS-PL — liczony w przeglądarce, bez internetu i bez serwera; do tego pobierane głosy Piper.
 • Supertonic — 4 głosy liczone lokalnie, na procesorze albo karcie graficznej.
 • Głos przeglądarki — Google polski w Chrome, Microsoft Natural w Edge, bez instalowania czegokolwiek.
 • Opcjonalnie własne serwery mowy uruchomione na Twoim komputerze (Matcha, XTTS, Pocket, OmniVoice…).
@@ -51,6 +51,8 @@ WYGODA
 PRYWATNOŚĆ
 Interfejs po polsku albo po angielsku (automatycznie według języka Chrome, przełącznik w popupie).
 
+Lektor uruchamia się sam tylko na stronach z białej listy domen (serwisy wideo i strony, które dodasz) — na innych stronach nie działa.
+
 Bez konta i bez reklam. Ustawienia i pamięć napisów zostają w Twojej przeglądarce. Do tłumaczy w sieci idzie wyłącznie tekst napisów (napisy angielskie tłumaczy lokalnie Translator Chrome). Szczegóły w polityce prywatności.
 ```
 
@@ -61,11 +63,13 @@ Multilektor reads video subtitles aloud in Polish, like a TV voice-over ("lektor
 
 Works on YouTube (uses YouTube's own Polish auto-translation when available), Netflix (reads the selected subtitle track or translates it), and other video sites (live on-screen subtitles, full subtitle files, OCR for burned-in subtitles).
 
-Voices: a built-in offline Polish voice (Sherpa/Piper), Supertonic voices computed locally (CPU/GPU), the browser's own voices (Google polski in Chrome, Microsoft Natural in Edge), or your own local TTS servers.
+Voices: a built-in offline Polish voice (Matcha-TTS-PL, computed in the browser) and downloadable Piper voices, Supertonic voices computed locally (CPU/GPU), the browser's own voices (Google polski in Chrome, Microsoft Natural in Edge), or your own local TTS servers.
 
 Translation: the site's own translation and Chrome's on-device Translator first; Microsoft (Bing), Google or DeepL for other languages — only subtitle text is sent. A 570+ idiom dictionary and whole-sentence joining make translations natural. Translated subtitles are remembered for 90 days.
 
 Interface in Polish or English (automatic, following Chrome's language; switch in the popup).
+
+The narrator starts by itself only on sites from the domain allow list (video services and sites you add) — it does not run on other sites.
 
 No account, no ads. Settings and subtitle memory stay in your browser.
 ```
